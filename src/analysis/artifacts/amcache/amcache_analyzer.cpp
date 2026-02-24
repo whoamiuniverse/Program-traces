@@ -111,6 +111,19 @@ AmcacheEntry AmcacheAnalyzer::processInventoryApplicationEntry(
                            : full_name;
 
     try {
+      auto parseUInt64Value = [&]() -> uint64_t {
+        if (value->getType() == RegistryAnalysis::RegistryValueType::REG_QWORD) {
+          return value->getAsQword();
+        }
+        if (value->getType() == RegistryAnalysis::RegistryValueType::REG_DWORD) {
+          return value->getAsDword();
+        }
+        std::string raw = value->getDataAsString();
+        trim(raw);
+        if (raw.empty()) return 0;
+        return std::stoull(raw);
+      };
+
       if (name == "LowerCaseLongPath") {
         entry.file_path = value->getDataAsString();
         entry.name = getLastPathComponent(entry.file_path, '/');
@@ -134,6 +147,22 @@ AmcacheEntry AmcacheAnalyzer::processInventoryApplicationEntry(
         }
       } else if (name == "AlternatePath") {
         entry.alternate_path = value->getDataAsString();
+      } else if (name == "Mtime" || name == "LastWriteTime" ||
+                 name == "LastModifiedTime") {
+        entry.modification_time = parseUInt64Value();
+      } else if (name == "InstallDate" || name == "InstallTime" ||
+                 name == "InstallDateArpLastModified") {
+        entry.install_time = parseUInt64Value();
+      } else if (name == "IsDeleted" || name == "Deleted") {
+        if (value->getType() == RegistryAnalysis::RegistryValueType::REG_DWORD ||
+            value->getType() == RegistryAnalysis::RegistryValueType::REG_QWORD) {
+          entry.is_deleted = parseUInt64Value() != 0;
+        } else {
+          std::string deleted = to_lower(value->getDataAsString());
+          trim(deleted);
+          entry.is_deleted =
+              (deleted == "1" || deleted == "true" || deleted == "yes");
+        }
       }
     } catch (const std::exception& e) {
       logger->warn("Ошибка обработки значения '{}': {}", name, e.what());

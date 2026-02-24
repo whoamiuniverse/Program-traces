@@ -62,10 +62,6 @@ void PrefetchDataBuilder::validateCoreData() const {
     throw InvalidExecutableNameException("имя файла не может быть пустым");
   }
 
-  if (storage_.prefetch_hash == 0) {
-    throw InvalidPrefetchHashException(storage_.prefetch_hash);
-  }
-
   if (storage_.format_version ==
       static_cast<uint32_t>(PrefetchFormatVersion::UNKNOWN)) {
     throw InvalidVersionException(storage_.format_version);

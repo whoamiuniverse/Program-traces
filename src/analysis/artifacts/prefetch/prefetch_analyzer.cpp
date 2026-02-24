@@ -1,10 +1,82 @@
 #include "prefetch_analyzer.hpp"
 
+#include <algorithm>
+#include <cctype>
+#include <optional>
+
 #include "infra/config/config.hpp"
 #include "infra/logging/logger.hpp"
 #include "analysis/os/os_detection.hpp"
 
 namespace WindowsDiskAnalysis {
+
+namespace {
+
+std::string toLowerAscii(std::string text) {
+  std::ranges::transform(text, text.begin(), [](unsigned char ch) {
+    return static_cast<char>(std::tolower(ch));
+  });
+  return text;
+}
+
+std::optional<std::filesystem::path> findPathCaseInsensitive(
+    const std::filesystem::path& input_path) {
+  namespace fs = std::filesystem;
+  std::error_code ec;
+  if (fs::exists(input_path, ec) && !ec) {
+    return input_path;
+  }
+
+  fs::path current = input_path.is_absolute() ? input_path.root_path()
+                                              : fs::current_path(ec);
+  if (ec) return std::nullopt;
+
+  const fs::path relative =
+      input_path.is_absolute() ? input_path.relative_path() : input_path;
+
+  for (const fs::path& component_path : relative) {
+    const std::string component = component_path.string();
+    if (component.empty() || component == ".") continue;
+    if (component == "..") {
+      current = current.parent_path();
+      continue;
+    }
+
+    const fs::path direct_candidate = current / component_path;
+    ec.clear();
+    if (fs::exists(direct_candidate, ec) && !ec) {
+      current = direct_candidate;
+      continue;
+    }
+
+    ec.clear();
+    if (!fs::exists(current, ec) || ec || !fs::is_directory(current, ec)) {
+      return std::nullopt;
+    }
+
+    const std::string component_lower = toLowerAscii(component);
+    bool matched = false;
+    for (const auto& entry : fs::directory_iterator(current, ec)) {
+      if (ec) break;
+
+      if (toLowerAscii(entry.path().filename().string()) == component_lower) {
+        current = entry.path();
+        matched = true;
+        break;
+      }
+    }
+
+    if (ec || !matched) return std::nullopt;
+  }
+
+  ec.clear();
+  if (fs::exists(current, ec) && !ec) {
+    return current;
+  }
+  return std::nullopt;
+}
+
+}  // namespace
 
 PrefetchAnalyzer::PrefetchAnalyzer(
     std::unique_ptr<PrefetchAnalysis::IPrefetchParser> parser,
@@ -56,17 +128,29 @@ std::vector<ProcessInfo> PrefetchAnalyzer::collect(
 
   const auto& cfg = configs_[os_version_];
   std::string prefetch_path = disk_root + cfg.prefetch_path;
+  std::filesystem::path effective_prefetch_path(prefetch_path);
 
   // Проверяем существование директории
-  if (!std::filesystem::exists(prefetch_path)) {
-    logger->warn("Папка Prefetch не найдена: \"{}\"", prefetch_path);
-    return results;
+  if (!std::filesystem::exists(effective_prefetch_path)) {
+    if (const auto resolved =
+            findPathCaseInsensitive(std::filesystem::path(prefetch_path));
+        resolved.has_value()) {
+      effective_prefetch_path = *resolved;
+      logger->debug("Путь Prefetch разрешён case-insensitive: \"{}\" -> \"{}\"",
+                    prefetch_path, effective_prefetch_path.string());
+    } else {
+      logger->warn("Папка Prefetch не найдена: \"{}\"", prefetch_path);
+      return results;
+    }
   }
 
   // Обрабатываем все .pf файлы
   size_t processed_count = 0;
-  for (const auto& entry : std::filesystem::directory_iterator(prefetch_path)) {
-    if (entry.path().extension() != ".pf") continue;
+  for (const auto& entry :
+       std::filesystem::directory_iterator(effective_prefetch_path)) {
+    const std::string ext_lower =
+        toLowerAscii(entry.path().extension().string());
+    if (ext_lower != ".pf") continue;
 
     try {
       auto prefetch_data = parser_->parse(entry.path().string());
@@ -80,6 +164,9 @@ std::vector<ProcessInfo> PrefetchAnalyzer::collect(
 
       info.run_count = prefetch_data->getRunCount();
       info.filename = prefetch_data->getExecutableName();
+      if (info.filename.empty()) {
+        info.filename = entry.path().stem().string();
+      }
       info.volumes = prefetch_data->getVolumes();
       info.metrics = prefetch_data->getMetrics();
 

@@ -3,11 +3,12 @@
 #include <algorithm>
 #include <map>
 #include <sstream>
+#include <string_view>
 #include <utility>
 
+#include "common/utils.hpp"
 #include "errors/os_detection_exception.hpp"
 #include "errors/registry_exception.hpp"
-#include "common/utils.hpp"
 #include "os_info.hpp"
 
 namespace WindowsVersion {
@@ -51,6 +52,7 @@ void OSDetection::loadConfiguration() {
     if (!cfg.registry_file.empty() && !cfg.registry_key.empty() &&
         !cfg.registry_keys.empty()) {
       version_configs_.emplace(name, std::move(cfg));
+      version_order_.push_back(name);
       logger->debug("Загруженная конфигурация для ключей \"{}\": \"{}\"", name,
                     version_configs_[name].registry_keys.size());
     }
@@ -90,7 +92,7 @@ void OSDetection::loadConfiguration() {
 
   if (version_configs_.empty()) {
     throw OSDetectionException(
-        "не найдено допустимых конфигураций обнаружения операционной системы");
+        "Не найдено допустимых конфигураций обнаружения операционной системы");
   }
 }
 
@@ -99,14 +101,15 @@ OSInfo OSDetection::detect() {
   OSInfo info;
   bool detected = false;
 
-  for (const auto& [version_name, cfg] : version_configs_) {
+  for (const auto& version_name : version_order_) {
+    const auto& cfg = version_configs_.at(version_name);
     try {
       const std::string full_path = device_root_path_ + cfg.registry_file;
-      const auto values = parser_->getKeyValues(full_path, cfg.registry_key);
 
-      if (!values.empty()) {
+      if (const auto values =
+              parser_->getKeyValues(full_path, cfg.registry_key);
+          !values.empty()) {
         extractOSInfo(values, info, version_name);
-        info.ini_version = version_name;
         detected = true;
         break;
       }
@@ -118,12 +121,14 @@ OSInfo OSDetection::detect() {
 
   if (!detected) {
     throw OSDetectionException(
-        "не удалось определить версию операционной системы");
+        "Не удалось определить версию операционной системы");
   }
 
   determineFullOSName(info);
+  info.ini_version = resolveIniVersion(info);
 
-  logger->info("Версия Windows определена: \"{}\"", info.fullname_os);
+  logger->info("Версия Windows определена: \"{}\" (конфиг: {})",
+               info.fullname_os, info.ini_version);
 
   return info;
 }
@@ -179,7 +184,7 @@ void OSDetection::extractOSInfo(
   if (!has_essential || info.product_name.empty() ||
       (info.current_version.empty() && info.current_build.empty())) {
     throw OSDetectionException(
-        "недостаточно данных для обнаружения операционной системы");
+        "Недостаточно данных для обнаружения операционной системы");
   }
 }
 
@@ -208,16 +213,76 @@ void OSDetection::determineFullOSName(OSInfo& info) const {
   info.fullname_os = oss.str();
 }
 
-bool OSDetection::isServerSystem(const OSInfo& info) const {
-  auto contains_keyword = [&](const std::string& text) {
-    return std::ranges::any_of(default_server_keywords_,
-                               [&](const std::string& kw) {
-                                 return text.find(kw) != std::string::npos;
-                               });
+std::string OSDetection::resolveIniVersion(const OSInfo& info) const {
+  const auto has_version = [&](const std::string_view name) {
+    return version_configs_.contains(std::string(name));
   };
 
-  return contains_keyword(info.product_name) ||
-         contains_keyword(info.edition_id);
+  const bool is_server = isServerSystem(info);
+  if (is_server && has_version("WindowsServer")) {
+    return "WindowsServer";
+  }
+
+  uint32_t build_number = 0;
+  if (tryParseUInt32(info.current_build, build_number)) {
+    if (build_number >= 22000 && has_version("Windows11")) return "Windows11";
+    if (build_number >= 10240 && has_version("Windows10")) return "Windows10";
+    if (build_number >= 9200 && has_version("Windows8")) return "Windows8";
+    if (build_number >= 7600 && has_version("Windows7")) return "Windows7";
+    if (build_number >= 6000 && has_version("WindowsVista")) {
+      return "WindowsVista";
+    }
+    if (has_version("WindowsXP")) return "WindowsXP";
+  }
+
+  const std::string product_name = to_lower(info.product_name);
+  if (product_name.find("windows server") != std::string::npos &&
+      has_version("WindowsServer")) {
+    return "WindowsServer";
+  }
+  if (product_name.find("windows 11") != std::string::npos &&
+      has_version("Windows11")) {
+    return "Windows11";
+  }
+  if (product_name.find("windows 10") != std::string::npos &&
+      has_version("Windows10")) {
+    return "Windows10";
+  }
+  if ((product_name.find("windows 8") != std::string::npos ||
+       product_name.find("windows 8.1") != std::string::npos) &&
+      has_version("Windows8")) {
+    return "Windows8";
+  }
+  if (product_name.find("windows 7") != std::string::npos &&
+      has_version("Windows7")) {
+    return "Windows7";
+  }
+  if (product_name.find("vista") != std::string::npos &&
+      has_version("WindowsVista")) {
+    return "WindowsVista";
+  }
+  if (product_name.find("xp") != std::string::npos &&
+      has_version("WindowsXP")) {
+    return "WindowsXP";
+  }
+
+  if (!version_order_.empty()) {
+    return version_order_.front();
+  }
+  throw OSDetectionException(
+      "Не удалось сопоставить ОС с секцией конфигурации");
+}
+
+bool OSDetection::isServerSystem(const OSInfo& info) const {
+  uint32_t build_number = 0;
+  if (tryParseUInt32(info.current_build, build_number)) {
+    const bool known_server = server_builds.contains(build_number);
+    const bool known_client = client_builds.contains(build_number);
+    if (known_server != known_client) return known_server;
+  }
+
+  const std::string product_name = to_lower(info.product_name);
+  return product_name.find("server") != std::string::npos;
 }
 
 }

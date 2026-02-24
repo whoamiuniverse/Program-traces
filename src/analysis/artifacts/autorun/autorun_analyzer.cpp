@@ -7,6 +7,27 @@
 #include "common/utils.hpp"
 
 namespace WindowsDiskAnalysis {
+namespace {
+
+std::string extractExecutablePath(std::string command) {
+  trim(command);
+  if (command.empty()) return {};
+
+  if (command.front() == '"' || command.front() == '\'') {
+    const char quote = command.front();
+    const size_t end_quote = command.find(quote, 1);
+    if (end_quote != std::string::npos) {
+      return command.substr(1, end_quote - 1);
+    }
+    return command.substr(1);
+  }
+
+  const size_t separator = command.find_first_of(" \t");
+  if (separator == std::string::npos) return command;
+  return command.substr(0, separator);
+}
+
+}  // namespace
 
 AutorunAnalyzer::AutorunAnalyzer(
     std::unique_ptr<RegistryAnalysis::IRegistryParser> parser,
@@ -130,14 +151,9 @@ std::vector<AutorunEntry> AutorunAnalyzer::analyzeRegistry(
 
         entry.location = "Реестр: " + location;
 
-        // Извлечение пути из командной строки
-        if (!entry.command.empty()) {
-          const size_t start = entry.command.find_first_not_of(" \t\"");
-          if (start != std::string::npos) {
-            const size_t end = entry.command.find_last_not_of(" \t\"");
-            entry.path = entry.command.substr(start, end - start + 1);
-          }
-        }
+        // Извлечение исполняемого файла из командной строки
+        entry.path = extractExecutablePath(entry.command);
+        trim(entry.path);
 
         if (!entry.path.empty()) {
           entries.push_back(std::move(entry));
@@ -165,8 +181,17 @@ std::vector<AutorunEntry> AutorunAnalyzer::analyzeFilesystem(
         std::string full_path = disk_root + path;
         trim(full_path);
 
-        if (std::filesystem::exists(full_path)) {
+        if (!std::filesystem::exists(full_path)) continue;
+
+        if (const std::filesystem::path target_path(full_path);
+            std::filesystem::is_regular_file(target_path)) {
           entries.push_back(createFilesystemEntry(full_path, path));
+        } else if (std::filesystem::is_directory(target_path)) {
+          for (const auto& entry :
+               std::filesystem::directory_iterator(target_path)) {
+            if (!entry.is_regular_file()) continue;
+            entries.push_back(createFilesystemEntry(entry.path(), path));
+          }
         }
       }
     } catch (const std::exception& e) {
@@ -180,15 +205,41 @@ std::vector<AutorunEntry> AutorunAnalyzer::analyzeFilesystem(
 void AutorunAnalyzer::processWildcardPath(const std::string& disk_root,
                                           const std::string& path,
                                           std::vector<AutorunEntry>& results) {
+  namespace fs = std::filesystem;
+
   const size_t star_pos = path.find('*');
   const std::string base_path = path.substr(0, star_pos);
-  const std::string search_path = disk_root + base_path;
+  std::string suffix_path = path.substr(star_pos + 1);
+  trim(suffix_path);
+  if (!suffix_path.empty() &&
+      (suffix_path.front() == '/' || suffix_path.front() == '\\')) {
+    suffix_path.erase(suffix_path.begin());
+  }
+
+  const fs::path search_path = fs::path(disk_root) / base_path;
 
   if (!std::filesystem::exists(search_path)) return;
 
   for (const auto& entry : std::filesystem::directory_iterator(search_path)) {
-    if (entry.is_regular_file()) {
-      results.push_back(createFilesystemEntry(entry.path(), path));
+    if (!entry.is_directory()) continue;
+
+    fs::path candidate = entry.path();
+    if (!suffix_path.empty()) {
+      candidate /= suffix_path;
+    }
+
+    if (!fs::exists(candidate)) continue;
+
+    if (fs::is_regular_file(candidate)) {
+      results.push_back(createFilesystemEntry(candidate, path));
+      continue;
+    }
+
+    if (fs::is_directory(candidate)) {
+      for (const auto& nested : fs::directory_iterator(candidate)) {
+        if (!nested.is_regular_file()) continue;
+        results.push_back(createFilesystemEntry(nested.path(), path));
+      }
     }
   }
 }

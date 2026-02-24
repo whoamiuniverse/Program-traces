@@ -15,7 +15,8 @@ namespace PrefetchAnalysis {
 ///    - 17: Windows XP SP2+, Server 2003
 ///    - 23: Windows Vista, 7, Server 2008/R2
 ///    - 26: Windows 8-8.1, Server 2012/R2, Windows 10 TH1-TH2
-///    - 30: Windows 10 RS1+ (1607+), Windows 11, Server 2016+
+///    - 30: Windows 10 RS1+ (1607+), Server 2016+
+///    - 31: Windows 11 (новые сборки, включая 24H2)
 enum class PrefetchFormatVersion : uint8_t {
   WIN_XP_RTM = 10,       ///< Windows XP RTM (версия 10)
   WIN_XP_EMBEDDED = 11,  ///< Windows XP Embedded (версия 11)
@@ -24,7 +25,9 @@ enum class PrefetchFormatVersion : uint8_t {
   WIN8_10_PRE_RS1 =
       26,  ///< Windows 8-8.1/Server 2012/R2/Win10 TH1-TH2 (версия 26)
   WIN10_RS1_PLUS =
-      30,      ///< Windows 10 RS1+ (1607+)/Win11/Server 2016+ (версия 30)
+      30,  ///< Windows 10 RS1+ (1607+)/Server 2016+ (версия 30)
+  WIN11_24H2_PLUS =
+      31,      ///< Windows 11 (включая 24H2+) (версия 31)
   UNKNOWN = 0  ///< Неизвестная/неподдерживаемая версия
 };
 
@@ -46,6 +49,8 @@ enum class PrefetchFormatVersion : uint8_t {
       return PrefetchFormatVersion::WIN8_10_PRE_RS1;
     case 30:
       return PrefetchFormatVersion::WIN10_RS1_PLUS;
+    case 31:
+      return PrefetchFormatVersion::WIN11_24H2_PLUS;
     default:
       return PrefetchFormatVersion::UNKNOWN;
   }

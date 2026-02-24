@@ -1,3 +1,4 @@
+#include <filesystem>
 #include <iostream>
 #include <string>
 
@@ -6,11 +7,15 @@
 
 int main(int argc, char* argv[]) {
   // Проверка количества аргументов
-  if (argc != 4) {
-    std::cerr << "Использование: " << argv[0]
-              << " <корень_диска> <конфиг> <выходной_файл>\n"
-              << "Пример: " << argv[0]
-              << " /mnt/диск_windows/ /путь/к/config.ini /отчеты/анализ.csv\n";
+  if (argc != 3 && argc != 4) {
+    std::cerr
+        << "Использование:\n"
+        << "  " << argv[0] << " <корень_диска|auto> <конфиг> <выходной_файл>\n"
+        << "  " << argv[0] << " <конфиг> <выходной_файл>\n"
+        << "Пример:\n"
+        << "  " << argv[0]
+        << " /mnt/windows/ /путь/к/config.ini /отчеты/анализ.csv\n"
+        << "  " << argv[0] << " /путь/к/config.ini /отчеты/анализ.csv\n";
     return 1;
   }
 
@@ -18,13 +23,18 @@ int main(int argc, char* argv[]) {
 
   try {
     // Получение аргументов
-    std::string disk_root(argv[1]);
-    const std::string config_path(argv[2]);
-    const std::string output_path(argv[3]);
+    std::string disk_root;
+    std::string config_path;
+    std::string output_path;
 
-    // Нормализация пути к диску
-    if (disk_root.back() != '/' && disk_root.back() != '\\') {
-      disk_root += '/';
+    if (argc == 4) {
+      disk_root = argv[1];
+      config_path = argv[2];
+      output_path = argv[3];
+    } else {
+      disk_root = "auto";
+      config_path = argv[1];
+      output_path = argv[2];
     }
 
     std::cout << "\n=== Запуск анализа диска Windows ===\n"
