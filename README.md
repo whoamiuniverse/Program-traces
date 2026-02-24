@@ -6,6 +6,28 @@ Program traces
 The program extracts traces of software startup
 from the Windows operating system
 
+## Architecture
+
+Source code is organized under `src/`:
+
+```text
+src/
+  main.cpp                     # entrypoint
+  analysis/                    # сценарии анализа диска
+    os/                        # определение версии/типа Windows
+    artifacts/                 # анализ артефактов запуска ПО
+  parsers/                     # format adapters (registry, prefetch, evt/evtx)
+  errors/                      # типы исключений
+  infra/                       # config, logging, export
+  common/                      # shared helpers (string/time/parse)
+```
+
+Dependency direction:
+- `main.cpp -> analysis`
+- `analysis -> parsers + infra + errors + common`
+- `parsers -> errors + common`
+- `infra` and `common` are reusable and should not depend on `analysis`
+
 ## Documentation
 
 To create the documentation, follow these steps:

@@ -28,40 +28,32 @@ endif()
 set(PROGRAM_TRACES_LIBS_ROOT "${CMAKE_SOURCE_DIR}/libs" CACHE PATH
     "Root directory with third-party prebuilt libraries")
 set(LIBS_BASE_PATH "${PROGRAM_TRACES_LIBS_ROOT}/${PLATFORM_LIBS_DIR}")
+set(PROGRAM_TRACES_SRC_ROOT "${CMAKE_SOURCE_DIR}/src")
 
-file(GLOB_RECURSE CORE_SOURCES
-    core/*.cpp
+file(GLOB_RECURSE APP_SOURCES
+    ${PROGRAM_TRACES_SRC_ROOT}/*.cpp
 )
-file(GLOB_RECURSE ARTIFACT_SOURCES
-    artifacts/*.cpp
+file(GLOB_RECURSE ANALYSIS_SOURCES
+    ${PROGRAM_TRACES_SRC_ROOT}/analysis/*.cpp
 )
 file(GLOB_RECURSE PARSER_SOURCES
-    parsers/*.cpp
+    ${PROGRAM_TRACES_SRC_ROOT}/parsers/*.cpp
 )
-file(GLOB_RECURSE IO_SOURCES
-    io/*.cpp
-)
-file(GLOB_RECURSE CONFIG_SOURCES
-    config/*.cpp
-)
-file(GLOB_RECURSE UTILS_SOURCES
-    utils/*.cpp
+file(GLOB_RECURSE INFRA_SOURCES
+    ${PROGRAM_TRACES_SRC_ROOT}/infra/*.cpp
 )
 
 set(ALL_SOURCES
-    main.cpp
-    ${CORE_SOURCES}
-    ${ARTIFACT_SOURCES}
+    ${APP_SOURCES}
+    ${ANALYSIS_SOURCES}
     ${PARSER_SOURCES}
-    ${IO_SOURCES}
-    ${CONFIG_SOURCES}
-    ${UTILS_SOURCES}
+    ${INFRA_SOURCES}
 )
 
 add_executable(program_traces ${ALL_SOURCES})
 
 target_include_directories(program_traces PRIVATE
-    ${CMAKE_SOURCE_DIR}
+    ${PROGRAM_TRACES_SRC_ROOT}
     ${LIBS_BASE_PATH}/libregf/include
     ${LIBS_BASE_PATH}/libscca/include
     ${LIBS_BASE_PATH}/libevtx/include
@@ -127,4 +119,4 @@ elseif (UNIX AND NOT APPLE)
     endif()
 endif()
 
-source_group(TREE ${CMAKE_SOURCE_DIR} FILES ${ALL_SOURCES})
+source_group(TREE ${PROGRAM_TRACES_SRC_ROOT} FILES ${ALL_SOURCES})
