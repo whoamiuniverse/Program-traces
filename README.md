@@ -1,67 +1,65 @@
-Program traces
-====================================
+# Program traces
 
-## Overview
+## Обзор
 
-The program extracts traces of software startup
-from the Windows operating system
+Приложение извлекает следы запуска программ из Windows на подключённом диске.
 
-## Architecture
+## Архитектура
 
-Source code is organized under `src/`:
+Исходный код организован в каталоге `src/`:
 
 ```text
 src/
-  main.cpp                     # entrypoint
+  main.cpp                     # точка входа
   analysis/                    # сценарии анализа диска
     os/                        # определение версии/типа Windows
     artifacts/                 # анализ артефактов запуска ПО
-  parsers/                     # format adapters (registry, prefetch, evt/evtx)
+  parsers/                     # адаптеры форматов (registry, prefetch, evt/evtx)
   errors/                      # типы исключений
   infra/                       # config, logging, export
-  common/                      # shared helpers (string/time/parse)
+  common/                      # общие утилиты (string/time/parse)
 ```
 
-Dependency direction:
+Направление зависимостей:
 - `main.cpp -> analysis`
 - `analysis -> parsers + infra + errors + common`
 - `parsers -> errors + common`
-- `infra` and `common` are reusable and should not depend on `analysis`
+- `infra` и `common` переиспользуемые и не должны зависеть от `analysis`
 
-## Documentation
+## Документация
 
-To create the documentation, follow these steps:
+Для генерации документации:
 
-1. Install doxygen
+1. Установите doxygen:
 
 ```bash
 sudo apt update && sudo apt install doxygen -y
 ```
 
-2. Generate the documentation
+2. Сгенерируйте документацию:
 
 ```bash
 doxygen docs/Doxyfile
 ```
 
-## Dependencies
+## Зависимости
 
-### Installing common dependencies
+### Установка базовых зависимостей
 
 ```bash
 sudo apt update && sudo apt install autopoint cmake libspdlog-dev git autoconf automake libtool pkg-config gcc g++ make libfuse-dev -y
 ```
 
-### Install libregf
+### Установка libregf
 
-1. Clone the repository
+1. Клонируйте репозиторий:
 
 ```bash
 git clone https://github.com/libyal/libregf.git
 cd libregf
 ```
 
-2. Build and install the library "libregf"
+2. Соберите и установите библиотеку:
 
 ```bash
 ./synclibs.sh
@@ -71,28 +69,28 @@ make
 sudo make install
 ```
 
-3. Update the library cache
+3. Обновите кэш библиотек:
 
 ```bash
 sudo ldconfig && cd ..
 ```
 
-4. Checking the installation
+4. Проверьте установку:
 
 ```bash
 regfinfo
 ```
 
-### Install libscca
+### Установка libscca
 
-1. Clone the repository
+1. Клонируйте репозиторий:
 
 ```bash
 git clone https://github.com/libyal/libscca.git
 cd libscca
 ```
 
-2. Build and install the library "libregf"
+2. Соберите и установите библиотеку:
 
 ```bash
 ./synclibs.sh
@@ -102,28 +100,28 @@ make
 sudo make install
 ```
 
-3. Update the library cache
+3. Обновите кэш библиотек:
 
 ```bash
 sudo ldconfig && cd ..
 ```
 
-4. Checking the installation
+4. Проверьте установку:
 
 ```bash
 sccainfo
 ```
 
-### Install libevtx
+### Установка libevtx
 
-1. Clone the repository libevtx
+1. Клонируйте репозиторий:
 
 ```bash
 git clone https://github.com/libyal/libevtx.git
 cd libevtx
 ```
 
-2. Build and install the library "libevtx"
+2. Соберите и установите библиотеку:
 
 ```bash
 ./synclibs.sh
@@ -133,28 +131,28 @@ make
 sudo make install
 ```
 
-3. Update the library cache
+3. Обновите кэш библиотек:
 
 ```bash
 sudo ldconfig && cd ..
 ```
 
-4. Checking the installation
+4. Проверьте установку:
 
 ```bash
 evtxexport --version
 ```
 
-### Install libevt
+### Установка libevt
 
-1. Clone the repository libevt
+1. Клонируйте репозиторий:
 
 ```bash
 git clone https://github.com/libyal/libevt
 cd libevt
 ```
 
-2. Build and install the library "libevt"
+2. Соберите и установите библиотеку:
 
 ```bash
 ./synclibs.sh
@@ -164,30 +162,32 @@ make
 sudo make install
 ```
 
-3. Update the library cache
+3. Обновите кэш библиотек:
 
 ```bash
 sudo ldconfig && cd ..
 ```
 
-4. Checking the installation
+4. Проверьте установку:
 
 ```bash
 evtexport --version
 ```
 
-## Build
+## Сборка
 
-From the root of the repository:
-
-```bash
-mkdir build && cd build
-```
+Из корня репозитория:
 
 ```bash
+mkdir -p build && cd build
 cmake ..
+cmake --build .
 ```
 
+## Запуск
+
+После сборки запуск:
+
 ```bash
-cmake --build .
+./program_traces
 ```
