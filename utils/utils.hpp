@@ -22,7 +22,7 @@ inline void trim(std::string& str) {
             str.end());
 
   // Удаление пробелов в начале
-  str.erase(str.begin(), std::find_if(str.begin(), str.end(), not_space));
+  str.erase(str.begin(), std::ranges::find_if(str, not_space));
 }
 
 /// @brief Создаёт обрезанную копию строки
@@ -91,8 +91,8 @@ inline std::string replace_all(std::string str, const std::string& from,
 /// @param str Исходная строка
 /// @return Строка в нижнем регистре
 inline std::string to_lower(std::string str) {
-  std::transform(str.begin(), str.end(), str.begin(),
-                 [](unsigned char c) { return std::tolower(c); });
+  std::ranges::transform(str, str.begin(),
+                         [](unsigned char c) { return std::tolower(c); });
   return str;
 }
 
@@ -135,26 +135,26 @@ typedef struct {
 /// @param filetime Значение FILETIME
 /// @return Структура SYSTEMTIME
 inline SYSTEMTIME filetimeToSystemTime(uint64_t filetime) {
-  SYSTEMTIME st = {};
+  SYSTEMTIME st = {0};
 
   // Константа для перевода в Unix-время (100-нс интервалы с 1601-01-01)
   constexpr uint64_t EPOCH_DIFFERENCE = 116444736000000000ULL;
 
   // Конвертация в секунды и наносекунды
-  uint64_t total_ns = filetime - EPOCH_DIFFERENCE;
+  uint64_t total_ns = (filetime - EPOCH_DIFFERENCE);
   time_t unix_seconds = total_ns / 10000000ULL;
-  uint32_t nanoseconds = total_ns % 10000000ULL * 100;
+  uint32_t nanoseconds = (total_ns % 10000000ULL) * 100;
 
   // Преобразование в UTC время
   tm* tm = gmtime(&unix_seconds);
   if (!tm) return st;
 
-  st.wYear = static_cast<uint16_t>(tm->tm_year + 1900);
-  st.wMonth = static_cast<uint16_t>(tm->tm_mon + 1);
-  st.wDay = static_cast<uint16_t>(tm->tm_mday);
-  st.wHour = static_cast<uint16_t>(tm->tm_hour);
-  st.wMinute = static_cast<uint16_t>(tm->tm_min);
-  st.wSecond = static_cast<uint16_t>(tm->tm_sec);
+  st.wYear = tm->tm_year + 1900;
+  st.wMonth = tm->tm_mon + 1;
+  st.wDay = tm->tm_mday;
+  st.wHour = tm->tm_hour;
+  st.wMinute = tm->tm_min;
+  st.wSecond = tm->tm_sec;
   st.wMilliseconds = nanoseconds / 1000000;
 
   return st;

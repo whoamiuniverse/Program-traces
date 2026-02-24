@@ -155,7 +155,6 @@
 
     The sections and keys are written out in the same order as they were
     read in from the file. Sections and keys added to the data after the
-
     file has been loaded will be added to the end of the file when it is
     written. There is no way to specify the location of a section or key
     other than in first-created, first-saved order.
@@ -1460,7 +1459,7 @@ CSimpleIniTempl<SI_CHAR,SI_STRLESS,SI_CONVERTER>::LoadFile(
     }
     
     // allocate and ensure NULL terminated
-    char * pData = new(std::nothrow) char[static_cast<size_t>(lSize)+static_cast<size_t>(1)];
+    char * pData = new(std::nothrow) char[lSize+static_cast<size_t>(1)];
     if (!pData) {
         return SI_NOMEM;
     }
@@ -1468,7 +1467,7 @@ CSimpleIniTempl<SI_CHAR,SI_STRLESS,SI_CONVERTER>::LoadFile(
     
     // load data into buffer
     fseek(a_fpFile, 0, SEEK_SET);
-    size_t uRead = fread(pData, sizeof(char), static_cast<size_t>(lSize), a_fpFile);
+    size_t uRead = fread(pData, sizeof(char), lSize, a_fpFile);
     if (uRead != (size_t) lSize) {
         delete[] pData;
         return SI_FILE;
@@ -2987,7 +2986,7 @@ public:
      *                      terminating NULL character.
      * @param a_pOutputData Pointer to the buffer to receive the converted
      *                      string.
-     * @param a_pOutputDataSize Size of the output buffer in char.
+     * @param a_uOutputDataSize Size of the output buffer in char.
      * @return              true if all of the input data, including the
      *                      terminating NULL character was successfully
      *                      converted.
@@ -3178,7 +3177,7 @@ public:
      *                       terminating NULL character.
      * @param a_pOutputData Pointer to the buffer to receive the converted
      *                       string.
-     * @param a_pOutputDataSize Size of the output buffer in char.
+     * @param a_uOutputDataSize Size of the output buffer in char.
      * @return              true if all of the input data, including the
      *                       terminating NULL character was successfully
      *                       converted.

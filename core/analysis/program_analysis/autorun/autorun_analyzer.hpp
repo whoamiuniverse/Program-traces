@@ -28,16 +28,10 @@ class AutorunAnalyzer {
  public:
   /// @brief Конструктор анализатора
   /// @param parser Экземпляр парсера реестра для работы с кустами
-  /// @param config Конфигурация автозапуска
+  /// @param os_version Версия целевой ОС (должна соответствовать секции в INI)
+  /// @param ini_path Путь к конфигурационному файлу с параметрами автозапуска
   AutorunAnalyzer(std::unique_ptr<RegistryAnalysis::IRegistryParser> parser,
-                  AutorunConfig config);
-
-  /// @brief Создает конфигурацию на основе INI файла и версии ОС
-  /// @param ini_path Путь к INI файлу
-  /// @param os_version Версия ОС
-  /// @return Сформированная конфигурация
-  static AutorunConfig createConfig(const std::string& ini_path,
-                                    const std::string& os_version);
+                  std::string os_version, const std::string& ini_path);
 
   /// @brief Основной метод сбора данных об автозапуске
   /// @param disk_root Корневой путь анализируемого диска (точка монтирования)
@@ -45,6 +39,10 @@ class AutorunAnalyzer {
   std::vector<AutorunEntry> collect(const std::string& disk_root);
 
  private:
+  /// @brief Загружает конфигурации из INI-файла
+  /// @param ini_path Путь к конфигурационному файлу
+  void loadConfigurations(const std::string& ini_path);
+
   /// @brief Анализирует записи реестра для обнаружения автозапуска
   /// @param disk_root Корневой путь анализируемого диска
   /// @return Вектор записей автозапуска из реестра
@@ -71,8 +69,10 @@ class AutorunAnalyzer {
       const std::filesystem::path& file_path, const std::string& location);
 
   std::unique_ptr<RegistryAnalysis::IRegistryParser>
-      parser_;          ///< Парсер для работы с кустами реестра
-  AutorunConfig config_;  ///< Конфигурация для текущей версии ОС
+      parser_;  ///< Парсер для работы с кустами реестра
+  std::map<std::string, AutorunConfig>
+      configs_;             ///< Конфигурации для различных версий ОС
+  std::string os_version_;  ///< Целевая версия ОС для анализа
 };
 
 }

@@ -3,17 +3,15 @@
 #include <filesystem>
 #include <utility>
 
-#include "../../../parsers/event_log/formats/evt/parser.hpp"
-#include "../../../parsers/event_log/formats/evtx/parser.hpp"
+#include "../../../parsers/event_log/evt/parser/parser.hpp"
+#include "../../../parsers/event_log/evtx/parser/parser.hpp"
 #include "../../../parsers/registry/parser/parser.hpp"
-#include "../../../utils/export/csv_exporter.hpp"
-#include "../../../utils/logging/logger.hpp"
 #include "../os_detection/os_detection.hpp"
 
 namespace fs = std::filesystem;
 using namespace WindowsDiskAnalysis;
 
-WindowsDiskAnalyzer::WindowsDiskAnalyzer(std::string disk_root,
+WindowsDiskAnalyzer::WindowsDiskAnalyzer(std::string  disk_root,
                                          const std::string& config_path)
     : disk_root_(std::move(disk_root)), config_path_(config_path) {
   const auto logger = GlobalLogger::get();
@@ -41,10 +39,8 @@ void WindowsDiskAnalyzer::initializeComponents() {
   auto evtx_parser = std::make_unique<EventLogAnalysis::EvtxParser>();
 
   // Создание анализаторов
-  auto autorun_config =
-      AutorunAnalyzer::createConfig(config_path_, os_info_.ini_version);
   autorun_analyzer_ = std::make_unique<AutorunAnalyzer>(
-      std::move(registry_parser), autorun_config);
+      std::move(registry_parser), os_info_.ini_version, config_path_);
 
   prefetch_analyzer_ = std::make_unique<PrefetchAnalyzer>(
       std::move(prefetch_parser), os_info_.ini_version, config_path_);
@@ -67,33 +63,25 @@ void WindowsDiskAnalyzer::ensureDirectoryExists(const std::string& path) {
   }
 }
 
-void WindowsDiskAnalyzer::analyze(const std::string& output_path,
-                                  std::unique_ptr<IExporter> exporter) {
-  AnalysisResult result;
-
+void WindowsDiskAnalyzer::analyze(const std::string& output_path) {
   // 1. Сбор данных об автозагрузке
-  result.autorun_entries = autorun_analyzer_->collect(disk_root_);
+  autorun_entries_ = autorun_analyzer_->collect(disk_root_);
 
-  // 2. Сбор данных из Amcache.hve
-  result.amcache_entries = amcache_analyzer_->collect(disk_root_);
+  // 2. Сбор данных из Amcache.hve (добавленный вызов)
+  amcache_entries_ = amcache_analyzer_->collect(disk_root_);
 
   // 3. Сбор данных из Prefetch
   auto prefetch_results = prefetch_analyzer_->collect(disk_root_);
   for (auto& info : prefetch_results) {
-    result.process_data[info.filename] = std::move(info);
+    process_data_[info.filename] = std::move(info);
   }
 
   // 4. Анализ журналов событий
-  eventlog_analyzer_->collect(disk_root_, result.process_data,
-                              result.network_connections);
+  eventlog_analyzer_->collect(disk_root_, process_data_, network_connections_);
 
-  // 5. Экспорт результатов
+  // 5. Экспорт результатов (обновленный вызов)
   ensureDirectoryExists(output_path);
-
-  if (!exporter) {
-    exporter = std::make_unique<CSVExporter>();
-  }
-
-  exporter->exportData(output_path, result.autorun_entries, result.process_data,
-                       result.network_connections, result.amcache_entries);
+  CSVExporter::exportToCSV(output_path, autorun_entries_, process_data_,
+                           network_connections_,
+                           amcache_entries_);  // Добавленный параметр
 }

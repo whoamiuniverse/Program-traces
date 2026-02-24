@@ -13,6 +13,7 @@ Config::Config(std::string filename, const bool useMultiKey,
       filename_(std::move(filename)),
       useMultiKey_(useMultiKey),
       useMultiLine_(useMultiLine) {
+  const auto logger = GlobalLogger::get();
   reload();
 }
 
@@ -90,8 +91,8 @@ bool Config::getBool(const std::string& section, const std::string& key,
   }
 
   std::string strValue(value);
-  std::transform(strValue.begin(), strValue.end(), strValue.begin(),
-                 [](unsigned char c) { return std::tolower(c); });
+  std::ranges::transform(strValue, strValue.begin(),
+                         [](const unsigned char c) { return std::tolower(c); });
 
   if (strValue == "true" || strValue == "yes" || strValue == "on" ||
       strValue == "1") {
@@ -115,8 +116,7 @@ std::vector<std::pair<std::string, std::string>> Config::getAllValues(
     throw ConfigValueException(section, "", "секция не найдена");
   }
 
-  CSimpleIniA::TNamesDepend keys;
-  if (ini_->GetAllKeys(section.c_str(), keys)) {
+  if (CSimpleIniA::TNamesDepend keys; ini_->GetAllKeys(section.c_str(), keys)) {
     keys.sort(CSimpleIniA::Entry::LoadOrder());
 
     for (const auto& key : keys) {

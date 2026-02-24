@@ -1,12 +1,8 @@
 #include "prefetch_analyzer.hpp"
 
-#include <algorithm>
-#include <utility>
-#include <vector>
-
 #include "../../../../utils/config/config.hpp"
 #include "../../../../utils/logging/logger.hpp"
-#include "../../../../utils/utils.hpp"
+#include "../../os_detection/os_detection.hpp"
 
 namespace WindowsDiskAnalysis {
 
@@ -18,22 +14,32 @@ PrefetchAnalyzer::PrefetchAnalyzer(
 }
 
 void PrefetchAnalyzer::loadConfigurations(const std::string& ini_path) {
-  Config config(ini_path);
+  Config config(ini_path, false, false);
   const auto logger = GlobalLogger::get();
 
-  // Загрузка пути к папке Prefetch
-  std::string path = config.getString(os_version_, "PrefetchPath", "");
-  trim(path);
-  if (!path.empty()) {
-    std::replace(path.begin(), path.end(), '\\', '/');
-    config_.prefetch_path = path;
-  } else {
-    // Default path if not specified in config
-    config_.prefetch_path = "/Windows/Prefetch";
-  }
+  // Получаем список поддерживаемых версий
+  std::string versions_str = config.getString("General", "Versions", "");
+  auto versions = split(versions_str, ',');
 
-  logger->debug("Загружена конфигурация Prefetch для \"{}\": путь = \"{}\"",
-                os_version_, config_.prefetch_path);
+  for (auto& version : versions) {
+    trim(version);
+    if (version.empty()) continue;
+
+    PrefetchConfig cfg;
+
+    // Загрузка пути к папке Prefetch
+    std::string path = config.getString(version, "PrefetchPath", "");
+    trim(path);
+    if (!path.empty()) {
+      std::ranges::replace(path, '\\', '/');
+      cfg.prefetch_path = path;
+    }
+
+    configs_[version] = cfg;
+    logger->debug(
+        "Загружена конфигурация Prefetch для \"{}\": путь = \"{}\"", version,
+        cfg.prefetch_path.empty() ? "по умолчанию" : cfg.prefetch_path);
+  }
 }
 
 std::vector<ProcessInfo> PrefetchAnalyzer::collect(
@@ -41,7 +47,15 @@ std::vector<ProcessInfo> PrefetchAnalyzer::collect(
   std::vector<ProcessInfo> results;
   const auto logger = GlobalLogger::get();
 
-  std::string prefetch_path = disk_root + config_.prefetch_path;
+  // Проверяем наличие конфигурации для версии ОС
+  if (!configs_.contains(os_version_)) {
+    logger->warn("Отсутствует конфигурация Prefetch для версии ОС: \"{}\"",
+                 os_version_);
+    return results;
+  }
+
+  const auto& cfg = configs_[os_version_];
+  std::string prefetch_path = disk_root + cfg.prefetch_path;
 
   // Проверяем существование директории
   if (!std::filesystem::exists(prefetch_path)) {
@@ -58,19 +72,19 @@ std::vector<ProcessInfo> PrefetchAnalyzer::collect(
       auto prefetch_data = parser_->parse(entry.path().string());
 
       ProcessInfo info;
+
+      for (const auto& run_time : prefetch_data->getRunTimes()) {
+        auto time = convert_run_times(run_time);
+        info.run_times.emplace_back(time);
+      }
+
       info.run_count = prefetch_data->getRunCount();
       info.filename = prefetch_data->getExecutableName();
       info.volumes = prefetch_data->getVolumes();
       info.metrics = prefetch_data->getMetrics();
 
-      // TODO: Add run times conversion if needed, currently just storing empty or
-      // raw if available in parser interface. Assuming parser returns raw times
-      // and we need to convert them.
-      // For now, let's assume we just need to store the info.
-      // If conversion is needed, it should be done here.
-
       // Сохраняем в результаты
-      results.emplace_back(std::move(info));
+      results.emplace_back(info);
       processed_count++;
     } catch (const std::exception& e) {
       logger->warn("Ошибка анализа файла \"{}\": \"{}\"", entry.path().string(),

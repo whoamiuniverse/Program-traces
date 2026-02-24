@@ -4,7 +4,6 @@
 #pragma once
 
 #include <filesystem>
-#include <map>
 #include <string>
 #include <vector>
 
@@ -60,14 +59,6 @@ struct NetworkConnection {
   std::string remote_address;  ///< Удалённый IP-адрес
   uint16_t port = 0;           ///< Номер порта
   std::string protocol;        ///< Протокол соединения (TCP/UDP)
-};
-
-/// @brief Агрегированные результаты анализа
-struct AnalysisResult {
-  std::vector<AutorunEntry> autorun_entries;
-  std::map<std::string, ProcessInfo> process_data;
-  std::vector<NetworkConnection> network_connections;
-  std::vector<AmcacheEntry> amcache_entries;
 };
 
 }

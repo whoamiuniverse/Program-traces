@@ -92,7 +92,7 @@ class InvalidTimestampException : public ParsingException {
  private:
   static std::string to_hex(const uint64_t value) {
     char buffer[17];
-    snprintf(buffer, sizeof(buffer), "%016llX", value);
+    snprintf(buffer, sizeof(buffer), "%016lX", value);
     return buffer;
   }
 

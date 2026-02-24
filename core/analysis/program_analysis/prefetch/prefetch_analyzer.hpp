@@ -39,7 +39,8 @@ class PrefetchAnalyzer {
 
   std::unique_ptr<PrefetchAnalysis::IPrefetchParser>
       parser_;  ///< Парсер Prefetch-файлов
-  PrefetchConfig config_; ///< Конфигурация для текущей версии ОС
+  std::map<std::string, PrefetchConfig>
+      configs_;             ///< Конфигурации для версий ОС
   std::string os_version_;  ///< Целевая версия ОС
 };
 

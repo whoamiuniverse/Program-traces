@@ -2,10 +2,8 @@
 
 #include <algorithm>
 #include <sstream>
-#include <vector>
 
 #include "../../../utils/logging/logger.hpp"
-#include "../data_model/prefetch_versions.hpp"
 
 namespace PrefetchAnalysis {
 
@@ -74,15 +72,9 @@ void PrefetchParser::parseBasicInfo(PrefetchDataBuilder& builder) const {
   size_t name_length = 0;
 
   if (libscca_file_get_utf8_executable_filename_size(scca_handle_, &name_length,
-                                                     nullptr) != 1) {
-      throw DataReadException("ошибка чтения размера имени исполняемого файла");
-  }
-
-  if (name_length == 0 || name_length > sizeof(filename)) {
-      throw DataReadException("некорректная длина имени исполняемого файла");
-  }
-
-  if (libscca_file_get_utf8_executable_filename(
+                                                     nullptr) != 1 ||
+      name_length == 0 || name_length > sizeof(filename) ||
+      libscca_file_get_utf8_executable_filename(
           scca_handle_, reinterpret_cast<uint8_t*>(filename), name_length,
           nullptr) != 1) {
     throw DataReadException("ошибка чтения имени исполняемого файла");
@@ -107,8 +99,12 @@ void PrefetchParser::parseBasicInfo(PrefetchDataBuilder& builder) const {
       1) {
     throw DataReadException("ошибка чтения версии формата");
   }
-
-  builder.setFormatVersion(static_cast<uint8_t>(format_version));
+  if (toVersionEnum(format_version) == PrefetchFormatVersion::UNKNOWN) {
+    throw DataReadException("парсер не поддерживает версии " +
+                            std::to_string(format_version) +
+                            " Prefetch-файлов");
+  }
+  builder.setFormatVersion(format_version);
 }
 
 void PrefetchParser::parseRunTimes(PrefetchDataBuilder& builder) const {
@@ -118,15 +114,7 @@ void PrefetchParser::parseRunTimes(PrefetchDataBuilder& builder) const {
 
   std::vector<uint64_t> valid_times;
 
-  // Assuming libscca provides a way to get the number of run times or iterate
-  // The original code had an infinite loop with a break condition based on return value
-  // which is correct for libscca API if it returns != 1 on failure/end
-
-  // However, libscca_file_get_last_run_time takes an index.
-  // We need to know how many run times are there or loop until failure.
-  // Let's assume the loop approach is correct for the API.
-
-  for (int i = 0; i < 8; ++i) { // Usually up to 8 run times are stored
+  for (uint32_t i = 0;; ++i) {
     uint64_t filetime = 0;
     if (libscca_file_get_last_run_time(scca_handle_, i, &filetime, nullptr) !=
         1) {
@@ -134,12 +122,13 @@ void PrefetchParser::parseRunTimes(PrefetchDataBuilder& builder) const {
     }
 
     if (filetime == 0) {
+      logger->debug("Пропущена нулевая метка времени");
       continue;
     }
 
     try {
       time_t unix_time = convertFiletime(filetime);
-      builder.addRunTime(static_cast<uint64_t>(unix_time));
+      builder.addRunTime(unix_time);
       valid_times.push_back(filetime);
     } catch (const InvalidTimestampException& e) {
       logger->debug("Некорректная метка времени: \"{}\"", e.what());
@@ -147,8 +136,8 @@ void PrefetchParser::parseRunTimes(PrefetchDataBuilder& builder) const {
   }
 
   if (!valid_times.empty()) {
-    const uint64_t last_run = *std::max_element(valid_times.begin(), valid_times.end());
-    builder.setLastRunTime(static_cast<uint64_t>(convertFiletime(last_run)));
+    const uint64_t last_run = *std::ranges::max_element(valid_times);
+    builder.setLastRunTime(convertFiletime(last_run));
   }
 }
 
@@ -157,7 +146,7 @@ void PrefetchParser::parseVolumes(PrefetchDataBuilder& builder) const {
 
   logger->debug("Извлечение информации о томах");
 
-  int volume_count = 0;
+  int32_t volume_count = 0;
   if (libscca_file_get_number_of_volumes(scca_handle_, &volume_count,
                                          nullptr) != 1) {
     throw DataReadException("Ошибка чтения количества томов");
@@ -181,13 +170,11 @@ void PrefetchParser::parseVolumes(PrefetchDataBuilder& builder) const {
             vol_info, reinterpret_cast<uint8_t*>(device_path), path_size,
             nullptr) != 1) {
       libscca_volume_information_free(&vol_info, nullptr);
-      // Don't throw here to continue processing other volumes
-      logger->warn("Ошибка чтения пути устройства для тома {}", i);
-      continue;
+      throw InvalidVolumeException("", "Ошибка чтения пути устройства");
     }
 
     std::string normalized_path(device_path);
-    std::replace(normalized_path.begin(), normalized_path.end(), '\\', '/');
+    std::ranges::replace(normalized_path, '\\', '/');
 
     uint32_t serial = 0;
     uint64_t creation_time = 0;
@@ -197,8 +184,8 @@ void PrefetchParser::parseVolumes(PrefetchDataBuilder& builder) const {
         libscca_volume_information_get_creation_time(vol_info, &creation_time,
                                                      nullptr) != 1) {
       libscca_volume_information_free(&vol_info, nullptr);
-      logger->warn("Ошибка чтения метаданных тома {}", normalized_path);
-      continue;
+      throw InvalidVolumeException(normalized_path,
+                                   "Ошибка чтения метаданных тома");
     }
 
     try {
@@ -240,21 +227,19 @@ void PrefetchParser::parseMetrics(PrefetchDataBuilder& builder) const {
             metric, reinterpret_cast<uint8_t*>(filename), name_size, nullptr) !=
             1) {
       libscca_file_metrics_free(&metric, nullptr);
-      logger->warn("Ошибка чтения имени файла для метрики {}", i);
-      continue;
+      throw InvalidFileMetricException("", "Ошибка чтения имени файла");
     }
 
     uint64_t file_ref = 0;
     if (libscca_file_metrics_get_file_reference(metric, &file_ref, nullptr) !=
         1) {
       libscca_file_metrics_free(&metric, nullptr);
-      logger->warn("Ошибка чтения MFT-ссылки для метрики {}", filename);
-      continue;
+      throw InvalidFileMetricException(filename, "Ошибка чтения MFT-ссылки");
     }
 
     try {
       std::string normalized_filename(filename);
-      std::replace(normalized_filename.begin(), normalized_filename.end(), '\\', '/');
+      std::ranges::replace(normalized_filename, '\\', '/');
       builder.addMetric(FileMetric(normalized_filename, file_ref));
     } catch (const std::exception& e) {
       logger->error("Ошибка обработки метрики \"{}\": {}", filename, e.what());

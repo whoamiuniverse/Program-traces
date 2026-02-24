@@ -7,7 +7,6 @@
 
 #include <filesystem>
 #include <iostream>
-#include <vector>
 
 #include "logger_exception.hpp"
 

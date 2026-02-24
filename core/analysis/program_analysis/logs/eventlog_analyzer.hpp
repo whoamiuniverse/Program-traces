@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-#include "../../../../parsers/event_log/formats/evtx/parser.hpp"
+#include "../../../../parsers/event_log/evtx/parser/parser.hpp"
 #include "../../os_detection/os_detection.hpp"
 #include "../data/analysis_data.hpp"
 
@@ -58,7 +58,8 @@ class EventLogAnalyzer {
       evt_parser_;  ///< Парсер для EVT
   std::unique_ptr<EventLogAnalysis::IEventLogParser>
       evtx_parser_;  ///< Парсер для EVTX
-  EventLogConfig config_; ///< Конфигурация для текущей версии ОС
+  std::map<std::string, EventLogConfig>
+      configs_;             ///< Конфигурации для версий ОС
   std::string os_version_;  ///< Целевая версия ОС
 };
 

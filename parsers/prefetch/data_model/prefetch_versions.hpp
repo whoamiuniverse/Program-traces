@@ -30,4 +30,27 @@ enum class PrefetchFormatVersion : uint8_t {
   UNKNOWN = 0  ///< Неизвестная/неподдерживаемая версия
 };
 
+/// @brief Преобразует числовую версию в enum PrefetchFormatVersion
+/// @param[in] version Числовая версия из заголовка файла
+/// @return Соответствующее значение PrefetchFormatVersion
+[[nodiscard]] static PrefetchFormatVersion toVersionEnum(
+    const uint8_t version) {
+  switch (version) {
+    case 10:
+      return PrefetchFormatVersion::WIN_XP_RTM;
+    case 11:
+      return PrefetchFormatVersion::WIN_XP_EMBEDDED;
+    case 17:
+      return PrefetchFormatVersion::WIN_XP_SP2;
+    case 23:
+      return PrefetchFormatVersion::WIN_VISTA_7;
+    case 26:
+      return PrefetchFormatVersion::WIN8_10_PRE_RS1;
+    case 30:
+      return PrefetchFormatVersion::WIN10_RS1_PLUS;
+    default:
+      return PrefetchFormatVersion::UNKNOWN;
+  }
+}
+
 }
