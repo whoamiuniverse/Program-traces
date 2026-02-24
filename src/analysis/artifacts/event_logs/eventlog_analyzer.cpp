@@ -1,6 +1,9 @@
 #include "eventlog_analyzer.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <filesystem>
+#include <string_view>
 
 #include "infra/config/config.hpp"
 #include "infra/logging/logger.hpp"
@@ -9,6 +12,44 @@
 namespace fs = std::filesystem;
 
 namespace WindowsDiskAnalysis {
+namespace {
+
+constexpr std::string_view kVersionDefaultsSection = "VersionDefaults";
+
+std::string getConfigValueWithFallback(const Config& config,
+                                       const std::string& version,
+                                       const std::string& key) {
+  if (config.hasKey(version, key)) {
+    return config.getString(version, key, "");
+  }
+
+  if (config.hasKey(std::string(kVersionDefaultsSection), key)) {
+    return config.getString(std::string(kVersionDefaultsSection), key, "");
+  }
+
+  return {};
+}
+
+std::vector<uint32_t> parseEventIds(const std::string& raw_ids,
+                                    const std::string& category,
+                                    const auto& logger) {
+  std::vector<uint32_t> ids;
+  for (auto& id_str : split(raw_ids, ',')) {
+    trim(id_str);
+    if (id_str.empty()) continue;
+
+    uint32_t event_id = 0;
+    if (tryParseUInt32(id_str, event_id)) {
+      ids.push_back(event_id);
+    } else {
+      logger->debug("Некорректный {} ID события: \"{}\"", category, id_str);
+    }
+  }
+
+  return ids;
+}
+
+}  // namespace
 
 EventLogAnalyzer::EventLogAnalyzer(
     std::unique_ptr<EventLogAnalysis::IEventLogParser> evt_parser,
@@ -33,7 +74,8 @@ void EventLogAnalyzer::loadConfigurations(const std::string& ini_path) {
     EventLogConfig cfg;
 
     // Загрузка путей к журналам событий
-    std::string log_paths = config.getString(version, "EventLogs", "");
+    std::string log_paths =
+        getConfigValueWithFallback(config, version, "EventLogs");
     for (auto& path : split(log_paths, ',')) {
       trim(path);
       if (!path.empty()) {
@@ -42,32 +84,14 @@ void EventLogAnalyzer::loadConfigurations(const std::string& ini_path) {
     }
 
     // Загрузка ID событий о процессах
-    std::string process_ids = config.getString(version, "ProcessEventIDs", "");
-    for (auto& id_str : split(process_ids, ',')) {
-      trim(id_str);
-      if (!id_str.empty()) {
-        uint32_t event_id = 0;
-        if (tryParseUInt32(id_str, event_id)) {
-          cfg.process_event_ids.push_back(event_id);
-        } else {
-          logger->debug("Некорректный ID процесса: \"{}\"", id_str);
-        }
-      }
-    }
+    cfg.process_event_ids = parseEventIds(
+        getConfigValueWithFallback(config, version, "ProcessEventIDs"),
+        "process", logger);
 
     // Загрузка ID событий о сети
-    std::string network_ids = config.getString(version, "NetworkEventIDs", "");
-    for (auto& id_str : split(network_ids, ',')) {
-      trim(id_str);
-      if (!id_str.empty()) {
-        uint32_t event_id = 0;
-        if (tryParseUInt32(id_str, event_id)) {
-          cfg.network_event_ids.push_back(event_id);
-        } else {
-          logger->debug("Некорректный ID сети: \"{}\"", id_str);
-        }
-      }
-    }
+    cfg.network_event_ids = parseEventIds(
+        getConfigValueWithFallback(config, version, "NetworkEventIDs"),
+        "network", logger);
 
     configs_[version] = cfg;
     logger->debug("Загружена конфигурация журналов для \"{}\"", version);
@@ -100,7 +124,9 @@ void EventLogAnalyzer::collect(
   const auto logger = GlobalLogger::get();
 
   if (!configs_.contains(os_version_)) {
-    logger->debug("Конфигурация журналов отсутствует для \"{}\"", os_version_);
+    logger->warn("Конфигурация журналов событий не найдена");
+    logger->debug("Отсутствует EventLogs-конфигурация для версии \"{}\"",
+                  os_version_);
     return;
   }
 
@@ -164,8 +190,10 @@ void EventLogAnalyzer::collect(
             }
           }
         } catch (const std::exception& e) {
-          logger->error("Ошибка парсинга событий о процессах ({}): {}",
-                        file_path, e.what());
+          logger->error("Ошибка парсинга событий процессов");
+          logger->debug(
+              "Ошибка парсинга process events: файл=\"{}\", event_id={}, {}",
+              file_path, event_id, e.what());
         }
       }
 
@@ -199,8 +227,10 @@ void EventLogAnalyzer::collect(
             network_connections.push_back(conn);
           }
         } catch (const std::exception& e) {
-          logger->error("Ошибка парсинга сетевых событий ({}): {}", file_path,
-                        e.what());
+          logger->error("Ошибка парсинга сетевых событий");
+          logger->debug(
+              "Ошибка парсинга network events: файл=\"{}\", event_id={}, {}",
+              file_path, event_id, e.what());
         }
       }
     }

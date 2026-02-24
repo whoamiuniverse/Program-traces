@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <optional>
+#include <string_view>
 
 #include "infra/config/config.hpp"
 #include "infra/logging/logger.hpp"
@@ -11,6 +12,22 @@
 namespace WindowsDiskAnalysis {
 
 namespace {
+
+constexpr std::string_view kVersionDefaultsSection = "VersionDefaults";
+
+std::string getConfigValueWithFallback(const Config& config,
+                                       const std::string& version,
+                                       const std::string& key) {
+  if (config.hasKey(version, key)) {
+    return config.getString(version, key, "");
+  }
+
+  if (config.hasKey(std::string(kVersionDefaultsSection), key)) {
+    return config.getString(std::string(kVersionDefaultsSection), key, "");
+  }
+
+  return {};
+}
 
 std::string toLowerAscii(std::string text) {
   std::ranges::transform(text, text.begin(), [](unsigned char ch) {
@@ -100,7 +117,7 @@ void PrefetchAnalyzer::loadConfigurations(const std::string& ini_path) {
     PrefetchConfig cfg;
 
     // Загрузка пути к папке Prefetch
-    std::string path = config.getString(version, "PrefetchPath", "");
+    std::string path = getConfigValueWithFallback(config, version, "PrefetchPath");
     trim(path);
     if (!path.empty()) {
       std::ranges::replace(path, '\\', '/');
@@ -127,6 +144,12 @@ std::vector<ProcessInfo> PrefetchAnalyzer::collect(
   }
 
   const auto& cfg = configs_[os_version_];
+  if (cfg.prefetch_path.empty()) {
+    logger->warn("Путь к Prefetch не настроен");
+    logger->debug("Версия ОС без PrefetchPath: \"{}\"", os_version_);
+    return results;
+  }
+
   std::string prefetch_path = disk_root + cfg.prefetch_path;
   std::filesystem::path effective_prefetch_path(prefetch_path);
 
@@ -139,7 +162,8 @@ std::vector<ProcessInfo> PrefetchAnalyzer::collect(
       logger->debug("Путь Prefetch разрешён case-insensitive: \"{}\" -> \"{}\"",
                     prefetch_path, effective_prefetch_path.string());
     } else {
-      logger->warn("Папка Prefetch не найдена: \"{}\"", prefetch_path);
+      logger->warn("Папка Prefetch не найдена");
+      logger->debug("Проверенный путь Prefetch: \"{}\"", prefetch_path);
       return results;
     }
   }
@@ -174,8 +198,9 @@ std::vector<ProcessInfo> PrefetchAnalyzer::collect(
       results.emplace_back(info);
       processed_count++;
     } catch (const std::exception& e) {
-      logger->warn("Ошибка анализа файла \"{}\": \"{}\"", entry.path().string(),
-                   e.what());
+      logger->warn("Файл Prefetch пропущен из-за ошибки");
+      logger->debug("Ошибка анализа Prefetch \"{}\": {}", entry.path().string(),
+                    e.what());
     }
   }
 

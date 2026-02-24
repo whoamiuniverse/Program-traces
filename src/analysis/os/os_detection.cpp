@@ -12,6 +12,31 @@
 #include "os_info.hpp"
 
 namespace WindowsVersion {
+namespace {
+
+constexpr std::string_view kDefaultKey = "Default";
+
+std::string getConfigValueWithFallback(const Config& config,
+                                       const std::string& section,
+                                       const std::string& version_key,
+                                       const std::string& defaults_section,
+                                       const std::string& defaults_key) {
+  if (config.hasKey(section, version_key)) {
+    return config.getString(section, version_key, "");
+  }
+
+  if (config.hasKey(section, std::string(kDefaultKey))) {
+    return config.getString(section, std::string(kDefaultKey), "");
+  }
+
+  if (config.hasKey(defaults_section, defaults_key)) {
+    return config.getString(defaults_section, defaults_key, "");
+  }
+
+  return {};
+}
+
+}  // namespace
 
 OSDetection::OSDetection(
     std::unique_ptr<RegistryAnalysis::IRegistryParser> parser, Config&& config,
@@ -36,10 +61,16 @@ void OSDetection::loadConfiguration() {
     if (name.empty()) continue;
 
     VersionConfig cfg;
-    cfg.registry_file = config_.getString("OSInfoRegistryPaths", name, "");
-    cfg.registry_key = config_.getString("OSInfoHive", name, "");
+    cfg.registry_file =
+        getConfigValueWithFallback(config_, "OSInfoRegistryPaths", name,
+                                   "OSInfoDefaults", "RegistryPath");
+    cfg.registry_key = getConfigValueWithFallback(config_, "OSInfoHive", name,
+                                                  "OSInfoDefaults",
+                                                  "RegistryHive");
 
-    const std::string config_keys = config_.getString("OSInfoKeys", name, "");
+    const std::string config_keys =
+        getConfigValueWithFallback(config_, "OSInfoKeys", name,
+                                   "OSInfoDefaults", "RegistryKeys");
     if (!config_keys.empty()) {
       for (auto& key : split(config_keys, ',')) {
         trim(key);

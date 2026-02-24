@@ -191,3 +191,26 @@ cmake --build .
 ```bash
 ./program_traces
 ```
+
+## Добавление Новой Версии Windows
+
+Простой чеклист:
+
+1. Добавьте имя версии в `[General] -> Versions` в [config.ini](config.ini).
+2. Если для новой версии путь к `SOFTWARE` отличается от типового, добавьте override в `[OSInfoRegistryPaths]` (`<Version> = <path>`).
+3. Если нужны особые артефактные параметры, создайте секцию `[<Version>]` и укажите только отличия от `[VersionDefaults]`:
+   - `RegistryPath`, `RegistryKeys`, `FilesystemPaths`
+   - `PrefetchPath`, `EventLogs`, `ProcessEventIDs`, `NetworkEventIDs`
+   - `AmcachePath`, `AmcacheKeys`
+4. При необходимости уточните сопоставление build-номеров в `[BuildMappingsClient]` или `[BuildMappingsServer]`.
+5. Запустите анализ и проверьте, что в логах появилась корректная строка определения ОС (`Версия Windows определена: ...`).
+
+Минимальный пример добавления:
+
+```ini
+[General]
+Versions = WindowsXP,WindowsVista,Windows7,Windows8,Windows10,Windows11,WindowsServer,Windows12
+
+[Windows12]
+NetworkEventIDs = 5156,5157,3
+```

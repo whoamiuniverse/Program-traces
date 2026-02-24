@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <string_view>
 
 #include "infra/config/config.hpp"
 #include "infra/logging/logger.hpp"
@@ -9,6 +10,25 @@
 
 namespace fs = std::filesystem;
 using namespace WindowsDiskAnalysis;
+namespace {
+
+constexpr std::string_view kVersionDefaultsSection = "VersionDefaults";
+
+std::string getConfigValueWithFallback(const Config& config,
+                                       const std::string& version,
+                                       const std::string& key) {
+  if (config.hasKey(version, key)) {
+    return config.getString(version, key, "");
+  }
+
+  if (config.hasKey(std::string(kVersionDefaultsSection), key)) {
+    return config.getString(std::string(kVersionDefaultsSection), key, "");
+  }
+
+  return {};
+}
+
+}  // namespace
 
 AmcacheAnalyzer::AmcacheAnalyzer(
     std::unique_ptr<RegistryAnalysis::IRegistryParser> parser,
@@ -24,11 +44,12 @@ void AmcacheAnalyzer::loadConfiguration() {
   Config config(ini_path_, false, false);
   auto logger = GlobalLogger::get();
 
-  amcache_path_ = config.getString(os_version_, "AmcachePath", "");
+  amcache_path_ = getConfigValueWithFallback(config, os_version_, "AmcachePath");
   trim(amcache_path_);
   std::ranges::replace(amcache_path_, '\\', '/');
 
-  std::string keys_str = config.getString(os_version_, "AmcacheKeys", "");
+  std::string keys_str =
+      getConfigValueWithFallback(config, os_version_, "AmcacheKeys");
   auto keys = split(keys_str, ',');
   for (auto& key : keys) {
     trim(key);
@@ -54,7 +75,8 @@ std::vector<AmcacheEntry> AmcacheAnalyzer::collect(
   const std::string full_path = disk_root + amcache_path_;
 
   if (!fs::exists(full_path)) {
-    logger->warn("Файл Amcache не найден: {}", full_path);
+    logger->warn("Файл Amcache не найден");
+    logger->debug("Проверенный путь Amcache: {}", full_path);
     return results;
   }
 
@@ -77,18 +99,21 @@ std::vector<AmcacheEntry> AmcacheAnalyzer::collect(
               results.push_back(processInventoryApplicationEntry(values));
             }
           } catch (const std::exception& e) {
-            logger->warn("Ошибка обработки подраздела {}: {}", subkey,
-                         e.what());
+            logger->warn("Пропущен подраздел Amcache");
+            logger->debug("Ошибка обработки подраздела \"{}\": {}", subkey,
+                          e.what());
           }
         }
       } catch (const std::exception& e) {
-        logger->error("Ошибка доступа к ключу {}: {}", key, e.what());
+        logger->error("Ошибка доступа к ключу Amcache");
+        logger->debug("Ошибка доступа к ключу \"{}\": {}", key, e.what());
       }
     }
 
     logger->info("Извлечено {} записей из Amcache", results.size());
   } catch (const std::exception& e) {
-    logger->error("Критическая ошибка анализа Amcache: {}", e.what());
+    logger->error("Критическая ошибка анализа Amcache");
+    logger->debug("Критическая ошибка анализа Amcache: {}", e.what());
   }
 
   return results;
@@ -165,7 +190,9 @@ AmcacheEntry AmcacheAnalyzer::processInventoryApplicationEntry(
         }
       }
     } catch (const std::exception& e) {
-      logger->warn("Ошибка обработки значения '{}': {}", name, e.what());
+      logger->warn("Пропущено значение Amcache");
+      logger->debug("Ошибка обработки значения Amcache \"{}\": {}", name,
+                    e.what());
     }
   }
 
@@ -174,7 +201,8 @@ AmcacheEntry AmcacheAnalyzer::processInventoryApplicationEntry(
     try {
       entry.modification_time_str = filetimeToString(entry.modification_time);
     } catch (const std::exception& e) {
-      logger->warn("Ошибка конвертации времени изменения: {}", e.what());
+      logger->warn("Ошибка конвертации времени изменения Amcache");
+      logger->debug("Ошибка конвертации modification_time: {}", e.what());
     }
   }
 
@@ -182,7 +210,8 @@ AmcacheEntry AmcacheAnalyzer::processInventoryApplicationEntry(
     try {
       entry.install_time_str = filetimeToString(entry.install_time);
     } catch (const std::exception& e) {
-      logger->warn("Ошибка конвертации времени установки: {}", e.what());
+      logger->warn("Ошибка конвертации времени установки Amcache");
+      logger->debug("Ошибка конвертации install_time: {}", e.what());
     }
   }
 
