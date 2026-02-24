@@ -6,6 +6,8 @@
 #include <fstream>
 #include <map>
 #include <set>
+#include <string_view>
+#include <vector>
 
 #include "analysis/artifacts/data/analysis_data.hpp"
 #include "common/utils.hpp"
@@ -17,6 +19,7 @@ using namespace PrefetchAnalysis;
 namespace {
 
 struct AggregatedData {
+  std::string executable_name;  // Отображаемое имя исполняемого файла
   std::set<std::string> paths;  // Все пути для данного файла
   std::vector<std::string> run_times;
   std::set<std::string> autorun_locations;
@@ -29,6 +32,20 @@ struct AggregatedData {
   std::set<uint64_t> file_sizes;  // Размеры файлов
   bool has_deleted_trace = false;
 };
+
+constexpr char kCsvDelimiter = ';';
+constexpr std::string_view kListSeparator = " | ";
+
+char toLowerAsciiChar(const unsigned char c) {
+  if (c >= 'A' && c <= 'Z') return static_cast<char>(c - 'A' + 'a');
+  return static_cast<char>(c);
+}
+
+std::string toLowerAscii(std::string value) {
+  std::ranges::transform(value, value.begin(),
+                         [](const unsigned char c) { return toLowerAsciiChar(c); });
+  return value;
+}
 
 std::string normalizePath(const std::string& path) {
   if (path.empty()) return "";
@@ -45,7 +62,7 @@ std::string normalizePath(const std::string& path) {
       result = result.substr(1, quote_end - 1);
     }
   } else {
-    const std::string lowered = to_lower(result);
+    const std::string lowered = toLowerAscii(result);
     for (const std::string ext : {".exe", ".dll", ".sys", ".com", ".bat",
                                   ".cmd"}) {
       if (const size_t ext_pos = lowered.find(ext);
@@ -55,9 +72,6 @@ std::string normalizePath(const std::string& path) {
       }
     }
   }
-
-  std::ranges::transform(result, result.begin(),
-                         [](unsigned char c) { return std::tolower(c); });
 
   std::ranges::replace(result, '/', '\\');
 
@@ -113,17 +127,58 @@ void CSVExporter::exportToCSV(
     const std::map<std::string, ProcessInfo>& process_data,
     const std::vector<NetworkConnection>& network_connections,
     const std::vector<AmcacheEntry>& amcache_entries) {
-  std::ofstream file(output_path);
+  std::ofstream file(output_path, std::ios::binary);
   if (!file.is_open()) {
     throw FileOpenException(output_path);
   }
 
   try {
+    auto escape = [](const std::string& s) {
+      if (s.empty()) return std::string();
+
+      std::string result;
+      result.reserve(s.size() + 2);
+      result += '"';
+
+      for (char c : s) {
+        if (c == '\n' || c == '\r') {
+          result += ' ';
+          continue;
+        }
+
+        if (c == '"')
+          result += "\"\"";
+        else
+          result += c;
+      }
+
+      result += '"';
+      return result;
+    };
+
+    auto joinStrings = [](const auto& container) {
+      std::string out;
+      bool first = true;
+      for (const auto& value : container) {
+        if (value.empty()) continue;
+        if (!first) out += kListSeparator;
+        out += value;
+        first = false;
+      }
+      return out;
+    };
+
+    // BOM нужен для корректного чтения UTF-8 заголовков в Excel/Windows
+    file.write("\xEF\xBB\xBF", 3);
+
     // Заголовок CSV
-    file << "ИсполняемыйФайл,Пути,Версии,Хэши,РазмерФайла,ВременаЗапуска,"
-            "Автозагрузка,СледыУдаления,"
-         << "КоличествоЗапусков,"
-         << "Тома(серийный:тип),СетевыеПодключения,ФайловыеМетрики\n";
+    file << "ИсполняемыйФайл" << kCsvDelimiter << "Пути" << kCsvDelimiter
+         << "Версии" << kCsvDelimiter << "Хэши" << kCsvDelimiter
+         << "РазмерФайла" << kCsvDelimiter << "ВременаЗапуска" << kCsvDelimiter
+         << "Автозагрузка" << kCsvDelimiter << "СледыУдаления"
+         << kCsvDelimiter << "КоличествоЗапусков" << kCsvDelimiter
+         << "Тома(серийный:тип)" << kCsvDelimiter << "СетевыеПодключения"
+         << kCsvDelimiter << "ФайловыеМетрики\n";
 
     // Основная карта для агрегации данных по имени файла
     std::map<std::string, AggregatedData> aggregated_data;
@@ -136,9 +191,15 @@ void CSVExporter::exportToCSV(
       // Получаем имя файла - основной ключ для агрегации
       std::string filename = getFilenameFromPath(norm_path);
       if (filename.empty()) return;
+      const std::string filename_key = toLowerAscii(filename);
 
       // Обрабатываем данные
-      processor(aggregated_data[filename], norm_path);
+      auto& bucket = aggregated_data[filename_key];
+      if (bucket.executable_name.empty()) {
+        bucket.executable_name = filename;
+      }
+
+      processor(bucket, norm_path);
     };
 
     // 1. Обрабатываем данные автозагрузки
@@ -212,52 +273,20 @@ void CSVExporter::exportToCSV(
     }
 
     // 5. Генерируем выходные данные
-    for (const auto& [filename, data] : aggregated_data) {
-      auto escape = [](const std::string& s) {
-        if (s.empty()) return std::string();
+    for (const auto& [filename_key, data] : aggregated_data) {
+      const std::string& filename =
+          data.executable_name.empty() ? filename_key : data.executable_name;
 
-        std::string result;
-        result.reserve(s.size() + 2);
-        result += '"';
+      std::string paths_str = joinStrings(data.paths);
+      std::string versions_str = joinStrings(data.versions);
+      std::string hashes_str = joinStrings(data.hashes);
 
-        for (char c : s) {
-          if (c == '"')
-            result += "\"\"";
-          else
-            result += c;
-        }
-
-        result += '"';
-        return result;
-      };
-
-      // Форматирование версий
-      std::string paths_str;
-      for (const auto& path : data.paths) {
-        if (!paths_str.empty()) paths_str += ";";
-        paths_str += path;
+      std::vector<std::string> file_sizes;
+      file_sizes.reserve(data.file_sizes.size());
+      for (const auto size : data.file_sizes) {
+        file_sizes.push_back(std::to_string(size));
       }
-
-      // Форматирование версий
-      std::string versions_str;
-      for (const auto& ver : data.versions) {
-        if (!versions_str.empty()) versions_str += ";";
-        versions_str += ver;
-      }
-
-      // Форматирование хэшей
-      std::string hashes_str;
-      for (const auto& hash : data.hashes) {
-        if (!hashes_str.empty()) hashes_str += ";";
-        hashes_str += hash;
-      }
-
-      // Форматирование размеров файлов
-      std::string file_sizes_str;
-      for (const auto& size : data.file_sizes) {
-        if (!file_sizes_str.empty()) file_sizes_str += ";";
-        file_sizes_str += std::to_string(size);
-      }
+      std::string file_sizes_str = joinStrings(file_sizes);
 
       // Форматирование времени запуска (включая время изменения)
       std::vector<std::string> unique_run_times = data.run_times;
@@ -265,12 +294,7 @@ void CSVExporter::exportToCSV(
       unique_run_times.erase(
           std::unique(unique_run_times.begin(), unique_run_times.end()),
           unique_run_times.end());
-
-      std::string run_times_str;
-      for (const auto& time : unique_run_times) {
-        if (!run_times_str.empty()) run_times_str += ";";
-        run_times_str += time;
-      }
+      std::string run_times_str = joinStrings(unique_run_times);
 
       // Форматирование автозагрузки
       std::string autorun_str;
@@ -291,38 +315,57 @@ void CSVExporter::exportToCSV(
       std::string deleted_str = data.has_deleted_trace ? "Да" : "Нет";
 
       // Форматирование сетевых подключений
-      std::string network_str;
+      std::vector<std::string> network_values;
+      network_values.reserve(data.network_connections.size());
       for (const auto& conn : data.network_connections) {
-        if (!network_str.empty()) network_str += ";";
-        network_str += conn.protocol + ":" + conn.local_address + "->" +
-                       conn.remote_address + ":" + std::to_string(conn.port);
+        network_values.push_back(conn.protocol + ":" + conn.local_address +
+                                 "->" + conn.remote_address + ":" +
+                                 std::to_string(conn.port));
       }
+      std::sort(network_values.begin(), network_values.end());
+      network_values.erase(
+          std::unique(network_values.begin(), network_values.end()),
+          network_values.end());
+      std::string network_str = joinStrings(network_values);
 
       // Форматирование томов
-      std::string volumes_str;
+      std::vector<std::string> volume_values;
+      volume_values.reserve(data.volumes.size());
       for (const auto& vol : data.volumes) {
-        if (!volumes_str.empty()) volumes_str += ";";
-        volumes_str += std::to_string(vol.getSerialNumber()) + ":" +
-                       volumeTypeToString(vol.getVolumeType()) + ":";
+        volume_values.push_back(std::to_string(vol.getSerialNumber()) + ":" +
+                                volumeTypeToString(vol.getVolumeType()));
       }
+      std::sort(volume_values.begin(), volume_values.end());
+      volume_values.erase(
+          std::unique(volume_values.begin(), volume_values.end()),
+          volume_values.end());
+      std::string volumes_str = joinStrings(volume_values);
 
       // Форматирование файловых метрик
-      std::string metrics_str;
+      std::vector<std::string> metric_values;
+      metric_values.reserve(data.metrics.size());
       for (const auto& metric : data.metrics) {
         fs::path file_path(metric.getFilename());
         std::string metric_filename = file_path.filename().string();
-
-        if (!metrics_str.empty()) metrics_str += ";";
-        metrics_str += metric_filename;
+        if (!metric_filename.empty()) {
+          metric_values.push_back(metric_filename);
+        }
       }
+      std::sort(metric_values.begin(), metric_values.end());
+      metric_values.erase(
+          std::unique(metric_values.begin(), metric_values.end()),
+          metric_values.end());
+      std::string metrics_str = joinStrings(metric_values);
 
-      // Запись данных с новыми полями
-      file << escape(filename) << "," << escape(paths_str) << ","
-           << escape(versions_str) << "," << escape(hashes_str) << ","
-           << escape(file_sizes_str) << "," << escape(run_times_str) << ","
-           << escape(autorun_str) << "," << escape(deleted_str) << ","
-           << data.run_count << "," << escape(volumes_str) << ","
-           << escape(network_str) << "," << escape(metrics_str) << "\n";
+      // Запись данных в строго фиксированном порядке колонок
+      file << escape(filename) << kCsvDelimiter << escape(paths_str)
+           << kCsvDelimiter << escape(versions_str) << kCsvDelimiter
+           << escape(hashes_str) << kCsvDelimiter << escape(file_sizes_str)
+           << kCsvDelimiter << escape(run_times_str) << kCsvDelimiter
+           << escape(autorun_str) << kCsvDelimiter << escape(deleted_str)
+           << kCsvDelimiter << data.run_count << kCsvDelimiter
+           << escape(volumes_str) << kCsvDelimiter << escape(network_str)
+           << kCsvDelimiter << escape(metrics_str) << "\n";
     }
   } catch (const std::exception& e) {
     throw CsvExportException(std::string("Ошибка при экспорте данных: ") +

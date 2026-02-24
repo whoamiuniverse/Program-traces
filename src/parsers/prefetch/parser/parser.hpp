@@ -64,23 +64,31 @@ class PrefetchParser : public IPrefetchParser {
   /// @{
 
   /// @brief Парсинг основной информации
+  /// @param[in] scca_handle Открытый дескриптор Prefetch-файла
   /// @param[in] builder Сборщик данных
   /// @exception DataReadException Ошибка чтения обязательных полей
-  void parseBasicInfo(PrefetchDataBuilder& builder) const;
+  void parseBasicInfo(libscca_file_t* scca_handle,
+                      PrefetchDataBuilder& builder) const;
 
   /// @brief Парсинг временных меток запусков
+  /// @param[in] scca_handle Открытый дескриптор Prefetch-файла
   /// @param[in] builder Сборщик данных
-  void parseRunTimes(PrefetchDataBuilder& builder) const;
+  void parseRunTimes(libscca_file_t* scca_handle,
+                     PrefetchDataBuilder& builder) const;
 
   /// @brief Парсинг информации о томах
+  /// @param[in] scca_handle Открытый дескриптор Prefetch-файла
   /// @param[in] builder Сборщик данных
   /// @exception DataReadException Ошибка чтения информации о томах
-  void parseVolumes(PrefetchDataBuilder& builder) const;
+  void parseVolumes(libscca_file_t* scca_handle,
+                    PrefetchDataBuilder& builder) const;
 
   /// @brief Парсинг файловых метрик
+  /// @param[in] scca_handle Открытый дескриптор Prefetch-файла
   /// @param[in] builder Сборщик данных
   /// @exception DataReadException Ошибка чтения метрик
-  void parseMetrics(PrefetchDataBuilder& builder) const;
+  void parseMetrics(libscca_file_t* scca_handle,
+                    PrefetchDataBuilder& builder) const;
 
   /// @}
 
@@ -93,9 +101,12 @@ class PrefetchParser : public IPrefetchParser {
   /// @exception InvalidTimestampException Некорректное значение времени
   static uint64_t convertFiletime(uint64_t filetime);
 
-  /// @}
+  /// @brief Преобразует объект ошибки libscca в текст
+  /// @param error Указатель на ошибку libscca
+  /// @return Сообщение об ошибке
+  static std::string toLibsccaErrorMessage(libscca_error_t* error);
 
-  libscca_file_t* scca_handle_;  ///< Хэндл libscca
+  /// @}
 };
 
 }
