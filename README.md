@@ -1,216 +1,63 @@
 # Program traces
 
-## Обзор
+Инструмент для анализа артефактов запуска программ на подключенном Windows-диске.
 
-Приложение извлекает следы запуска программ из Windows на подключённом диске.
-
-## Архитектура
-
-Исходный код организован в каталоге `src/`:
-
-```text
-src/
-  main.cpp                     # точка входа
-  analysis/                    # сценарии анализа диска
-    os/                        # определение версии/типа Windows
-    artifacts/                 # анализ артефактов запуска ПО
-  parsers/                     # адаптеры форматов (registry, prefetch, evt/evtx)
-  errors/                      # типы исключений
-  infra/                       # config, logging, export
-  common/                      # общие утилиты (string/time/parse)
-```
-
-Направление зависимостей:
-- `main.cpp -> analysis`
-- `analysis -> parsers + infra + errors + common`
-- `parsers -> errors + common`
-- `infra` и `common` переиспользуемые и не должны зависеть от `analysis`
-
-## Документация
-
-Для генерации документации:
-
-1. Установите doxygen:
-
-```bash
-sudo apt update && sudo apt install doxygen -y
-```
-
-2. Сгенерируйте документацию:
-
-```bash
-doxygen docs/Doxyfile
-```
+Архитектура и настройка `config.ini`: [SETUP_AND_CONFIGURATION.md](SETUP_AND_CONFIGURATION.md).
 
 ## Зависимости
 
-### Установка базовых зависимостей
+Проект по умолчанию использует prebuilt-библиотеки из `libs/<platform>/`.
+Если prebuilt отсутствуют, соберите зависимости вручную.
+
+### Быстрая установка базовых пакетов (Linux)
 
 ```bash
-sudo apt update && sudo apt install autopoint cmake libspdlog-dev git autoconf automake libtool pkg-config gcc g++ make libfuse-dev -y
+sudo apt update && sudo apt install autopoint cmake git autoconf automake libtool pkg-config gcc g++ make libfuse-dev -y
 ```
 
-### Установка libregf
+### Сборка зависимостей вручную
 
-1. Клонируйте репозиторий:
-
-```bash
-git clone https://github.com/libyal/libregf.git
-cd libregf
-```
-
-2. Соберите и установите библиотеку:
+Универсальный шаблон:
 
 ```bash
+git clone https://github.com/libyal/<repo>.git
+cd <repo>
 ./synclibs.sh
 ./autogen.sh
 ./configure
 make
 sudo make install
+sudo ldconfig
+cd ..
 ```
 
-3. Обновите кэш библиотек:
-
-```bash
-sudo ldconfig && cd ..
-```
-
-4. Проверьте установку:
-
-```bash
-regfinfo
-```
-
-### Установка libscca
-
-1. Клонируйте репозиторий:
-
-```bash
-git clone https://github.com/libyal/libscca.git
-cd libscca
-```
-
-2. Соберите и установите библиотеку:
-
-```bash
-./synclibs.sh
-./autogen.sh
-./configure
-make
-sudo make install
-```
-
-3. Обновите кэш библиотек:
-
-```bash
-sudo ldconfig && cd ..
-```
-
-4. Проверьте установку:
-
-```bash
-sccainfo
-```
-
-### Установка libevtx
-
-1. Клонируйте репозиторий:
-
-```bash
-git clone https://github.com/libyal/libevtx.git
-cd libevtx
-```
-
-2. Соберите и установите библиотеку:
-
-```bash
-./synclibs.sh
-./autogen.sh
-./configure
-make
-sudo make install
-```
-
-3. Обновите кэш библиотек:
-
-```bash
-sudo ldconfig && cd ..
-```
-
-4. Проверьте установку:
-
-```bash
-evtxexport --version
-```
-
-### Установка libevt
-
-1. Клонируйте репозиторий:
-
-```bash
-git clone https://github.com/libyal/libevt
-cd libevt
-```
-
-2. Соберите и установите библиотеку:
-
-```bash
-./synclibs.sh
-./autogen.sh
-./configure
-make
-sudo make install
-```
-
-3. Обновите кэш библиотек:
-
-```bash
-sudo ldconfig && cd ..
-```
-
-4. Проверьте установку:
-
-```bash
-evtexport --version
-```
+Нужные репозитории:
+- `libregf` (проверка: `regfinfo`)
+- `libscca` (проверка: `sccainfo`)
+- `libevtx` (проверка: `evtxexport --version`)
+- `libevt` (проверка: `evtexport --version`)
 
 ## Сборка
 
 Из корня репозитория:
 
 ```bash
-mkdir -p build && cd build
-cmake ..
-cmake --build .
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
 ```
 
 ## Запуск
 
-После сборки запуск:
+Формат:
 
 ```bash
-./program_traces
+./build/program_traces <корень_диска|auto> <config.ini> <output.csv>
+./build/program_traces <config.ini> <output.csv>
 ```
 
-## Добавление Новой Версии Windows
+Примеры:
 
-Простой чеклист:
-
-1. Добавьте имя версии в `[General] -> Versions` в [config.ini](config.ini).
-2. Если для новой версии путь к `SOFTWARE` отличается от типового, добавьте override в `[OSInfoRegistryPaths]` (`<Version> = <path>`).
-3. Если нужны особые артефактные параметры, создайте секцию `[<Version>]` и укажите только отличия от `[VersionDefaults]`:
-   - `RegistryPath`, `RegistryKeys`, `FilesystemPaths`
-   - `PrefetchPath`, `EventLogs`, `ProcessEventIDs`, `NetworkEventIDs`
-   - `AmcachePath`, `AmcacheKeys`
-4. При необходимости уточните сопоставление build-номеров в `[BuildMappingsClient]` или `[BuildMappingsServer]`.
-5. Запустите анализ и проверьте, что в логах появилась корректная строка определения ОС (`Версия Windows определена: ...`).
-
-Минимальный пример добавления:
-
-```ini
-[General]
-Versions = WindowsXP,WindowsVista,Windows7,Windows8,Windows10,Windows11,WindowsServer,Windows12
-
-[Windows12]
-NetworkEventIDs = 5156,5157,3
+```bash
+./build/program_traces /Volumes/Untitled/ config.ini ~/Desktop/result.csv
+./build/program_traces config.ini ~/Desktop/result.csv
 ```
