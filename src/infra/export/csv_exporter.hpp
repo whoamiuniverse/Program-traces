@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <map>
 #include <string>
 #include <vector>
@@ -11,6 +12,34 @@
 #include "errors/csv_export_exception.hpp"
 
 namespace WindowsDiskAnalysis {
+
+/// @struct CSVExportOptions
+/// @brief Настройки экспорта CSV, загружаемые из config.ini
+struct CSVExportOptions {
+  /// @brief Максимум имён в колонке "ФайловыеМетрики" (0 = без ограничения)
+  std::size_t max_metric_names = 200;
+
+  /// @brief Префиксы для отбрасывания метрик (case-insensitive)
+  std::vector<std::string> metric_skip_prefixes = {"tmp", "~tmp"};
+
+  /// @brief Подстроки для отбрасывания метрик (case-insensitive)
+  std::vector<std::string> metric_skip_contains = {".tmp"};
+
+  /// @brief Точные имена для отбрасывания метрик (case-insensitive)
+  std::vector<std::string> metric_skip_exact;
+
+  /// @brief Отбрасывать короткие токены в верхнем регистре без расширения
+  bool drop_short_upper_tokens = true;
+  std::size_t short_upper_token_max_length = 3;
+
+  /// @brief Отбрасывать длинные hex-like токены без расширения
+  bool drop_hex_like_tokens = true;
+  std::size_t hex_like_min_length = 16;
+
+  /// @brief Отбрасывать длинные upper-alnum токены без расширения
+  bool drop_upper_alnum_tokens = true;
+  std::size_t upper_alnum_min_length = 8;
+};
 
 /// @class CSVExporter
 /// @brief Класс для экспорта результатов анализа Windows в CSV формат
@@ -47,7 +76,8 @@ class CSVExporter {
       const std::vector<AutorunEntry>& autorun_entries,
       const std::map<std::string, ProcessInfo>& process_data,
       const std::vector<NetworkConnection>& network_connections,
-      const std::vector<AmcacheEntry>& amcache_entries);
+      const std::vector<AmcacheEntry>& amcache_entries,
+      const CSVExportOptions& options = CSVExportOptions{});
 };
 
 }

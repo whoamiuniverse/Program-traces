@@ -67,6 +67,10 @@ class WindowsDiskAnalyzer {
   /// @throws std::runtime_error Если каталог невозможно создать
   static void ensureDirectoryExists(const std::string& path);
 
+  /// @brief Загружает настройки CSV-экспорта из секции [CSVExport]
+  /// @return Параметры фильтрации и форматирования CSV
+  [[nodiscard]] CSVExportOptions loadCSVExportOptions() const;
+
   std::string disk_root_;    ///< Корневой путь подключённого диска
   std::string config_path_;  ///< Путь к конфигурационному файлу
   OSInfo os_info_;           ///< Определённая информация о версии ОС

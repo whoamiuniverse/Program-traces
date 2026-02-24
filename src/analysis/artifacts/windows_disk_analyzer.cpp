@@ -144,6 +144,12 @@ std::string normalizePathSeparators(std::string path) {
   return path;
 }
 
+std::vector<std::string> parseListSetting(std::string value) {
+  trim(value);
+  if (value.empty()) return {};
+  return split(value, ',');
+}
+
 std::optional<fs::path> findPathCaseInsensitive(const fs::path& input_path) {
   std::error_code ec;
   if (fs::exists(input_path, ec) && !ec) {
@@ -376,6 +382,94 @@ void WindowsDiskAnalyzer::ensureDirectoryExists(const std::string& path) {
   }
 }
 
+CSVExportOptions WindowsDiskAnalyzer::loadCSVExportOptions() const {
+  const auto logger = GlobalLogger::get();
+
+  CSVExportOptions options;
+  Config config(config_path_);
+  if (!config.hasSection("CSVExport")) {
+    logger->debug(
+        "Секция [CSVExport] не найдена, используются значения по умолчанию");
+    return options;
+  }
+
+  auto readSizeOption = [&](const std::string& key,
+                            const std::size_t current_value) {
+    try {
+      const int value =
+          config.getInt("CSVExport", key, static_cast<int>(current_value));
+      if (value < 0) {
+        logger->warn(
+            "Параметр [CSVExport]/{} не может быть отрицательным ({}), "
+            "оставлено значение {}",
+            key, value, current_value);
+        return current_value;
+      }
+      return static_cast<std::size_t>(value);
+    } catch (const std::exception& e) {
+      logger->warn(
+          "Не удалось прочитать [CSVExport]/{} ({}), оставлено значение {}",
+          key, e.what(), current_value);
+      return current_value;
+    }
+  };
+
+  auto readBoolOption = [&](const std::string& key, bool current_value) {
+    try {
+      return config.getBool("CSVExport", key, current_value);
+    } catch (const std::exception& e) {
+      logger->warn(
+          "Не удалось прочитать [CSVExport]/{} ({}), оставлено значение {}",
+          key, e.what(), current_value);
+      return current_value;
+    }
+  };
+
+  auto readListOption = [&](const std::string& key,
+                            const std::vector<std::string>& current_value) {
+    try {
+      if (!config.hasKey("CSVExport", key)) return current_value;
+      const std::string raw = config.getString("CSVExport", key, "");
+      return parseListSetting(raw);
+    } catch (const std::exception& e) {
+      logger->warn(
+          "Не удалось прочитать [CSVExport]/{} ({}), оставлено значение по "
+          "умолчанию",
+          key, e.what());
+      return current_value;
+    }
+  };
+
+  options.max_metric_names =
+      readSizeOption("MetricMaxNames", options.max_metric_names);
+  options.metric_skip_prefixes =
+      readListOption("MetricSkipPrefixes", options.metric_skip_prefixes);
+  options.metric_skip_contains =
+      readListOption("MetricSkipContains", options.metric_skip_contains);
+  options.metric_skip_exact =
+      readListOption("MetricSkipExact", options.metric_skip_exact);
+  options.drop_short_upper_tokens =
+      readBoolOption("DropShortUpperTokens", options.drop_short_upper_tokens);
+  options.short_upper_token_max_length = readSizeOption(
+      "ShortUpperTokenMaxLength", options.short_upper_token_max_length);
+  options.drop_hex_like_tokens =
+      readBoolOption("DropHexLikeTokens", options.drop_hex_like_tokens);
+  options.hex_like_min_length =
+      readSizeOption("HexLikeMinLength", options.hex_like_min_length);
+  options.drop_upper_alnum_tokens =
+      readBoolOption("DropUpperAlnumTokens", options.drop_upper_alnum_tokens);
+  options.upper_alnum_min_length =
+      readSizeOption("UpperAlnumMinLength", options.upper_alnum_min_length);
+
+  logger->debug(
+      "Загружены настройки [CSVExport]: MetricMaxNames={}, Prefixes={}, "
+      "Contains={}, Exact={}",
+      options.max_metric_names, options.metric_skip_prefixes.size(),
+      options.metric_skip_contains.size(), options.metric_skip_exact.size());
+
+  return options;
+}
+
 void WindowsDiskAnalyzer::analyze(const std::string& output_path) {
   // 1. Сбор данных об автозагрузке
   autorun_entries_ = autorun_analyzer_->collect(disk_root_);
@@ -404,7 +498,8 @@ void WindowsDiskAnalyzer::analyze(const std::string& output_path) {
 
   // 5. Экспорт результатов (обновленный вызов)
   ensureDirectoryExists(output_path);
+  const CSVExportOptions csv_export_options = loadCSVExportOptions();
   CSVExporter::exportToCSV(output_path, autorun_entries_, process_data_,
-                           network_connections_,
-                           amcache_entries_);  // Добавленный параметр
+                           network_connections_, amcache_entries_,
+                           csv_export_options);
 }
