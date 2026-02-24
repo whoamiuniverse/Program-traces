@@ -7,6 +7,7 @@
 
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "parsers/registry/data_model/data_builder.hpp"
@@ -28,6 +29,11 @@ class RegistryParser : public IRegistryParser {
 
   /// @brief Деструктор - автоматически закрывает открытые файлы
   ~RegistryParser() override;
+
+  RegistryParser(const RegistryParser&) = delete;
+  RegistryParser& operator=(const RegistryParser&) = delete;
+  RegistryParser(RegistryParser&&) = delete;
+  RegistryParser& operator=(RegistryParser&&) = delete;
 
   /// @}
 
@@ -65,6 +71,17 @@ class RegistryParser : public IRegistryParser {
 
   /// @brief Закрыть текущий открытый файл реестра
   void closeRegistryFile();
+
+  /// @brief Убедиться, что внутренний handle libregf инициализирован
+  void ensureRegistryFileInitialized();
+
+  /// @brief Освободить внутренний handle libregf
+  void freeRegistryFile();
+
+  /// @brief Разрешить путь к hive-файлу с учётом регистра на текущей FS
+  /// @param registry_file_path Исходный путь
+  /// @return Существующий путь, если найден
+  std::string resolveRegistryFilePath(const std::string& registry_file_path);
 
   /// @}
 
@@ -111,6 +128,9 @@ class RegistryParser : public IRegistryParser {
 
   libregf_file_t* regf_file_handle_ =
       nullptr;  ///< Handle открытого файла реестра
+  bool is_registry_file_open_ = false;
+  std::string opened_registry_file_path_;
+  std::unordered_map<std::string, std::string> resolved_registry_paths_cache_;
 };
 
 }

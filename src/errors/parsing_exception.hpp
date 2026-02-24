@@ -44,8 +44,11 @@ class FileOpenException : public ParsingException {
  public:
   /// @brief Конструктор исключения
   /// @param[in] file_path Путь к проблемному файлу
-  explicit FileOpenException(const std::string& file_path)
-      : ParsingException("Не удалось открыть файл \"" + file_path + "\""),
+  /// @param[in] details Дополнительные детали ошибки
+  explicit FileOpenException(const std::string& file_path,
+                             const std::string& details = "")
+      : ParsingException("Не удалось открыть файл \"" + file_path + "\"" +
+                         (details.empty() ? "" : ": " + details)),
         file_path_(file_path) {}
 
   /// @brief Получить путь к проблемному файлу

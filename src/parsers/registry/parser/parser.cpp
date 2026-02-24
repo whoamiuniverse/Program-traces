@@ -3,6 +3,11 @@
 #include <libregf.h>
 
 #include <algorithm>
+#include <array>
+#include <cctype>
+#include <filesystem>
+#include <optional>
+#include <system_error>
 #include <vector>
 
 #include "errors/parsing_exception.hpp"
@@ -14,10 +19,94 @@
 #include "parsers/registry/data_types/value.hpp"
 
 namespace RegistryAnalysis {
+namespace {
+namespace fs = std::filesystem;
+
+std::string toLibregfErrorMessage(libregf_error_t* error) {
+  if (error == nullptr) return "неизвестная ошибка libregf";
+
+  std::array<char, 2048> buffer{};
+  if (libregf_error_sprint(error, buffer.data(), buffer.size()) > 0) {
+    return std::string(buffer.data());
+  }
+  return "не удалось получить текст ошибки libregf";
+}
+
+std::string toLowerAscii(std::string text) {
+  std::ranges::transform(text, text.begin(), [](unsigned char ch) {
+    return static_cast<char>(std::tolower(ch));
+  });
+  return text;
+}
+
+std::string normalizePathSeparators(std::string path) {
+  std::ranges::replace(path, '\\', '/');
+  return path;
+}
+
+std::optional<fs::path> findPathCaseInsensitive(const fs::path& input_path) {
+  std::error_code ec;
+  if (fs::exists(input_path, ec) && !ec) {
+    return input_path;
+  }
+
+  fs::path current = input_path.is_absolute() ? input_path.root_path()
+                                              : fs::current_path(ec);
+  if (ec) return std::nullopt;
+
+  const fs::path relative = input_path.is_absolute()
+                                ? input_path.relative_path()
+                                : input_path;
+
+  for (const fs::path& component_path : relative) {
+    const std::string component = component_path.string();
+    if (component.empty() || component == ".") continue;
+    if (component == "..") {
+      current = current.parent_path();
+      continue;
+    }
+
+    const fs::path direct_candidate = current / component_path;
+    ec.clear();
+    if (fs::exists(direct_candidate, ec) && !ec) {
+      current = direct_candidate;
+      continue;
+    }
+
+    ec.clear();
+    if (!fs::exists(current, ec) || ec || !fs::is_directory(current, ec)) {
+      return std::nullopt;
+    }
+
+    const std::string component_lower = toLowerAscii(component);
+    bool matched = false;
+    for (const auto& entry : fs::directory_iterator(current, ec)) {
+      if (ec) break;
+
+      if (toLowerAscii(entry.path().filename().string()) == component_lower) {
+        current = entry.path();
+        matched = true;
+        break;
+      }
+    }
+
+    if (ec || !matched) {
+      return std::nullopt;
+    }
+  }
+
+  ec.clear();
+  if (fs::exists(current, ec) && !ec) {
+    return current;
+  }
+  return std::nullopt;
+}
+
+}  // namespace
 
 RegistryParser::~RegistryParser() {
-  const auto logger = GlobalLogger::get();
   closeRegistryFile();
+  freeRegistryFile();
 }
 
 std::vector<std::unique_ptr<IRegistryData>> RegistryParser::getKeyValues(
@@ -113,41 +202,136 @@ std::vector<std::unique_ptr<IRegistryData>> RegistryParser::getKeyValues(
 
 void RegistryParser::openRegistryFile(const std::string& registry_file_path) {
   const auto logger = GlobalLogger::get();
+  const std::string resolved_registry_file_path =
+      resolveRegistryFilePath(registry_file_path);
 
-  if (regf_file_handle_) {
+  ensureRegistryFileInitialized();
+
+  if (is_registry_file_open_ &&
+      opened_registry_file_path_ == resolved_registry_file_path) {
+    return;
+  }
+
+  if (is_registry_file_open_) {
     closeRegistryFile();
+    ensureRegistryFileInitialized();
   }
 
-  if (libregf_file_initialize(&regf_file_handle_, nullptr) != 1) {
-    throw InitLibError("libregf");
+  logger->debug("Открытие файла: \"{}\"", resolved_registry_file_path);
+
+  libregf_error_t* libregf_error = nullptr;
+  if (libregf_file_open(regf_file_handle_, resolved_registry_file_path.c_str(),
+                        LIBREGF_OPEN_READ, &libregf_error) != 1) {
+    const std::string libregf_details = toLibregfErrorMessage(libregf_error);
+    libregf_error_free(&libregf_error);
+
+    is_registry_file_open_ = false;
+    opened_registry_file_path_.clear();
+
+    logger->debug("Не удалось открыть файл \"{}\": {}",
+                  resolved_registry_file_path, libregf_details);
+    throw FileOpenException(resolved_registry_file_path, libregf_details);
   }
 
-  logger->debug("Открытие файла: \"{}\"", registry_file_path);
-
-  if (libregf_file_open(regf_file_handle_, registry_file_path.c_str(),
-                        LIBREGF_OPEN_READ, nullptr) != 1) {
-    libregf_file_free(&regf_file_handle_, nullptr);
-    throw FileOpenException(registry_file_path);
-  }
-
+  is_registry_file_open_ = true;
+  opened_registry_file_path_ = resolved_registry_file_path;
   logger->debug("Файл реестра успешно открыт");
 }
 
 void RegistryParser::closeRegistryFile() {
   const auto logger = GlobalLogger::get();
 
-  if (regf_file_handle_) {
-    libregf_file_free(&regf_file_handle_, nullptr);
-    regf_file_handle_ = nullptr;
+  if (!regf_file_handle_ || !is_registry_file_open_) {
+    return;
+  }
+
+  libregf_error_t* libregf_error = nullptr;
+  if (libregf_file_close(regf_file_handle_, &libregf_error) != 0) {
+    const std::string libregf_details = toLibregfErrorMessage(libregf_error);
+    libregf_error_free(&libregf_error);
+    logger->warn("Не удалось корректно закрыть файл реестра \"{}\": {}",
+                 opened_registry_file_path_, libregf_details);
+    // Если close завершился ошибкой, сбрасываем handle целиком,
+    // чтобы избежать повреждённого внутреннего состояния.
+    freeRegistryFile();
+  } else {
     logger->debug("Файл реестра закрыт");
   }
+
+  is_registry_file_open_ = false;
+  opened_registry_file_path_.clear();
+}
+
+void RegistryParser::ensureRegistryFileInitialized() {
+  if (regf_file_handle_) {
+    return;
+  }
+
+  libregf_error_t* libregf_error = nullptr;
+  if (libregf_file_initialize(&regf_file_handle_, &libregf_error) != 1) {
+    const std::string libregf_details = toLibregfErrorMessage(libregf_error);
+    libregf_error_free(&libregf_error);
+    throw InitLibError("libregf: " + libregf_details);
+  }
+}
+
+void RegistryParser::freeRegistryFile() {
+  const auto logger = GlobalLogger::get();
+
+  if (!regf_file_handle_) {
+    return;
+  }
+
+  libregf_error_t* libregf_error = nullptr;
+  if (libregf_file_free(&regf_file_handle_, &libregf_error) != 1) {
+    const std::string libregf_details = toLibregfErrorMessage(libregf_error);
+    libregf_error_free(&libregf_error);
+    logger->warn("Не удалось освободить handle файла реестра: {}",
+                 libregf_details);
+  }
+
+  regf_file_handle_ = nullptr;
+  is_registry_file_open_ = false;
+  opened_registry_file_path_.clear();
+  resolved_registry_paths_cache_.clear();
+}
+
+std::string RegistryParser::resolveRegistryFilePath(
+    const std::string& registry_file_path) {
+  const auto logger = GlobalLogger::get();
+  const std::string normalized_path = normalizePathSeparators(registry_file_path);
+
+  if (const auto cache_it =
+          resolved_registry_paths_cache_.find(normalized_path);
+      cache_it != resolved_registry_paths_cache_.end()) {
+    return cache_it->second;
+  }
+
+  std::error_code ec;
+  if (fs::exists(normalized_path, ec) && !ec) {
+    resolved_registry_paths_cache_[normalized_path] = normalized_path;
+    return normalized_path;
+  }
+
+  if (const std::optional<fs::path> resolved =
+          findPathCaseInsensitive(fs::path(normalized_path));
+      resolved.has_value()) {
+    const std::string resolved_path = resolved->string();
+    logger->debug("Путь к hive разрешён case-insensitive: \"{}\" -> \"{}\"",
+                  normalized_path, resolved_path);
+    resolved_registry_paths_cache_[normalized_path] = resolved_path;
+    return resolved_path;
+  }
+
+  resolved_registry_paths_cache_[normalized_path] = normalized_path;
+  return normalized_path;
 }
 
 KeyHandle RegistryParser::findRegistryKey(const std::string& key_path) const {
   const auto logger = GlobalLogger::get();
   logger->debug("Поиск ключа реестра: \"{}\"", key_path);
 
-  if (!regf_file_handle_) {
+  if (!regf_file_handle_ || !is_registry_file_open_) {
     throw RegistryNotOpenError("файл реестра не открыт");
   }
 

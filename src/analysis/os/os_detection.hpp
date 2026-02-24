@@ -55,6 +55,11 @@ class OSDetection final : public IOSDetection {
   /// @param info Структура OSInfo для финализации
   void determineFullOSName(OSInfo& info) const;
 
+  /// @brief Выбирает секцию INI для анализаторов артефактов
+  /// @param info Информация об ОС из реестра
+  /// @return Имя секции версии (например, Windows10)
+  [[nodiscard]] std::string resolveIniVersion(const OSInfo& info) const;
+
   /// @brief Проверяет, является ли ОС серверной редакцией
   /// @param info Структура OSInfo для проверки
   /// @return True для серверной редакции, false иначе
@@ -66,6 +71,8 @@ class OSDetection final : public IOSDetection {
   std::string device_root_path_;  ///< Корневой путь устройства
   std::map<std::string, VersionConfig>
       version_configs_;  ///< Конфигурации версий
+  std::vector<std::string>
+      version_order_;  ///< Порядок версий из [General] Versions
   std::vector<std::string>
       default_server_keywords_;  ///< Ключевые слова для идентификации серверных
                                  ///< редакций

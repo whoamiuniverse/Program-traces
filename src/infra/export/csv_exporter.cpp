@@ -8,6 +8,7 @@
 #include <set>
 
 #include "analysis/artifacts/data/analysis_data.hpp"
+#include "common/utils.hpp"
 #include "errors/csv_export_exception.hpp"
 
 namespace fs = std::filesystem;
@@ -33,6 +34,28 @@ std::string normalizePath(const std::string& path) {
   if (path.empty()) return "";
 
   std::string result = path;
+
+  // Если вместо чистого пути пришла командная строка, вырезаем исполняемый
+  // файл.
+  trim(result);
+  if (!result.empty() && (result.front() == '"' || result.front() == '\'')) {
+    const char quote = result.front();
+    if (const size_t quote_end = result.find(quote, 1);
+        quote_end != std::string::npos) {
+      result = result.substr(1, quote_end - 1);
+    }
+  } else {
+    const std::string lowered = to_lower(result);
+    for (const std::string ext : {".exe", ".dll", ".sys", ".com", ".bat",
+                                  ".cmd"}) {
+      if (const size_t ext_pos = lowered.find(ext);
+          ext_pos != std::string::npos) {
+        result = result.substr(0, ext_pos + ext.size());
+        break;
+      }
+    }
+  }
+
   std::ranges::transform(result, result.begin(),
                          [](unsigned char c) { return std::tolower(c); });
 
@@ -49,8 +72,12 @@ std::string normalizePath(const std::string& path) {
 
 // Функция для извлечения имени файла из пути
 std::string getFilenameFromPath(const std::string& path) {
-  fs::path p(path);
-  return p.filename().string();
+  if (path.empty()) return {};
+  std::string normalized = path;
+  std::ranges::replace(normalized, '\\', '/');
+  const size_t sep_pos = normalized.find_last_of('/');
+  if (sep_pos == std::string::npos) return normalized;
+  return normalized.substr(sep_pos + 1);
 }
 
 std::string volumeTypeToString(uint32_t type) {
@@ -92,9 +119,9 @@ void CSVExporter::exportToCSV(
   }
 
   try {
-    // Обновлённый заголовок CSV с новыми полями
-    file << "ИсполняемыйФайл,Версии,Хэши,РазмерФайла,ВременаЗапуска,"
-            "Автозагрузка,"
+    // Заголовок CSV
+    file << "ИсполняемыйФайл,Пути,Версии,Хэши,РазмерФайла,ВременаЗапуска,"
+            "Автозагрузка,СледыУдаления,"
          << "КоличествоЗапусков,"
          << "Тома(серийный:тип),СетевыеПодключения,ФайловыеМетрики\n";
 
@@ -108,6 +135,7 @@ void CSVExporter::exportToCSV(
 
       // Получаем имя файла - основной ключ для агрегации
       std::string filename = getFilenameFromPath(norm_path);
+      if (filename.empty()) return;
 
       // Обрабатываем данные
       processor(aggregated_data[filename], norm_path);
@@ -204,6 +232,13 @@ void CSVExporter::exportToCSV(
       };
 
       // Форматирование версий
+      std::string paths_str;
+      for (const auto& path : data.paths) {
+        if (!paths_str.empty()) paths_str += ";";
+        paths_str += path;
+      }
+
+      // Форматирование версий
       std::string versions_str;
       for (const auto& ver : data.versions) {
         if (!versions_str.empty()) versions_str += ";";
@@ -225,8 +260,14 @@ void CSVExporter::exportToCSV(
       }
 
       // Форматирование времени запуска (включая время изменения)
+      std::vector<std::string> unique_run_times = data.run_times;
+      std::sort(unique_run_times.begin(), unique_run_times.end());
+      unique_run_times.erase(
+          std::unique(unique_run_times.begin(), unique_run_times.end()),
+          unique_run_times.end());
+
       std::string run_times_str;
-      for (const auto& time : data.run_times) {
+      for (const auto& time : unique_run_times) {
         if (!run_times_str.empty()) run_times_str += ";";
         run_times_str += time;
       }
@@ -235,9 +276,11 @@ void CSVExporter::exportToCSV(
       std::string autorun_str;
       if (!data.autorun_locations.empty()) {
         autorun_str = "Да(";
+        bool first_location = true;
         for (const auto& location : data.autorun_locations) {
-          if (autorun_str.size() > 3) autorun_str += ", ";
+          if (!first_location) autorun_str += ", ";
           autorun_str += location;
+          first_location = false;
         }
         autorun_str += ")";
       } else {
@@ -274,9 +317,10 @@ void CSVExporter::exportToCSV(
       }
 
       // Запись данных с новыми полями
-      file << escape(filename) << "," << escape(versions_str) << ","
-           << escape(hashes_str) << "," << escape(file_sizes_str) << ","
-           << escape(run_times_str) << "," << escape(autorun_str) << ","
+      file << escape(filename) << "," << escape(paths_str) << ","
+           << escape(versions_str) << "," << escape(hashes_str) << ","
+           << escape(file_sizes_str) << "," << escape(run_times_str) << ","
+           << escape(autorun_str) << "," << escape(deleted_str) << ","
            << data.run_count << "," << escape(volumes_str) << ","
            << escape(network_str) << "," << escape(metrics_str) << "\n";
     }
