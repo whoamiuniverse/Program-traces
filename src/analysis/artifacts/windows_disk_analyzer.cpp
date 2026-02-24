@@ -5,9 +5,12 @@
 #include <filesystem>
 #include <optional>
 #include <sstream>
+#include <string_view>
 #include <stdexcept>
 #include <unordered_set>
 #include <utility>
+
+#include <spdlog/spdlog.h>
 
 #include "parsers/event_log/evt/parser/parser.hpp"
 #include "parsers/event_log/evtx/parser/parser.hpp"
@@ -27,6 +30,8 @@ namespace fs = std::filesystem;
 using namespace WindowsDiskAnalysis;
 
 namespace {
+
+constexpr std::string_view kDefaultKey = "Default";
 
 std::string ensureTrailingSlash(std::string path) {
   if (!path.empty() && path.back() != '/' && path.back() != '\\') {
@@ -150,6 +155,85 @@ std::vector<std::string> parseListSetting(std::string value) {
   return split(value, ',');
 }
 
+std::string getConfigValueWithSectionDefault(const Config& config,
+                                             const std::string& section,
+                                             const std::string& key) {
+  if (config.hasKey(section, key)) {
+    return config.getString(section, key, "");
+  }
+
+  if (config.hasKey(section, std::string(kDefaultKey))) {
+    return config.getString(section, std::string(kDefaultKey), "");
+  }
+
+  return {};
+}
+
+std::vector<std::pair<std::string, std::string>> collectRegistryHiveCandidates(
+    const Config& config) {
+  std::vector<std::pair<std::string, std::string>> candidates;
+  std::unordered_set<std::string> seen;
+
+  const auto add_candidate = [&](const std::string& label,
+                                 std::string relative_path_raw) {
+    trim(relative_path_raw);
+    if (relative_path_raw.empty()) return;
+
+    std::string normalized = normalizePathSeparators(std::move(relative_path_raw));
+    trim(normalized);
+    if (normalized.empty()) return;
+
+    const std::string key = toLowerAscii(normalized);
+    if (!seen.insert(key).second) return;
+
+    candidates.emplace_back(label, std::move(normalized));
+  };
+
+  const std::string versions = config.getString("General", "Versions", "");
+  for (auto parsed_versions = split(versions, ',');
+       auto& version : parsed_versions) {
+    trim(version);
+    if (version.empty()) continue;
+
+    add_candidate(
+        version,
+        getConfigValueWithSectionDefault(config, "OSInfoRegistryPaths", version));
+  }
+
+  if (config.hasKey("OSInfoRegistryPaths", std::string(kDefaultKey))) {
+    add_candidate("Default",
+                  config.getString("OSInfoRegistryPaths",
+                                   std::string(kDefaultKey), ""));
+  }
+
+  return candidates;
+}
+
+class ScopedDebugLevelOverride {
+ public:
+  explicit ScopedDebugLevelOverride(bool debug_enabled) {
+    if (debug_enabled) return;
+
+    logger_ = GlobalLogger::get();
+    previous_level_ = logger_->level();
+    if (previous_level_ <= spdlog::level::debug) {
+      logger_->set_level(spdlog::level::info);
+      active_ = true;
+    }
+  }
+
+  ~ScopedDebugLevelOverride() {
+    if (active_ && logger_ != nullptr) {
+      logger_->set_level(previous_level_);
+    }
+  }
+
+ private:
+  std::shared_ptr<spdlog::logger> logger_;
+  spdlog::level::level_enum previous_level_ = spdlog::level::info;
+  bool active_ = false;
+};
+
 std::optional<fs::path> findPathCaseInsensitive(const fs::path& input_path) {
   std::error_code ec;
   if (fs::exists(input_path, ec) && !ec) {
@@ -227,6 +311,7 @@ WindowsDiskAnalyzer::WindowsDiskAnalyzer(std::string  disk_root,
 
 void WindowsDiskAnalyzer::detectOSVersion() {
   Config config(config_path_);
+  loadLoggingOptions(config);
   std::string initial_validation_error;
 
   if (disk_root_.empty()) {
@@ -234,17 +319,18 @@ void WindowsDiskAnalyzer::detectOSVersion() {
         "корень анализа не задан (включен режим auto-поиска)";
   } else {
     try {
+      ScopedDebugLevelOverride scoped_debug(debug_options_.os_detection);
       validateRegistryHivePresence(config);
     } catch (const std::runtime_error& e) {
       initial_validation_error = e.what();
     }
   }
 
-  if (!initial_validation_error.empty() &&
-      !tryAutoSelectWindowsRoot(config, initial_validation_error)) {
-    throw std::runtime_error(initial_validation_error +
-                             " Авто-поиск Windows-раздела среди "
-                             "смонтированных томов не дал результата.");
+  if (!initial_validation_error.empty()) {
+    ScopedDebugLevelOverride scoped_debug(debug_options_.os_detection);
+    if (!tryAutoSelectWindowsRoot(config, initial_validation_error)) {
+      throw std::runtime_error("Не удалось выбрать раздел Windows для анализа");
+    }
   }
 
   std::unique_ptr<RegistryAnalysis::IRegistryParser> registry_parser =
@@ -252,30 +338,33 @@ void WindowsDiskAnalyzer::detectOSVersion() {
 
   WindowsVersion::OSDetection detector((std::move(registry_parser)),
                                        (std::move(config)), disk_root_);
-  os_info_ = detector.detect();
+  {
+    ScopedDebugLevelOverride scoped_debug(debug_options_.os_detection);
+    os_info_ = detector.detect();
+  }
 }
 
 void WindowsDiskAnalyzer::validateRegistryHivePresence(
     const Config& config) const {
+  const auto logger = GlobalLogger::get();
   std::vector<std::string> checked_paths;
   if (hasRegistryHivePresence(config, disk_root_, &checked_paths)) {
     return;
   }
 
-  std::ostringstream error;
-  error << "В корне \"" << disk_root_
-        << "\" не найден ни один hive-файл из [OSInfoRegistryPaths]. "
-           "Укажите смонтированный раздел Windows (не служебный том).";
-
+  logger->debug("Проверка hive-файлов для корня \"{}\" не прошла", disk_root_);
   if (!checked_paths.empty()) {
-    error << " Проверенные пути: ";
+    std::ostringstream checked;
     for (size_t i = 0; i < checked_paths.size(); ++i) {
-      if (i != 0) error << ", ";
-      error << '"' << checked_paths[i] << '"';
+      if (i != 0) checked << ", ";
+      checked << '"' << checked_paths[i] << '"';
     }
+    logger->debug("Проверенные пути hive: {}", checked.str());
+  } else {
+    logger->debug("Проверенные пути hive отсутствуют в конфигурации");
   }
 
-  throw std::runtime_error(error.str());
+  throw std::runtime_error("В выбранном корне не найден hive-файл Windows");
 }
 
 bool WindowsDiskAnalyzer::hasRegistryHivePresence(
@@ -285,13 +374,11 @@ bool WindowsDiskAnalyzer::hasRegistryHivePresence(
   if (disk_root.empty()) return false;
 
   const auto logger = GlobalLogger::get();
-  const auto path_entries = config.getAllValues("OSInfoRegistryPaths");
+  const auto hive_candidates = collectRegistryHiveCandidates(config);
   std::unordered_set<std::string> checked_paths_set;
-  checked_paths_set.reserve(path_entries.size());
+  checked_paths_set.reserve(hive_candidates.size());
 
-  for (const auto& [version_name, relative_path_raw] : path_entries) {
-    std::string relative_path = normalizePathSeparators(relative_path_raw);
-    trim(relative_path);
+  for (const auto& [version_name, relative_path] : hive_candidates) {
     if (relative_path.empty()) continue;
 
     const fs::path full_path = fs::path(disk_root) / relative_path;
@@ -316,14 +403,14 @@ bool WindowsDiskAnalyzer::hasRegistryHivePresence(
 bool WindowsDiskAnalyzer::tryAutoSelectWindowsRoot(
     const Config& config, const std::string& initial_check_error) {
   const auto logger = GlobalLogger::get();
-  logger->warn("Проверка текущего корня анализа завершилась ошибкой: {}",
-               initial_check_error);
-  logger->info(
-      "Запуск авто-поиска Windows-раздела среди смонтированных томов...");
+  logger->warn("Выбранный корень анализа не подходит, запускается авто-поиск");
+  logger->debug("Причина переключения в режим авто-поиска: {}",
+                initial_check_error);
+  logger->info("Запуск авто-поиска Windows-раздела...");
 
   const std::vector<std::string> mounted_roots = listMountedRoots();
   if (mounted_roots.empty()) {
-    logger->error("Авто-поиск не смог получить список смонтированных томов");
+    logger->error("Не удалось получить список смонтированных томов");
     return false;
   }
 
@@ -338,41 +425,82 @@ bool WindowsDiskAnalyzer::tryAutoSelectWindowsRoot(
     logger->debug("Проверка тома: \"{}\"", mount_root);
     if (hasRegistryHivePresence(config, mount_root, nullptr)) {
       disk_root_ = mount_root;
-      logger->warn("Выбран Windows-раздел автоматически: \"{}\"", disk_root_);
+      logger->info("Windows-раздел выбран автоматически: \"{}\"", disk_root_);
       return true;
     }
   }
 
-  logger->error(
-      "Авто-поиск Windows-раздела завершился без результата (проверено томов: "
-      "{})",
-      mounted_roots.size());
+  logger->error("Авто-поиск Windows-раздела не дал результата");
+  logger->debug("Авто-поиск проверил {} смонтированных томов",
+                mounted_roots.size());
   return false;
 }
 
+void WindowsDiskAnalyzer::loadLoggingOptions(const Config& config) {
+  const auto logger = GlobalLogger::get();
+
+  if (!config.hasSection("Logging")) {
+    logger->debug(
+        "Секция [Logging] не найдена, используются настройки debug по "
+        "умолчанию");
+    return;
+  }
+
+  auto readFlag = [&](const std::string& key, bool current_value) {
+    try {
+      return config.getBool("Logging", key, current_value);
+    } catch (const std::exception& e) {
+      logger->warn("Некорректный параметр [Logging]/{}", key);
+      logger->debug("Ошибка чтения [Logging]/{}: {}", key, e.what());
+      return current_value;
+    }
+  };
+
+  debug_options_.os_detection =
+      readFlag("DebugOSDetection", debug_options_.os_detection);
+  debug_options_.autorun = readFlag("DebugAutorun", debug_options_.autorun);
+  debug_options_.prefetch = readFlag("DebugPrefetch", debug_options_.prefetch);
+  debug_options_.eventlog = readFlag("DebugEventLog", debug_options_.eventlog);
+  debug_options_.amcache = readFlag("DebugAmcache", debug_options_.amcache);
+
+  logger->debug(
+      "Загружены настройки [Logging]: OSDetection={}, Autorun={}, "
+      "Prefetch={}, EventLog={}, Amcache={}",
+      debug_options_.os_detection, debug_options_.autorun,
+      debug_options_.prefetch, debug_options_.eventlog, debug_options_.amcache);
+}
+
 void WindowsDiskAnalyzer::initializeComponents() {
-  // Инициализация парсеров
-  auto registry_parser = std::make_unique<RegistryAnalysis::RegistryParser>();
-  auto prefetch_parser = std::make_unique<PrefetchAnalysis::PrefetchParser>();
-  auto evt_parser = std::make_unique<EventLogAnalysis::EvtParser>();
-  auto evtx_parser = std::make_unique<EventLogAnalysis::EvtxParser>();
+  {
+    ScopedDebugLevelOverride scoped_debug(debug_options_.autorun);
+    auto registry_parser = std::make_unique<RegistryAnalysis::RegistryParser>();
+    autorun_analyzer_ = std::make_unique<AutorunAnalyzer>(
+        std::move(registry_parser), os_info_.ini_version, config_path_);
+  }
 
-  // Создание анализаторов
-  autorun_analyzer_ = std::make_unique<AutorunAnalyzer>(
-      std::move(registry_parser), os_info_.ini_version, config_path_);
+  {
+    ScopedDebugLevelOverride scoped_debug(debug_options_.prefetch);
+    auto prefetch_parser = std::make_unique<PrefetchAnalysis::PrefetchParser>();
+    prefetch_analyzer_ = std::make_unique<PrefetchAnalyzer>(
+        std::move(prefetch_parser), os_info_.ini_version, config_path_);
+  }
 
-  prefetch_analyzer_ = std::make_unique<PrefetchAnalyzer>(
-      std::move(prefetch_parser), os_info_.ini_version, config_path_);
+  {
+    ScopedDebugLevelOverride scoped_debug(debug_options_.eventlog);
+    auto evt_parser = std::make_unique<EventLogAnalysis::EvtParser>();
+    auto evtx_parser = std::make_unique<EventLogAnalysis::EvtxParser>();
+    eventlog_analyzer_ = std::make_unique<EventLogAnalyzer>(
+        std::move(evt_parser), std::move(evtx_parser), os_info_.ini_version,
+        config_path_);
+  }
 
-  eventlog_analyzer_ = std::make_unique<EventLogAnalyzer>(
-      std::move(evt_parser), std::move(evtx_parser), os_info_.ini_version,
-      config_path_);
-
-  // Добавленная инициализация AmcacheAnalyzer
-  auto amcache_registry_parser =
-      std::make_unique<RegistryAnalysis::RegistryParser>();
-  amcache_analyzer_ = std::make_unique<AmcacheAnalyzer>(
-      std::move(amcache_registry_parser), os_info_.ini_version, config_path_);
+  {
+    ScopedDebugLevelOverride scoped_debug(debug_options_.amcache);
+    auto amcache_registry_parser =
+        std::make_unique<RegistryAnalysis::RegistryParser>();
+    amcache_analyzer_ = std::make_unique<AmcacheAnalyzer>(
+        std::move(amcache_registry_parser), os_info_.ini_version, config_path_);
+  }
 }
 
 void WindowsDiskAnalyzer::ensureDirectoryExists(const std::string& path) {
@@ -472,13 +600,24 @@ CSVExportOptions WindowsDiskAnalyzer::loadCSVExportOptions() const {
 
 void WindowsDiskAnalyzer::analyze(const std::string& output_path) {
   // 1. Сбор данных об автозагрузке
-  autorun_entries_ = autorun_analyzer_->collect(disk_root_);
+  {
+    ScopedDebugLevelOverride scoped_debug(debug_options_.autorun);
+    autorun_entries_ = autorun_analyzer_->collect(disk_root_);
+  }
 
-  // 2. Сбор данных из Amcache.hve (добавленный вызов)
-  amcache_entries_ = amcache_analyzer_->collect(disk_root_);
+  // 2. Сбор данных из Amcache.hve
+  {
+    ScopedDebugLevelOverride scoped_debug(debug_options_.amcache);
+    amcache_entries_ = amcache_analyzer_->collect(disk_root_);
+  }
 
   // 3. Сбор данных из Prefetch
-  auto prefetch_results = prefetch_analyzer_->collect(disk_root_);
+  std::vector<ProcessInfo> prefetch_results;
+  {
+    ScopedDebugLevelOverride scoped_debug(debug_options_.prefetch);
+    prefetch_results = prefetch_analyzer_->collect(disk_root_);
+  }
+
   for (auto& info : prefetch_results) {
     auto& merged = process_data_[info.filename];
     if (merged.filename.empty()) {
@@ -494,7 +633,10 @@ void WindowsDiskAnalyzer::analyze(const std::string& output_path) {
   }
 
   // 4. Анализ журналов событий
-  eventlog_analyzer_->collect(disk_root_, process_data_, network_connections_);
+  {
+    ScopedDebugLevelOverride scoped_debug(debug_options_.eventlog);
+    eventlog_analyzer_->collect(disk_root_, process_data_, network_connections_);
+  }
 
   // 5. Экспорт результатов (обновленный вызов)
   ensureDirectoryExists(output_path);

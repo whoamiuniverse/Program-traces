@@ -35,6 +35,16 @@ class WindowsDiskAnalyzer {
   void analyze(const std::string& output_path);
 
  private:
+  /// @struct ArtifactDebugOptions
+  /// @brief Флаги подробного debug-логирования по этапам анализа
+  struct ArtifactDebugOptions {
+    bool os_detection = true;
+    bool autorun = true;
+    bool prefetch = true;
+    bool eventlog = true;
+    bool amcache = true;
+  };
+
   /// @brief Инициализирует внутренние анализаторы на основе версии ОС
   void initializeComponents();
 
@@ -71,9 +81,15 @@ class WindowsDiskAnalyzer {
   /// @return Параметры фильтрации и форматирования CSV
   [[nodiscard]] CSVExportOptions loadCSVExportOptions() const;
 
+  /// @brief Загружает настройки [Logging] для debug-логов по артефактам
+  /// @param config Загруженная конфигурация
+  void loadLoggingOptions(const Config& config);
+
   std::string disk_root_;    ///< Корневой путь подключённого диска
   std::string config_path_;  ///< Путь к конфигурационному файлу
   OSInfo os_info_;           ///< Определённая информация о версии ОС
+  ArtifactDebugOptions
+      debug_options_;  ///< Настройки подробного debug-логирования
 
   std::unique_ptr<AutorunAnalyzer>
       autorun_analyzer_;  ///< Анализатор записей автозапуска

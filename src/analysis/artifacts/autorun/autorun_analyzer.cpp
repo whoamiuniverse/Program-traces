@@ -1,5 +1,6 @@
 #include "autorun_analyzer.hpp"
 
+#include <string_view>
 #include <utility>
 
 #include "infra/config/config.hpp"
@@ -8,6 +9,22 @@
 
 namespace WindowsDiskAnalysis {
 namespace {
+
+constexpr std::string_view kVersionDefaultsSection = "VersionDefaults";
+
+std::string getConfigValueWithFallback(const Config& config,
+                                       const std::string& version,
+                                       const std::string& key) {
+  if (config.hasKey(version, key)) {
+    return config.getString(version, key, "");
+  }
+
+  if (config.hasKey(std::string(kVersionDefaultsSection), key)) {
+    return config.getString(std::string(kVersionDefaultsSection), key, "");
+  }
+
+  return {};
+}
 
 std::string extractExecutablePath(std::string command) {
   trim(command);
@@ -52,7 +69,8 @@ void AutorunAnalyzer::loadConfigurations(const std::string& ini_path) {
     AutorunConfig cfg;
 
     // Загрузка пути к кусту реестра
-    std::string reg_path = config.getString(version, "RegistryPath", "");
+    std::string reg_path =
+        getConfigValueWithFallback(config, version, "RegistryPath");
     trim(reg_path);
     if (!reg_path.empty()) {
       std::ranges::replace(reg_path, '\\', '/');
@@ -60,7 +78,8 @@ void AutorunAnalyzer::loadConfigurations(const std::string& ini_path) {
     }
 
     // Загрузка ключей реестра
-    std::string reg_keys = config.getString(version, "RegistryKeys", "");
+    std::string reg_keys =
+        getConfigValueWithFallback(config, version, "RegistryKeys");
     auto reg_key_list = split(reg_keys, ',');
     for (auto& key : reg_key_list) {
       trim(key);
@@ -70,7 +89,8 @@ void AutorunAnalyzer::loadConfigurations(const std::string& ini_path) {
     }
 
     // Загрузка путей файловой системы
-    std::string fs_paths = config.getString(version, "FilesystemPaths", "");
+    std::string fs_paths =
+        getConfigValueWithFallback(config, version, "FilesystemPaths");
     auto fs_path_list = split(fs_paths, ',');
     for (auto& path : fs_path_list) {
       trim(path);
@@ -133,7 +153,8 @@ std::vector<AutorunEntry> AutorunAnalyzer::analyzeRegistry(
 
   const std::string full_reg_path = disk_root + cfg.registry_path;
   if (!std::filesystem::exists(full_reg_path)) {
-    logger->warn("Файл куста реестра не найден: \"{}\"", full_reg_path);
+    logger->warn("Файл куста реестра автозапуска не найден");
+    logger->debug("Путь к кусту реестра автозапуска: \"{}\"", full_reg_path);
     return entries;
   }
 
@@ -160,7 +181,8 @@ std::vector<AutorunEntry> AutorunAnalyzer::analyzeRegistry(
         }
       }
     } catch (const std::exception& e) {
-      logger->warn("Пропущен ключ реестра \"{}\": \"{}\"", location, e.what());
+      logger->warn("Пропущен ключ автозапуска в реестре");
+      logger->debug("Ключ автозапуска \"{}\" пропущен: {}", location, e.what());
     }
   }
 
@@ -195,7 +217,8 @@ std::vector<AutorunEntry> AutorunAnalyzer::analyzeFilesystem(
         }
       }
     } catch (const std::exception& e) {
-      logger->warn("Пропущен путь ФС \"{}\": \"{}\"", path, e.what());
+      logger->warn("Пропущен путь автозапуска в файловой системе");
+      logger->debug("Путь ФС \"{}\" пропущен: {}", path, e.what());
     }
   }
 
