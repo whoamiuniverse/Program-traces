@@ -104,7 +104,7 @@ void PrefetchParser::parseBasicInfo(PrefetchDataBuilder& builder) const {
                             std::to_string(format_version) +
                             " Prefetch-файлов");
   }
-  builder.setFormatVersion(format_version);
+  builder.setFormatVersion(static_cast<uint8_t>(format_version));
 }
 
 void PrefetchParser::parseRunTimes(PrefetchDataBuilder& builder) const {
@@ -114,7 +114,7 @@ void PrefetchParser::parseRunTimes(PrefetchDataBuilder& builder) const {
 
   std::vector<uint64_t> valid_times;
 
-  for (uint32_t i = 0;; ++i) {
+  for (int i = 0;; ++i) {
     uint64_t filetime = 0;
     if (libscca_file_get_last_run_time(scca_handle_, i, &filetime, nullptr) !=
         1) {
@@ -127,7 +127,7 @@ void PrefetchParser::parseRunTimes(PrefetchDataBuilder& builder) const {
     }
 
     try {
-      time_t unix_time = convertFiletime(filetime);
+      const uint64_t unix_time = convertFiletime(filetime);
       builder.addRunTime(unix_time);
       valid_times.push_back(filetime);
     } catch (const InvalidTimestampException& e) {
@@ -249,7 +249,7 @@ void PrefetchParser::parseMetrics(PrefetchDataBuilder& builder) const {
   }
 }
 
-time_t PrefetchParser::convertFiletime(const uint64_t filetime) {
+uint64_t PrefetchParser::convertFiletime(const uint64_t filetime) {
   if (filetime < FILETIME_EPOCH_DIFF || filetime > FILETIME_MAX_VALID) {
     std::ostringstream oss;
     oss << "Некорректное значение времени: 0x" << std::hex << filetime;

@@ -2,7 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
-#include <ctime>
+#include <cstdint>
 #include <iomanip>
 #include <limits>
 #include <sstream>
@@ -114,6 +114,44 @@ inline bool ends_with(const std::string& str, const std::string& suffix) {
          str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
 
+/// @brief Пытается распарсить строку как uint32_t (без знака, основание 10)
+/// @param text Входная строка
+/// @param value Результат парсинга при успехе
+/// @return true, если строка полностью и корректно распарсена
+inline bool tryParseUInt32(const std::string& text, uint32_t& value) {
+  if (text.empty()) return false;
+
+  try {
+    size_t parsed_len = 0;
+    const unsigned long long parsed = std::stoull(text, &parsed_len, 10);
+    if (parsed_len != text.size()) return false;
+    if (parsed >
+        static_cast<unsigned long long>(std::numeric_limits<uint32_t>::max())) {
+      return false;
+    }
+
+    value = static_cast<uint32_t>(parsed);
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
+/// @brief Пытается распарсить строку как uint16_t (без знака, основание 10)
+/// @param text Входная строка
+/// @param value Результат парсинга при успехе
+/// @return true, если строка полностью и корректно распарсена
+inline bool tryParseUInt16(const std::string& text, uint16_t& value) {
+  uint32_t parsed = 0;
+  if (!tryParseUInt32(text, parsed) ||
+      parsed > static_cast<uint32_t>(std::numeric_limits<uint16_t>::max())) {
+    return false;
+  }
+
+  value = static_cast<uint16_t>(parsed);
+  return true;
+}
+
 // Структуры для эмуляции Windows FILETIME/SYSTEMTIME
 typedef struct {
   uint32_t dwLowDateTime;
@@ -135,7 +173,7 @@ typedef struct {
 /// @param filetime Значение FILETIME
 /// @return Структура SYSTEMTIME
 inline SYSTEMTIME filetimeToSystemTime(uint64_t filetime) {
-  SYSTEMTIME st = {0};
+  SYSTEMTIME st{};
 
   // Константа для перевода в Unix-время (100-нс интервалы с 1601-01-01)
   constexpr uint64_t EPOCH_DIFFERENCE = 116444736000000000ULL;
@@ -146,16 +184,17 @@ inline SYSTEMTIME filetimeToSystemTime(uint64_t filetime) {
   uint32_t nanoseconds = (total_ns % 10000000ULL) * 100;
 
   // Преобразование в UTC время
-  tm* tm = gmtime(&unix_seconds);
-  if (!tm) return st;
+  tm* tm_value = gmtime(&unix_seconds);
+  if (!tm_value) return st;
 
-  st.wYear = tm->tm_year + 1900;
-  st.wMonth = tm->tm_mon + 1;
-  st.wDay = tm->tm_mday;
-  st.wHour = tm->tm_hour;
-  st.wMinute = tm->tm_min;
-  st.wSecond = tm->tm_sec;
-  st.wMilliseconds = nanoseconds / 1000000;
+  st.wYear = static_cast<uint16_t>(tm_value->tm_year + 1900);
+  st.wMonth = static_cast<uint16_t>(tm_value->tm_mon + 1);
+  st.wDayOfWeek = static_cast<uint16_t>(tm_value->tm_wday);
+  st.wDay = static_cast<uint16_t>(tm_value->tm_mday);
+  st.wHour = static_cast<uint16_t>(tm_value->tm_hour);
+  st.wMinute = static_cast<uint16_t>(tm_value->tm_min);
+  st.wSecond = static_cast<uint16_t>(tm_value->tm_sec);
+  st.wMilliseconds = static_cast<uint16_t>(nanoseconds / 1000000);
 
   return st;
 }

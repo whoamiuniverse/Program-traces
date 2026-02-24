@@ -71,14 +71,14 @@ void OSDetection::loadConfiguration() {
                                  std::map<uint32_t, std::string>& target) {
     try {
       for (const auto& key : config_.getKeysInSection(section)) {
-        try {
-          uint32_t build_num = std::stoul(key);
-          std::string os_name = config_.getString(section, key, "");
-          if (!os_name.empty()) {
-            target[build_num] = std::move(os_name);
-          }
-        } catch (...) {
+        uint32_t build_num = 0;
+        if (!tryParseUInt32(key, build_num)) {
           logger->warn("Недопустимый номер сборки: {}", key);
+          continue;
+        }
+        std::string os_name = config_.getString(section, key, "");
+        if (!os_name.empty()) {
+          target[build_num] = std::move(os_name);
         }
       }
     } catch (...) {
@@ -188,13 +188,12 @@ void OSDetection::determineFullOSName(OSInfo& info) const {
   const bool is_server = isServerSystem(info);
 
   if (!info.current_build.empty()) {
-    try {
-      uint32_t build_number = std::stoul(info.current_build);
+    uint32_t build_number = 0;
+    if (tryParseUInt32(info.current_build, build_number)) {
       const auto& build_map = is_server ? server_builds : client_builds;
       if (const auto it = build_map.find(build_number); it != build_map.end()) {
         name = it->second;
       }
-    } catch (...) {
     }
   }
 

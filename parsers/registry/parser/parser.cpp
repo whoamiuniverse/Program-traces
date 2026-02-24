@@ -3,7 +3,6 @@
 #include <libregf.h>
 
 #include <algorithm>
-#include <cstring>
 #include <vector>
 
 #include "../../../core/exceptions/parsing_exception.hpp"
@@ -508,8 +507,9 @@ void RegistryParser::processValueData(libregf_value_t* value_handle,
       const char* end_pos = current_pos + data_size;
 
       while (current_pos < end_pos) {
-        const size_t string_length =
-            strnlen(current_pos, end_pos - current_pos);
+        const size_t remaining_size =
+            static_cast<size_t>(end_pos - current_pos);
+        const size_t string_length = strnlen(current_pos, remaining_size);
         if (string_length == 0) break;
 
         strings.emplace_back(current_pos, string_length);

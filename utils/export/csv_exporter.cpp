@@ -76,20 +76,6 @@ std::string volumeTypeToString(uint32_t type) {
   }
 }
 
-std::string accessFlagsToString(uint32_t flags) {
-  std::string result;
-  if (flags & static_cast<uint32_t>(FileMetricAccess::READ)) result += "READ,";
-  if (flags & static_cast<uint32_t>(FileMetricAccess::WRITE))
-    result += "WRITE,";
-  if (flags & static_cast<uint32_t>(FileMetricAccess::EXECUTE))
-    result += "EXECUTE,";
-  if (flags & static_cast<uint32_t>(FileMetricAccess::DELETE))
-    result += "DELETE,";
-
-  if (!result.empty()) result.pop_back();
-  return result;
-}
-
 }  // namespace
 
 namespace WindowsDiskAnalysis {
@@ -138,16 +124,17 @@ void CSVExporter::exportToCSV(
 
     // 2. Обрабатываем данные процессов
     for (const auto& [path, info] : process_data) {
-      processEntry(path, [&](AggregatedData& data, const std::string& path) {
-        data.paths.insert(path);
-        data.run_times.insert(data.run_times.end(), info.run_times.begin(),
-                              info.run_times.end());
-        data.run_count += info.run_count;
-        data.volumes.insert(data.volumes.end(), info.volumes.begin(),
-                            info.volumes.end());
-        data.metrics.insert(data.metrics.end(), info.metrics.begin(),
-                            info.metrics.end());
-      });
+      processEntry(
+          path, [&](AggregatedData& data, const std::string& normalized_path) {
+            data.paths.insert(normalized_path);
+            data.run_times.insert(data.run_times.end(), info.run_times.begin(),
+                                  info.run_times.end());
+            data.run_count += info.run_count;
+            data.volumes.insert(data.volumes.end(), info.volumes.begin(),
+                                info.volumes.end());
+            data.metrics.insert(data.metrics.end(), info.metrics.begin(),
+                                info.metrics.end());
+          });
     }
 
     // 3. Обрабатываем сетевые подключения
@@ -280,10 +267,10 @@ void CSVExporter::exportToCSV(
       std::string metrics_str;
       for (const auto& metric : data.metrics) {
         fs::path file_path(metric.getFilename());
-        std::string filename = file_path.filename().string();
+        std::string metric_filename = file_path.filename().string();
 
         if (!metrics_str.empty()) metrics_str += ";";
-        metrics_str += filename;
+        metrics_str += metric_filename;
       }
 
       // Запись данных с новыми полями

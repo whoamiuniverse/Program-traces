@@ -91,7 +91,7 @@ class PrefetchParser : public IPrefetchParser {
   /// @param[in] filetime Время в формате FILETIME
   /// @return Время в формате UNIX
   /// @exception InvalidTimestampException Некорректное значение времени
-  static time_t convertFiletime(uint64_t filetime);
+  static uint64_t convertFiletime(uint64_t filetime);
 
   /// @}
 

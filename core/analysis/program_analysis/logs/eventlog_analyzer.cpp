@@ -46,9 +46,10 @@ void EventLogAnalyzer::loadConfigurations(const std::string& ini_path) {
     for (auto& id_str : split(process_ids, ',')) {
       trim(id_str);
       if (!id_str.empty()) {
-        try {
-          cfg.process_event_ids.push_back(std::stoul(id_str));
-        } catch (...) {
+        uint32_t event_id = 0;
+        if (tryParseUInt32(id_str, event_id)) {
+          cfg.process_event_ids.push_back(event_id);
+        } else {
           logger->debug("Некорректный ID процесса: \"{}\"", id_str);
         }
       }
@@ -59,9 +60,10 @@ void EventLogAnalyzer::loadConfigurations(const std::string& ini_path) {
     for (auto& id_str : split(network_ids, ',')) {
       trim(id_str);
       if (!id_str.empty()) {
-        try {
-          cfg.network_event_ids.push_back(std::stoul(id_str));
-        } catch (...) {
+        uint32_t event_id = 0;
+        if (tryParseUInt32(id_str, event_id)) {
+          cfg.network_event_ids.push_back(event_id);
+        } else {
           logger->debug("Некорректный ID сети: \"{}\"", id_str);
         }
       }
@@ -186,9 +188,10 @@ void EventLogAnalyzer::collect(
               conn.remote_address = data.at("RemoteAddress");
             }
             if (data.contains("Port")) {
-              try {
-                conn.port = std::stoi(data.at("Port"));
-              } catch (...) {
+              uint16_t parsed_port = 0;
+              if (tryParseUInt16(data.at("Port"), parsed_port)) {
+                conn.port = parsed_port;
+              } else {
                 conn.port = 0;
               }
             }

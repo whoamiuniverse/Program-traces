@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cinttypes>
 #include <stdexcept>
 #include <string>
 
@@ -89,10 +90,10 @@ class InvalidTimestampException : public ParsingException {
   /// @return Значение временной метки
   [[nodiscard]] uint64_t getInvalidTimestamp() const noexcept { return timestamp_; }
 
- private:
+  private:
   static std::string to_hex(const uint64_t value) {
     char buffer[17];
-    snprintf(buffer, sizeof(buffer), "%016lX", value);
+    std::snprintf(buffer, sizeof(buffer), "%016" PRIX64, value);
     return buffer;
   }
 

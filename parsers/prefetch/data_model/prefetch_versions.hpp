@@ -3,8 +3,6 @@
 
 #pragma once
 
-#include <cstdint>
-
 namespace PrefetchAnalysis {
 
 /// @brief Перечисление версий формата Prefetch-файлов Windows
@@ -33,8 +31,8 @@ enum class PrefetchFormatVersion : uint8_t {
 /// @brief Преобразует числовую версию в enum PrefetchFormatVersion
 /// @param[in] version Числовая версия из заголовка файла
 /// @return Соответствующее значение PrefetchFormatVersion
-[[nodiscard]] static PrefetchFormatVersion toVersionEnum(
-    const uint8_t version) {
+[[nodiscard, maybe_unused]] constexpr PrefetchFormatVersion toVersionEnum(
+    const uint32_t version) noexcept {
   switch (version) {
     case 10:
       return PrefetchFormatVersion::WIN_XP_RTM;
