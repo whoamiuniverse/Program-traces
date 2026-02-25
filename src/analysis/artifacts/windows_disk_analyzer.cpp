@@ -2,7 +2,11 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <filesystem>
+#include <iomanip>
+#include <iostream>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <string_view>
@@ -20,10 +24,12 @@
 
 #ifdef __APPLE__
 #include <sys/mount.h>
+#include <unistd.h>
 #endif
 
 #ifdef __linux__
 #include <mntent.h>
+#include <unistd.h>
 #endif
 
 namespace fs = std::filesystem;
@@ -32,6 +38,24 @@ using namespace WindowsDiskAnalysis;
 namespace {
 
 constexpr std::string_view kDefaultKey = "Default";
+
+struct MountedRootInfo {
+  std::string device_path;
+  std::string mount_root;
+};
+
+struct WindowsRootSummary {
+  std::string product_name;
+  std::string installation_type;
+  std::string system_product_type;
+  std::string build;
+  std::string mapped_name;
+};
+
+struct AutoSelectCandidate {
+  MountedRootInfo mount;
+  std::string os_label;
+};
 
 std::string ensureTrailingSlash(std::string path) {
   if (!path.empty() && path.back() != '/' && path.back() != '\\') {
@@ -51,6 +75,197 @@ bool isAutoDiskRootValue(std::string value) {
   trim(value);
   const std::string lowered = toLowerAscii(std::move(value));
   return lowered.empty() || lowered == "auto";
+}
+
+bool isAccessDeniedError(const std::error_code& ec) {
+  return ec == std::errc::permission_denied ||
+         ec == std::errc::operation_not_permitted;
+}
+
+bool containsAccessDenied(std::string_view message) {
+  std::string lowered(message);
+  lowered = toLowerAscii(std::move(lowered));
+  return lowered.find("доступ запрещен") != std::string::npos ||
+         lowered.find("доступ запрещён") != std::string::npos ||
+         lowered.find("permission denied") != std::string::npos ||
+         lowered.find("operation not permitted") != std::string::npos;
+}
+
+std::string formatFilesystemError(const std::error_code& ec) {
+  if (!ec) return {};
+  if (isAccessDeniedError(ec)) {
+    return "доступ запрещен (" + ec.message() + ')';
+  }
+  return ec.message();
+}
+
+std::string formatDeviceLabel(const std::string& device_path) {
+  if (device_path.empty()) return "unknown";
+  const fs::path device(device_path);
+  const std::string filename = device.filename().string();
+  return filename.empty() ? device_path : filename;
+}
+
+bool isServerLikeValue(const std::string& value) {
+  const std::string lowered = toLowerAscii(value);
+  return lowered.find("server") != std::string::npos;
+}
+
+std::string normalizePathSeparators(std::string path) {
+  std::ranges::replace(path, '\\', '/');
+  return path;
+}
+
+std::string deriveSystemHivePathFromSoftwarePath(std::string software_hive_path) {
+  software_hive_path = normalizePathSeparators(std::move(software_hive_path));
+  if (software_hive_path.empty()) return {};
+
+  fs::path hive_path(software_hive_path);
+  const std::string filename = toLowerAscii(hive_path.filename().string());
+  if (filename == "system") {
+    return hive_path.generic_string();
+  }
+  if (filename != "software") {
+    return {};
+  }
+
+  hive_path.replace_filename("SYSTEM");
+  return hive_path.generic_string();
+}
+
+std::optional<uint32_t> parseControlSetIndex(
+    const std::unique_ptr<RegistryAnalysis::IRegistryData>& value) {
+  if (!value) return std::nullopt;
+
+  try {
+    switch (value->getType()) {
+      case RegistryAnalysis::RegistryValueType::REG_DWORD:
+      case RegistryAnalysis::RegistryValueType::REG_DWORD_BIG_ENDIAN:
+        return value->getAsDword();
+      case RegistryAnalysis::RegistryValueType::REG_QWORD: {
+        const uint64_t qword = value->getAsQword();
+        if (qword <= std::numeric_limits<uint32_t>::max()) {
+          return static_cast<uint32_t>(qword);
+        }
+        return std::nullopt;
+      }
+      default:
+        break;
+    }
+  } catch (...) {
+  }
+
+  std::string raw = value->getDataAsString();
+  trim(raw);
+  uint32_t parsed = 0;
+  if (tryParseUInt32(raw, parsed)) {
+    return parsed;
+  }
+  return std::nullopt;
+}
+
+std::string tryReadSystemProductType(RegistryAnalysis::IRegistryParser& parser,
+                                     const std::string& system_hive_path) {
+  auto read_product_type = [&](const std::string& value_path) -> std::string {
+    const auto value = parser.getSpecificValue(system_hive_path, value_path);
+    if (!value) return {};
+    std::string product_type = value->getDataAsString();
+    trim(product_type);
+    return product_type;
+  };
+
+  try {
+    std::string product_type =
+        read_product_type("CurrentControlSet/Control/ProductOptions/ProductType");
+    if (!product_type.empty()) {
+      return product_type;
+    }
+
+    const auto current_control_set =
+        parseControlSetIndex(parser.getSpecificValue(system_hive_path,
+                                                     "Select/Current"));
+    if (!current_control_set.has_value()) {
+      return {};
+    }
+
+    std::ostringstream control_set_path;
+    control_set_path << "ControlSet" << std::setw(3) << std::setfill('0')
+                     << *current_control_set
+                     << "/Control/ProductOptions/ProductType";
+    return read_product_type(control_set_path.str());
+  } catch (...) {
+    return {};
+  }
+}
+
+std::optional<bool> classifyServerByProductType(
+    const std::string& system_product_type) {
+  if (system_product_type.empty()) return std::nullopt;
+
+  const std::string lowered = toLowerAscii(system_product_type);
+  if (lowered == "servernt" || lowered == "lanmannt") return true;
+  if (lowered == "winnt") return false;
+  return std::nullopt;
+}
+
+std::optional<std::string> findMappedNameByBuildThreshold(
+    const Config& config, const std::string& section, uint32_t build_number) {
+  if (!config.hasSection(section)) return std::nullopt;
+
+  uint32_t best_build = 0;
+  std::string best_name;
+  bool found = false;
+
+  for (const auto& key : config.getKeysInSection(section)) {
+    uint32_t mapped_build = 0;
+    if (!tryParseUInt32(key, mapped_build)) continue;
+    if (mapped_build > build_number) continue;
+
+    const std::string mapped_name = config.getString(section, key, "");
+    if (mapped_name.empty()) continue;
+
+    if (!found || mapped_build > best_build) {
+      best_build = mapped_build;
+      best_name = mapped_name;
+      found = true;
+    }
+  }
+
+  if (!found) return std::nullopt;
+  return best_name;
+}
+
+std::string resolveMappedWindowsName(const Config& config,
+                                     const WindowsRootSummary& summary) {
+  uint32_t build_number = 0;
+  if (!tryParseUInt32(summary.build, build_number)) {
+    return summary.product_name;
+  }
+
+  const auto mapped_client =
+      findMappedNameByBuildThreshold(config, "BuildMappingsClient",
+                                     build_number);
+  const auto mapped_server =
+      findMappedNameByBuildThreshold(config, "BuildMappingsServer",
+                                     build_number);
+
+  const std::optional<bool> server_by_product_type =
+      classifyServerByProductType(summary.system_product_type);
+  const bool prefer_server =
+      server_by_product_type.has_value()
+          ? *server_by_product_type
+          : (isServerLikeValue(summary.installation_type) ||
+             isServerLikeValue(summary.product_name));
+
+  if (prefer_server) {
+    if (mapped_server.has_value()) return *mapped_server;
+    if (mapped_client.has_value()) return *mapped_client;
+  } else {
+    if (mapped_client.has_value()) return *mapped_client;
+    if (mapped_server.has_value()) return *mapped_server;
+  }
+
+  return summary.product_name;
 }
 
 std::string resolveMountedPath(const std::string& device_path) {
@@ -78,17 +293,25 @@ std::string resolveMountedPath(const std::string& device_path) {
   return {};
 }
 
-std::vector<std::string> listMountedRoots() {
-  std::vector<std::string> roots;
+std::vector<MountedRootInfo> listMountedRoots() {
+  std::vector<MountedRootInfo> roots;
   std::unordered_set<std::string> unique_roots;
+  const auto logger = GlobalLogger::get();
 
-  auto append_root = [&](const std::string& root_path_raw) {
+  auto append_root = [&](const std::string& root_path_raw,
+                         const std::string& device_path_raw) {
     if (root_path_raw.empty()) return;
     const std::string root_path = ensureTrailingSlash(root_path_raw);
     std::error_code ec;
-    if (!fs::is_directory(root_path, ec) || ec) return;
+    if (!fs::is_directory(root_path, ec) || ec) {
+      if (ec) {
+        logger->debug("Пропуск точки монтирования \"{}\": {}", root_path_raw,
+                      formatFilesystemError(ec));
+      }
+      return;
+    }
     if (unique_roots.insert(root_path).second) {
-      roots.push_back(root_path);
+      roots.push_back({device_path_raw, root_path});
     }
   };
 
@@ -96,14 +319,15 @@ std::vector<std::string> listMountedRoots() {
   struct statfs* mounts = nullptr;
   const int mounts_count = getmntinfo(&mounts, MNT_NOWAIT);
   for (int i = 0; i < mounts_count; ++i) {
-    append_root(mounts[i].f_mntonname);
+    append_root(mounts[i].f_mntonname, mounts[i].f_mntfromname);
   }
 #elif __linux__
   if (FILE* mounts_file = setmntent("/proc/self/mounts", "r");
       mounts_file != nullptr) {
     while (const mntent* entry = getmntent(mounts_file)) {
       if (entry != nullptr && entry->mnt_dir != nullptr) {
-        append_root(entry->mnt_dir);
+        append_root(entry->mnt_dir,
+                    entry->mnt_fsname != nullptr ? entry->mnt_fsname : "");
       }
     }
     endmntent(mounts_file);
@@ -142,11 +366,6 @@ std::string normalizeDiskRoot(std::string disk_root) {
 
   throw std::runtime_error(
       "ожидался путь к каталогу (точке монтирования) или блочному устройству");
-}
-
-std::string normalizePathSeparators(std::string path) {
-  std::ranges::replace(path, '\\', '/');
-  return path;
 }
 
 std::vector<std::string> parseListSetting(std::string value) {
@@ -234,15 +453,30 @@ class ScopedDebugLevelOverride {
   bool active_ = false;
 };
 
-std::optional<fs::path> findPathCaseInsensitive(const fs::path& input_path) {
+std::optional<fs::path> findPathCaseInsensitive(const fs::path& input_path,
+                                                std::string* error_reason =
+                                                    nullptr) {
+  const auto set_error = [&](const std::string& message) {
+    if (error_reason != nullptr) {
+      *error_reason = message;
+    }
+  };
+
   std::error_code ec;
   if (fs::exists(input_path, ec) && !ec) {
     return input_path;
   }
+  if (ec) {
+    set_error("не удалось проверить путь \"" + input_path.string() +
+              "\": " + formatFilesystemError(ec));
+  }
 
   fs::path current = input_path.is_absolute() ? input_path.root_path()
                                               : fs::current_path(ec);
-  if (ec) return std::nullopt;
+  if (ec) {
+    set_error("не удалось получить текущий каталог: " + formatFilesystemError(ec));
+    return std::nullopt;
+  }
 
   const fs::path relative = input_path.is_absolute()
                                 ? input_path.relative_path()
@@ -262,9 +496,29 @@ std::optional<fs::path> findPathCaseInsensitive(const fs::path& input_path) {
       current = direct_candidate;
       continue;
     }
+    if (ec) {
+      set_error("ошибка доступа к \"" + direct_candidate.string() +
+                "\": " + formatFilesystemError(ec));
+      return std::nullopt;
+    }
 
     ec.clear();
-    if (!fs::exists(current, ec) || ec || !fs::is_directory(current, ec)) {
+    if (!fs::exists(current, ec) || ec) {
+      if (ec) {
+        set_error("ошибка доступа к \"" + current.string() +
+                  "\": " + formatFilesystemError(ec));
+      } else {
+        set_error("каталог \"" + current.string() + "\" не существует");
+      }
+      return std::nullopt;
+    }
+    if (!fs::is_directory(current, ec) || ec) {
+      if (ec) {
+        set_error("не удалось открыть каталог \"" + current.string() +
+                  "\": " + formatFilesystemError(ec));
+      } else {
+        set_error("путь \"" + current.string() + "\" не является каталогом");
+      }
       return std::nullopt;
     }
 
@@ -280,14 +534,118 @@ std::optional<fs::path> findPathCaseInsensitive(const fs::path& input_path) {
       }
     }
 
-    if (ec || !matched) return std::nullopt;
+    if (ec) {
+      set_error("не удалось прочитать каталог \"" + current.string() +
+                "\": " + formatFilesystemError(ec));
+      return std::nullopt;
+    }
+    if (!matched) {
+      set_error("компонент пути \"" + component +
+                "\" не найден (с учетом регистра)");
+      return std::nullopt;
+    }
   }
 
   ec.clear();
   if (fs::exists(current, ec) && !ec) {
     return current;
   }
+  if (ec) {
+    set_error("ошибка проверки пути \"" + current.string() +
+              "\": " + formatFilesystemError(ec));
+  } else {
+    set_error("путь \"" + current.string() + "\" не найден");
+  }
   return std::nullopt;
+}
+
+std::optional<WindowsRootSummary> detectWindowsRootSummary(
+    const Config& config, const std::string& mount_root,
+    std::string* error_reason = nullptr) {
+  const auto set_error = [&](const std::string& message) {
+    if (error_reason != nullptr && error_reason->empty()) {
+      *error_reason = message;
+    }
+  };
+
+  auto parser = std::make_unique<RegistryAnalysis::RegistryParser>();
+  const auto hive_candidates = collectRegistryHiveCandidates(config);
+
+  for (const auto& [version_name, relative_path] : hive_candidates) {
+    const fs::path expected_hive_path = fs::path(mount_root) / relative_path;
+
+    std::string resolve_error;
+    const auto resolved_hive_path =
+        findPathCaseInsensitive(expected_hive_path, &resolve_error);
+    if (!resolved_hive_path.has_value()) {
+      if (!resolve_error.empty()) {
+        set_error("hive \"" + expected_hive_path.string() +
+                  "\" пропущен: " + resolve_error);
+      }
+      continue;
+    }
+
+    try {
+      const auto values = parser->getKeyValues(
+          resolved_hive_path->string(), "Microsoft/Windows NT/CurrentVersion");
+      if (values.empty()) continue;
+
+      WindowsRootSummary summary;
+      for (const auto& value : values) {
+        const std::string key = getLastPathComponent(value->getName(), '/');
+        std::string data = value->getDataAsString();
+        trim(data);
+
+        if (key == "ProductName" && !data.empty()) {
+          summary.product_name = data;
+        } else if (key == "InstallationType" && !data.empty()) {
+          summary.installation_type = data;
+        } else if ((key == "CurrentBuild" || key == "CurrentBuildNumber") &&
+                   !data.empty()) {
+          summary.build = data;
+        }
+      }
+
+      if (summary.product_name.empty()) {
+        summary.product_name = "Windows";
+      }
+
+      const std::string system_hive_path =
+          deriveSystemHivePathFromSoftwarePath(resolved_hive_path->string());
+      if (!system_hive_path.empty()) {
+        summary.system_product_type = tryReadSystemProductType(*parser,
+                                                               system_hive_path);
+      }
+      summary.mapped_name = resolveMappedWindowsName(config, summary);
+      if (summary.mapped_name.empty()) {
+        summary.mapped_name = summary.product_name;
+      }
+      return summary;
+    } catch (const std::exception& e) {
+      set_error("ошибка чтения ОС для \"" + resolved_hive_path->string() +
+                "\" (" + version_name + "): " + e.what());
+    }
+  }
+
+  if (error_reason != nullptr && error_reason->empty()) {
+    *error_reason = "не удалось прочитать сведения об ОС из SOFTWARE hive";
+  }
+  return std::nullopt;
+}
+
+std::string formatWindowsLabel(const WindowsRootSummary& summary) {
+  const std::string& name =
+      summary.mapped_name.empty() ? summary.product_name : summary.mapped_name;
+  if (summary.build.empty()) return name;
+  return name + " (build " + summary.build + ")";
+}
+
+bool hasInteractiveStdin() {
+#if defined(__APPLE__) || defined(__linux__)
+  return isatty(fileno(stdin)) != 0;
+#else
+  return true;
+#endif
 }
 
 }  // namespace
@@ -348,7 +706,9 @@ void WindowsDiskAnalyzer::validateRegistryHivePresence(
     const Config& config) const {
   const auto logger = GlobalLogger::get();
   std::vector<std::string> checked_paths;
-  if (hasRegistryHivePresence(config, disk_root_, &checked_paths)) {
+  std::vector<std::string> checked_errors;
+  if (hasRegistryHivePresence(config, disk_root_, &checked_paths,
+                              &checked_errors)) {
     return;
   }
 
@@ -364,13 +724,27 @@ void WindowsDiskAnalyzer::validateRegistryHivePresence(
     logger->debug("Проверенные пути hive отсутствуют в конфигурации");
   }
 
+  if (!checked_errors.empty()) {
+    const auto first_access_error = std::ranges::find_if(
+        checked_errors, [](const std::string& error) {
+          return containsAccessDenied(error);
+        });
+    if (first_access_error != checked_errors.end()) {
+      logger->warn("Ошибка доступа к файловой системе при проверке hive");
+    }
+    logger->debug("Ошибки проверки путей hive: {}",
+                  checked_errors.front());
+  }
+
   throw std::runtime_error("В выбранном корне не найден hive-файл Windows");
 }
 
 bool WindowsDiskAnalyzer::hasRegistryHivePresence(
     const Config& config, const std::string& disk_root,
-    std::vector<std::string>* checked_paths) const {
+    std::vector<std::string>* checked_paths,
+    std::vector<std::string>* checked_errors) const {
   if (checked_paths != nullptr) checked_paths->clear();
+  if (checked_errors != nullptr) checked_errors->clear();
   if (disk_root.empty()) return false;
 
   const auto logger = GlobalLogger::get();
@@ -389,11 +763,16 @@ bool WindowsDiskAnalyzer::hasRegistryHivePresence(
       checked_paths->push_back(full_path_str);
     }
 
-    if (const auto resolved = findPathCaseInsensitive(full_path);
+    std::string resolve_error;
+    if (const auto resolved = findPathCaseInsensitive(full_path, &resolve_error);
         resolved.has_value()) {
       logger->debug("Найден hive-файл для определения ОС ({}): \"{}\"",
                     version_name, resolved->string());
       return true;
+    }
+
+    if (checked_errors != nullptr && !resolve_error.empty()) {
+      checked_errors->push_back(full_path_str + " -> " + resolve_error);
     }
   }
 
@@ -408,7 +787,7 @@ bool WindowsDiskAnalyzer::tryAutoSelectWindowsRoot(
                 initial_check_error);
   logger->info("Запуск авто-поиска Windows-раздела...");
 
-  const std::vector<std::string> mounted_roots = listMountedRoots();
+  const std::vector<MountedRootInfo> mounted_roots = listMountedRoots();
   if (mounted_roots.empty()) {
     logger->error("Не удалось получить список смонтированных томов");
     return false;
@@ -419,21 +798,102 @@ bool WindowsDiskAnalyzer::tryAutoSelectWindowsRoot(
     current_root = ensureTrailingSlash(std::move(current_root));
   }
 
-  for (const auto& mount_root : mounted_roots) {
-    if (!current_root.empty() && mount_root == current_root) continue;
+  std::vector<AutoSelectCandidate> candidates;
+  std::size_t access_denied_mounts = 0;
 
-    logger->debug("Проверка тома: \"{}\"", mount_root);
-    if (hasRegistryHivePresence(config, mount_root, nullptr)) {
-      disk_root_ = mount_root;
-      logger->info("Windows-раздел выбран автоматически: \"{}\"", disk_root_);
-      return true;
+  for (const auto& mount : mounted_roots) {
+    if (!current_root.empty() && mount.mount_root == current_root) continue;
+
+    logger->debug("Проверка тома: \"{}\" ({})", mount.mount_root,
+                  formatDeviceLabel(mount.device_path));
+
+    std::vector<std::string> mount_errors;
+    if (!hasRegistryHivePresence(config, mount.mount_root, nullptr,
+                                 &mount_errors)) {
+      if (std::ranges::any_of(mount_errors, [](const std::string& error) {
+            return containsAccessDenied(error);
+          })) {
+        access_denied_mounts++;
+        logger->debug("Том \"{}\" пропущен из-за ограничения доступа",
+                      mount.mount_root);
+      }
+      continue;
+    }
+
+    std::string summary_error;
+    std::string os_label = "Windows (версия не определена)";
+    if (const auto summary =
+            detectWindowsRootSummary(config, mount.mount_root, &summary_error);
+        summary.has_value()) {
+      os_label = formatWindowsLabel(*summary);
+    } else if (!summary_error.empty()) {
+      logger->debug("Не удалось определить версию ОС для \"{}\": {}",
+                    mount.mount_root, summary_error);
+    }
+
+    candidates.push_back({mount, os_label});
+  }
+
+  if (candidates.empty()) {
+    logger->error("Авто-поиск Windows-раздела не дал результата");
+    if (access_denied_mounts > 0) {
+      logger->warn("При авто-поиске нет доступа к {} томам",
+                   access_denied_mounts);
+    }
+    logger->debug("Авто-поиск проверил {} смонтированных томов",
+                  mounted_roots.size());
+    return false;
+  }
+
+  if (candidates.size() == 1) {
+    disk_root_ = candidates.front().mount.mount_root;
+    logger->info("Windows-раздел выбран автоматически: \"{}\" ({}, {})",
+                 disk_root_, formatDeviceLabel(candidates.front().mount.device_path),
+                 candidates.front().os_label);
+    return true;
+  }
+
+  std::cout << "\nНайдено несколько Windows-разделов. Выберите нужный:\n";
+  for (std::size_t i = 0; i < candidates.size(); ++i) {
+    const auto& candidate = candidates[i];
+    std::cout << (i + 1) << ". " << formatDeviceLabel(candidate.mount.device_path)
+              << ", " << candidate.os_label
+              << ", путь: " << candidate.mount.mount_root << '\n';
+  }
+
+  std::size_t selected_index = 0;
+  if (!hasInteractiveStdin()) {
+    logger->warn(
+        "Запуск без интерактивной консоли; выбран первый найденный "
+        "Windows-раздел");
+  } else {
+    while (true) {
+      std::cout << "Введите номер [1-" << candidates.size() << "]: " << std::flush;
+      std::string input;
+      if (!std::getline(std::cin, input)) {
+        logger->warn(
+            "Не удалось прочитать выбор пользователя; выбран первый найденный "
+            "Windows-раздел");
+        break;
+      }
+
+      trim(input);
+      uint32_t selected_number = 0;
+      if (tryParseUInt32(input, selected_number) && selected_number >= 1 &&
+          selected_number <= candidates.size()) {
+        selected_index = static_cast<std::size_t>(selected_number - 1);
+        break;
+      }
+      std::cout << "Некорректный выбор. Укажите число от 1 до "
+                << candidates.size() << ".\n";
     }
   }
 
-  logger->error("Авто-поиск Windows-раздела не дал результата");
-  logger->debug("Авто-поиск проверил {} смонтированных томов",
-                mounted_roots.size());
-  return false;
+  const auto& selected = candidates[selected_index];
+  disk_root_ = selected.mount.mount_root;
+  logger->info("Выбран Windows-раздел: \"{}\" ({}, {})", disk_root_,
+               formatDeviceLabel(selected.mount.device_path), selected.os_label);
+  return true;
 }
 
 void WindowsDiskAnalyzer::loadLoggingOptions(const Config& config) {

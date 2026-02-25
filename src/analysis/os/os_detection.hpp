@@ -3,8 +3,10 @@
 
 #pragma once
 
+#include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -59,6 +61,24 @@ class OSDetection final : public IOSDetection {
   /// @param info Информация об ОС из реестра
   /// @return Имя секции версии (например, Windows10)
   [[nodiscard]] std::string resolveIniVersion(const OSInfo& info) const;
+
+  /// @brief Возвращает путь к SYSTEM hive для найденной конфигурации версии
+  /// @param version_name Имя версии из [General]
+  /// @param cfg Конфигурация чтения SOFTWARE hive
+  [[nodiscard]] std::string resolveSystemHiveRelativePath(
+      const std::string& version_name, const VersionConfig& cfg) const;
+
+  /// @brief Читает ProductType из SYSTEM hive и обновляет OSInfo
+  /// @param system_hive_path Полный путь к файлу SYSTEM
+  /// @param info Структура OSInfo для обновления
+  void enrichFromSystemHive(const std::string& system_hive_path,
+                            OSInfo& info) const;
+
+  /// @brief Читает индекс текущего control set из Select/Current
+  /// @param system_hive_path Полный путь к файлу SYSTEM
+  /// @return Индекс control set (например 1 -> ControlSet001)
+  [[nodiscard]] std::optional<uint32_t> readCurrentControlSetIndex(
+      const std::string& system_hive_path) const;
 
   /// @brief Проверяет, является ли ОС серверной редакцией
   /// @param info Структура OSInfo для проверки

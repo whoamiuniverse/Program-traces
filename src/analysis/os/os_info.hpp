@@ -17,6 +17,10 @@ struct OSInfo {
                                 ///< Windows 10/11)
   std::string edition_id;  ///< Идентификатор редакции (например "Professional",
                            ///< "Enterprise", "Home")
+  std::string installation_type;  ///< Тип установки (например "Client",
+                                  ///< "Server", "Server Core")
+  std::string system_product_type;  ///< ProductType из SYSTEM hive
+                                    ///< ("WinNT", "ServerNT", "LanmanNT")
   std::string current_build;  ///< Номер сборки ОС (например "22000" для Windows
                               ///< 11 21H2)
   std::string

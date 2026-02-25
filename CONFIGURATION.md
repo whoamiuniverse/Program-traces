@@ -35,9 +35,11 @@ src/
 ## Добавление Новой Версии Windows
 
 1. Добавьте имя версии в `[General] -> Versions` в [config.ini](config.ini).
-2. Если путь к `SOFTWARE` нестандартный, добавьте override в `[OSInfoRegistryPaths]`.
+2. Если пути к `SOFTWARE`/`SYSTEM` нестандартные, добавьте override в
+   `[OSInfoRegistryPaths]` и `[OSInfoSystemRegistryPaths]`.
 3. Создайте секцию `[<Version>]` и укажите только отличия от `[VersionDefaults]`.
-4. При необходимости обновите `[BuildMappingsClient]` или `[BuildMappingsServer]`.
+4. При необходимости обновите `[BuildMappingsClient]` или `[BuildMappingsServer]`:
+   указывайте только минимальные (пороговые) сборки семейств.
 5. Запустите анализ и проверьте в логах строку `Версия Windows определена: ...`.
 
 Минимальный пример:
