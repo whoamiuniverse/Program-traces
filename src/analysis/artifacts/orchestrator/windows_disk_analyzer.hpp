@@ -12,6 +12,7 @@
 #include "analysis/artifacts/autorun/autorun_analyzer.hpp"
 #include "analysis/artifacts/execution/execution_evidence_analyzer.hpp"
 #include "analysis/artifacts/event_logs/eventlog_analyzer.hpp"
+#include "analysis/artifacts/event_logs/security_context_analyzer.hpp"
 #include "analysis/artifacts/prefetch/prefetch_analyzer.hpp"
 #include "analysis/artifacts/recovery/usn/usn_analyzer.hpp"
 #include "analysis/artifacts/recovery/vss/vss_analyzer.hpp"
@@ -136,6 +137,8 @@ class WindowsDiskAnalyzer {
       prefetch_analyzer_;  ///< Анализатор Prefetch-артефактов
   std::unique_ptr<EventLogAnalyzer>
       eventlog_analyzer_;  ///< Анализатор журналов событий
+  std::unique_ptr<SecurityContextAnalyzer>
+      security_context_analyzer_;  ///< Анализатор контекста безопасности Security
   std::unique_ptr<AmcacheAnalyzer>
       amcache_analyzer_;  ///< Анализатор артефактов Amcache
   std::unique_ptr<ExecutionEvidenceAnalyzer>

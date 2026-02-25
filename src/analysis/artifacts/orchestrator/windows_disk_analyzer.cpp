@@ -60,6 +60,12 @@ void WindowsDiskAnalyzer::initializeComponents() {
     eventlog_analyzer_ = std::make_unique<EventLogAnalyzer>(
         std::move(evt_parser), std::move(evtx_parser), os_info_.ini_version,
         config_path_);
+
+    auto security_evt_parser = std::make_unique<EventLogAnalysis::EvtParser>();
+    auto security_evtx_parser = std::make_unique<EventLogAnalysis::EvtxParser>();
+    security_context_analyzer_ = std::make_unique<SecurityContextAnalyzer>(
+        std::move(security_evt_parser), std::move(security_evtx_parser),
+        os_info_.ini_version, config_path_);
   }
 
   {
@@ -229,6 +235,12 @@ void WindowsDiskAnalyzer::runEventLogStage() {
   {
     ScopedDebugLevelOverride scoped_debug(debug_options_.eventlog);
     eventlog_analyzer_->collect(disk_root_, process_data_, network_connections_);
+    if (security_context_analyzer_ != nullptr) {
+      security_context_analyzer_->collect(disk_root_, process_data_,
+                                          network_connections_);
+    } else {
+      logger->warn("SecurityContext: анализатор не инициализирован");
+    }
   }
 
   for (auto& [process_key, info] : process_data_) {
