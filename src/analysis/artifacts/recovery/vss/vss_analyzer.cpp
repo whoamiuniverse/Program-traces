@@ -1,104 +1,270 @@
+/// @file vss_analyzer.cpp
+/// @brief Реализация анализатора восстановления VSS/Pagefile/Memory.
+
 #include "vss_analyzer.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cctype>
+#include <cstddef>
+#include <cstdio>
 #include <filesystem>
-#include <iterator>
 #include <optional>
+#include <sstream>
+#include <unordered_set>
 #include <utility>
 
 #include "analysis/artifacts/common/evidence_utils.hpp"
+#include "analysis/artifacts/recovery/recovery_utils.hpp"
 #include "common/utils.hpp"
 #include "infra/config/config.hpp"
 #include "infra/logging/logger.hpp"
+
+#if defined(PROGRAM_TRACES_HAVE_LIBVSHADOW) && PROGRAM_TRACES_HAVE_LIBVSHADOW
+#include <libvshadow.h>
+#endif
 
 namespace WindowsDiskAnalysis {
 namespace {
 
 namespace fs = std::filesystem;
 using EvidenceUtils::extractExecutableCandidatesFromBinary;
-using EvidenceUtils::fileTimeToUtcString;
-using EvidenceUtils::readFilePrefix;
 using EvidenceUtils::toLowerAscii;
+using RecoveryUtils::appendUniqueEvidence;
+using RecoveryUtils::findPathCaseInsensitive;
+using RecoveryUtils::scanRecoveryFileBinary;
+using RecoveryUtils::toByteLimit;
 
-std::optional<fs::path> findPathCaseInsensitive(const fs::path& input_path) {
-  std::error_code ec;
-  if (fs::exists(input_path, ec) && !ec) return input_path;
+constexpr std::size_t kVssStreamChunkSize = 512 * 1024;
+constexpr std::size_t kVssStreamTailSize = 4096;
+constexpr uint64_t kFiletimeUnixEpoch = 116444736000000000ULL;
+constexpr uint64_t kMaxReasonableFiletime = 210000000000000000ULL;
 
-  fs::path current = input_path.is_absolute() ? input_path.root_path()
-                                              : fs::current_path(ec);
-  if (ec) return std::nullopt;
+struct NativeVssParseResult {
+  bool attempted = false;
+  bool success = false;
+  std::vector<RecoveryEvidence> evidence;
+};
 
-  const fs::path relative = input_path.is_absolute()
-                                ? input_path.relative_path()
-                                : input_path;
-  for (const fs::path& component_path : relative) {
-    const std::string component = component_path.string();
-    if (component.empty() || component == ".") continue;
-    if (component == "..") {
-      current = current.parent_path();
-      continue;
-    }
-
-    const fs::path direct = current / component_path;
-    ec.clear();
-    if (fs::exists(direct, ec) && !ec) {
-      current = direct;
-      continue;
-    }
-
-    ec.clear();
-    if (!fs::exists(current, ec) || ec || !fs::is_directory(current, ec) || ec) {
-      return std::nullopt;
-    }
-
-    const std::string lowered = toLowerAscii(component);
-    bool matched = false;
-    for (const auto& entry : fs::directory_iterator(current, ec)) {
-      if (ec) break;
-      if (toLowerAscii(entry.path().filename().string()) == lowered) {
-        current = entry.path();
-        matched = true;
-        break;
-      }
-    }
-    if (ec || !matched) return std::nullopt;
+/// @brief Форматирует валидный FILETIME в UTC-строку.
+/// @param filetime FILETIME.
+/// @return Время в формате `YYYY-MM-DD HH:MM:SS` либо пустая строка.
+std::string formatReasonableFiletime(const uint64_t filetime) {
+  if (filetime < kFiletimeUnixEpoch || filetime > kMaxReasonableFiletime) {
+    return {};
   }
 
-  ec.clear();
-  if (fs::exists(current, ec) && !ec) return current;
-  return std::nullopt;
+  const std::string timestamp = filetimeToString(filetime);
+  if (timestamp == "N/A") return {};
+  return timestamp;
 }
 
-std::size_t toByteLimit(const std::size_t mb) {
-  constexpr std::size_t kMegabyte = 1024 * 1024;
-  if (mb == 0) return kMegabyte;
-  return mb * kMegabyte;
+#if defined(PROGRAM_TRACES_HAVE_LIBVSHADOW) && PROGRAM_TRACES_HAVE_LIBVSHADOW
+/// @brief Конвертирует ошибку libvshadow в строку.
+/// @param error Указатель на объект ошибки.
+/// @return Диагностическое сообщение.
+std::string toLibvshadowErrorMessage(libvshadow_error_t* error) {
+  if (error == nullptr) return "неизвестная ошибка libvshadow";
+
+  std::array<char, 2048> buffer{};
+  if (libvshadow_error_sprint(error, buffer.data(), buffer.size()) > 0) {
+    return std::string(buffer.data());
+  }
+  return "не удалось получить текст ошибки libvshadow";
 }
 
-std::vector<RecoveryEvidence> scanRecoveryFile(
-    const fs::path& file_path, const std::string& source,
-    const std::string& recovered_from, const std::size_t max_bytes,
+/// @brief Сканирует snapshot store по чанкам и извлекает кандидаты.
+/// @param store Указатель на `libvshadow_store_t`.
+/// @param max_bytes Максимум читаемых байтов.
+/// @param max_candidates Лимит кандидатов.
+/// @return Дедуплицированный список путей кандидатов.
+std::vector<std::string> collectCandidatesFromVssStore(
+    libvshadow_store_t* store, const std::size_t max_bytes,
     const std::size_t max_candidates) {
-  std::vector<RecoveryEvidence> results;
-  const auto data_opt = readFilePrefix(file_path, max_bytes);
-  if (!data_opt.has_value()) return results;
+  std::vector<std::string> result;
+  if (store == nullptr || max_candidates == 0 || max_bytes == 0) return result;
 
-  const auto candidates =
-      extractExecutableCandidatesFromBinary(*data_opt, max_candidates);
-  std::error_code ec;
-  const std::string timestamp = fileTimeToUtcString(
-      fs::last_write_time(file_path, ec));
-  for (const auto& executable : candidates) {
-    RecoveryEvidence evidence;
-    evidence.executable_path = executable;
-    evidence.source = source;
-    evidence.recovered_from = recovered_from;
-    evidence.timestamp = timestamp;
-    evidence.details = file_path.filename().string();
-    results.push_back(std::move(evidence));
+  std::unordered_set<std::string> seen;
+  std::vector<uint8_t> tail;
+  std::vector<uint8_t> chunk(std::min(kVssStreamChunkSize, max_bytes));
+
+  std::size_t total_read = 0;
+  while (total_read < max_bytes && result.size() < max_candidates) {
+    const std::size_t remaining = max_bytes - total_read;
+    const std::size_t to_read = std::min(chunk.size(), remaining);
+
+    libvshadow_error_t* error = nullptr;
+    const ssize_t read_size =
+        libvshadow_store_read_buffer(store, chunk.data(), to_read, &error);
+    if (read_size <= 0) {
+      libvshadow_error_free(&error);
+      break;
+    }
+    libvshadow_error_free(&error);
+
+    std::vector<uint8_t> scan_data;
+    scan_data.reserve(tail.size() + static_cast<std::size_t>(read_size));
+    scan_data.insert(scan_data.end(), tail.begin(), tail.end());
+    const auto read_end =
+        chunk.begin() + static_cast<std::ptrdiff_t>(read_size);
+    scan_data.insert(scan_data.end(), chunk.begin(), read_end);
+
+    const auto candidates = extractExecutableCandidatesFromBinary(
+        scan_data, max_candidates * 2);
+    for (const std::string& candidate : candidates) {
+      const std::string lowered = toLowerAscii(candidate);
+      if (!seen.insert(lowered).second) continue;
+      result.push_back(candidate);
+      if (result.size() >= max_candidates) break;
+    }
+
+    const std::size_t tail_size = std::min(scan_data.size(), kVssStreamTailSize);
+    tail.assign(scan_data.end() - static_cast<std::ptrdiff_t>(tail_size),
+                scan_data.end());
+
+    total_read += static_cast<std::size_t>(read_size);
   }
-  return results;
+
+  return result;
 }
+
+/// @brief Нативно парсит VSS-volume через libvshadow.
+/// @param volume_path Путь к raw/device источнику.
+/// @param max_bytes Лимит чтения данных store.
+/// @param max_candidates Лимит кандидатов для результата.
+/// @param max_stores Лимит числа snapshot stores.
+/// @return Результат native-парсинга.
+NativeVssParseResult parseVssVolumeNative(const fs::path& volume_path,
+                                          const std::size_t max_bytes,
+                                          const std::size_t max_candidates,
+                                          const std::size_t max_stores) {
+  NativeVssParseResult result;
+  result.attempted = true;
+
+  const auto logger = GlobalLogger::get();
+  libvshadow_volume_t* volume = nullptr;
+  libvshadow_error_t* error = nullptr;
+
+  if (libvshadow_volume_initialize(&volume, &error) != 1 || volume == nullptr) {
+    logger->debug("VSS(native): инициализация libvshadow не удалась: {}",
+                  toLibvshadowErrorMessage(error));
+    libvshadow_error_free(&error);
+    return result;
+  }
+  libvshadow_error_free(&error);
+
+  auto free_volume = [&]() {
+    if (volume == nullptr) return;
+
+    libvshadow_error_t* close_error = nullptr;
+    if (libvshadow_volume_close(volume, &close_error) != 0) {
+      logger->debug("VSS(native): close volume завершился с ошибкой: {}",
+                    toLibvshadowErrorMessage(close_error));
+    }
+    libvshadow_error_free(&close_error);
+
+    libvshadow_error_t* free_error = nullptr;
+    if (libvshadow_volume_free(&volume, &free_error) != 1) {
+      logger->debug("VSS(native): free volume завершился с ошибкой: {}",
+                    toLibvshadowErrorMessage(free_error));
+    }
+    libvshadow_error_free(&free_error);
+  };
+
+  const int access_flags = libvshadow_get_access_flags_read();
+  error = nullptr;
+  if (libvshadow_volume_open(volume, volume_path.string().c_str(), access_flags,
+                             &error) != 1) {
+    logger->debug("VSS(native): не удалось открыть \"{}\": {}",
+                  volume_path.string(), toLibvshadowErrorMessage(error));
+    libvshadow_error_free(&error);
+    free_volume();
+    return result;
+  }
+  libvshadow_error_free(&error);
+  result.success = true;
+
+  int store_count = 0;
+  error = nullptr;
+  if (libvshadow_volume_get_number_of_stores(volume, &store_count, &error) != 1 ||
+      store_count <= 0) {
+    logger->debug("VSS(native): stores недоступны для \"{}\": {}",
+                  volume_path.string(), toLibvshadowErrorMessage(error));
+    libvshadow_error_free(&error);
+    free_volume();
+    return result;
+  }
+  libvshadow_error_free(&error);
+
+  const int limit = static_cast<int>(std::min<std::size_t>(
+      max_stores, static_cast<std::size_t>(store_count)));
+
+  std::unordered_set<std::string> dedup;
+  for (int store_index = 0; store_index < limit; ++store_index) {
+    libvshadow_store_t* store = nullptr;
+    error = nullptr;
+    if (libvshadow_volume_get_store(volume, store_index, &store, &error) != 1 ||
+        store == nullptr) {
+      logger->debug("VSS(native): не удалось получить store #{}: {}",
+                    store_index, toLibvshadowErrorMessage(error));
+      libvshadow_error_free(&error);
+      continue;
+    }
+    libvshadow_error_free(&error);
+
+    auto free_store = [&]() {
+      if (store == nullptr) return;
+      libvshadow_error_t* free_error = nullptr;
+      if (libvshadow_store_free(&store, &free_error) != 1) {
+        logger->debug("VSS(native): store free завершился с ошибкой: {}",
+                      toLibvshadowErrorMessage(free_error));
+      }
+      libvshadow_error_free(&free_error);
+    };
+
+    libvshadow_error_t* seek_error = nullptr;
+    const off64_t seek_result =
+        libvshadow_store_seek_offset(store, 0, SEEK_SET, &seek_error);
+    if (seek_result < 0) {
+      logger->debug("VSS(native): seek store #{} завершился с ошибкой: {}",
+                    store_index, toLibvshadowErrorMessage(seek_error));
+    }
+    libvshadow_error_free(&seek_error);
+
+    uint64_t creation_time = 0;
+    libvshadow_store_get_creation_time(store, &creation_time, nullptr);
+    const std::string store_timestamp = formatReasonableFiletime(creation_time);
+
+    const auto candidates =
+        collectCandidatesFromVssStore(store, max_bytes, max_candidates);
+    for (const std::string& candidate : candidates) {
+      const std::string key = toLowerAscii(candidate) + "|" +
+                              std::to_string(store_index) + "|" + store_timestamp;
+      if (!dedup.insert(key).second) continue;
+
+      RecoveryEvidence evidence;
+      evidence.executable_path = candidate;
+      evidence.source = "VSS";
+      evidence.recovered_from = "VSS(native)";
+      evidence.timestamp = store_timestamp;
+
+      std::ostringstream details;
+      details << "store=" << store_index
+              << " source=" << volume_path.filename().string();
+      evidence.details = details.str();
+
+      result.evidence.push_back(std::move(evidence));
+      if (result.evidence.size() >= max_candidates) break;
+    }
+
+    free_store();
+    if (result.evidence.size() >= max_candidates) break;
+  }
+
+  free_volume();
+  return result;
+}
+#endif
 
 }  // namespace
 
@@ -119,13 +285,21 @@ void VSSAnalyzer::loadConfiguration() {
       enable_memory_ = config.getBool("Recovery", "EnableMemory", enable_memory_);
       enable_unallocated_ =
           config.getBool("Recovery", "EnableUnallocated", enable_unallocated_);
-      binary_scan_max_mb_ =
-          static_cast<std::size_t>(std::max(
-              1, config.getInt("Recovery", "BinaryScanMaxMB",
-                               static_cast<int>(binary_scan_max_mb_))));
+      enable_native_vss_parser_ = config.getBool(
+          "Recovery", "EnableNativeVSSParser", enable_native_vss_parser_);
+      vss_fallback_to_binary_on_native_failure_ = config.getBool(
+          "Recovery", "VSSFallbackToBinaryOnNativeFailure",
+          vss_fallback_to_binary_on_native_failure_);
+      binary_scan_max_mb_ = static_cast<std::size_t>(std::max(
+          1, config.getInt("Recovery", "BinaryScanMaxMB",
+                           static_cast<int>(binary_scan_max_mb_))));
       max_candidates_per_source_ = static_cast<std::size_t>(
           std::max(1, config.getInt("Recovery", "MaxCandidatesPerSource",
                                     static_cast<int>(max_candidates_per_source_))));
+      vss_native_max_stores_ = static_cast<std::size_t>(
+          std::max(1, config.getInt("Recovery", "VSSNativeMaxStores",
+                                    static_cast<int>(vss_native_max_stores_))));
+      vss_volume_path_ = config.getString("Recovery", "VSSVolumePath", "");
       unallocated_image_path_ =
           config.getString("Recovery", "UnallocatedImagePath", "");
     }
@@ -145,42 +319,104 @@ std::vector<RecoveryEvidence> VSSAnalyzer::collect(
 
   const std::size_t max_bytes = toByteLimit(binary_scan_max_mb_);
   std::vector<RecoveryEvidence> results;
+  std::unordered_set<std::string> dedup;
+  std::size_t native_count = 0;
+  std::size_t binary_count = 0;
 
-  const fs::path svi_dir = fs::path(disk_root) / "System Volume Information";
-  if (const auto resolved_svi = findPathCaseInsensitive(svi_dir);
-      resolved_svi.has_value()) {
-    std::error_code ec;
-    for (const auto& entry :
-         fs::recursive_directory_iterator(*resolved_svi,
-                                          fs::directory_options::skip_permission_denied,
-                                          ec)) {
-      if (ec) break;
-      if (!entry.is_regular_file()) continue;
-      const std::string lowered_name = toLowerAscii(entry.path().filename().string());
-      if (lowered_name.find("shadowcopy") == std::string::npos &&
-          lowered_name.find(".pf") == std::string::npos) {
-        continue;
+  bool native_attempted = false;
+  bool native_success = false;
+
+  if (enable_native_vss_parser_) {
+#if defined(PROGRAM_TRACES_HAVE_LIBVSHADOW) && PROGRAM_TRACES_HAVE_LIBVSHADOW
+    std::vector<fs::path> volume_candidates;
+    if (!vss_volume_path_.empty()) {
+      const fs::path configured(vss_volume_path_);
+      if (configured.is_absolute()) {
+        volume_candidates.push_back(configured);
+      } else {
+        volume_candidates.push_back(fs::path(disk_root) / configured);
       }
+    }
 
-      auto evidence = scanRecoveryFile(entry.path(), "VSS", "VSS", max_bytes,
-                                       max_candidates_per_source_);
-      results.insert(results.end(), std::make_move_iterator(evidence.begin()),
-                     std::make_move_iterator(evidence.end()));
+    std::error_code ec;
+    const fs::path disk_root_path(disk_root);
+    if ((fs::is_regular_file(disk_root_path, ec) && !ec) ||
+        (fs::is_block_file(disk_root_path, ec) && !ec) ||
+        (fs::is_character_file(disk_root_path, ec) && !ec)) {
+      volume_candidates.push_back(disk_root_path);
+    }
+
+    std::sort(volume_candidates.begin(), volume_candidates.end());
+    volume_candidates.erase(
+        std::unique(volume_candidates.begin(), volume_candidates.end()),
+        volume_candidates.end());
+
+    if (volume_candidates.empty()) {
+      logger->debug("VSS(native): не найден источник тома. Укажите "
+                    "[Recovery]/VSSVolumePath (raw/device) для нативного парсинга.");
+    }
+
+    for (const fs::path& candidate : volume_candidates) {
+      const auto resolved = findPathCaseInsensitive(candidate);
+      if (!resolved.has_value()) continue;
+
+      NativeVssParseResult native_result = parseVssVolumeNative(
+          *resolved, max_bytes, max_candidates_per_source_, vss_native_max_stores_);
+      native_attempted = native_attempted || native_result.attempted;
+      native_success = native_success || native_result.success;
+      native_count += native_result.evidence.size();
+      appendUniqueEvidence(results, native_result.evidence, dedup);
+    }
+#else
+    logger->debug("VSS(native): libvshadow недоступен в текущей сборке");
+#endif
+  }
+
+  const bool run_binary_fallback =
+      !enable_native_vss_parser_ ||
+      (vss_fallback_to_binary_on_native_failure_ &&
+       (!native_attempted || !native_success || native_count == 0));
+
+  if (run_binary_fallback) {
+    const fs::path svi_dir = fs::path(disk_root) / "System Volume Information";
+    if (const auto resolved_svi = findPathCaseInsensitive(svi_dir);
+        resolved_svi.has_value()) {
+      std::error_code ec;
+      for (const auto& entry :
+           fs::recursive_directory_iterator(
+               *resolved_svi, fs::directory_options::skip_permission_denied, ec)) {
+        if (ec) break;
+        if (!entry.is_regular_file()) continue;
+        const std::string lowered_name =
+            toLowerAscii(entry.path().filename().string());
+        if (lowered_name.find("shadowcopy") == std::string::npos &&
+            lowered_name.find(".pf") == std::string::npos) {
+          continue;
+        }
+
+        auto evidence = scanRecoveryFileBinary(entry.path(), "VSS", "VSS(binary)",
+                                               max_bytes,
+                                               max_candidates_per_source_);
+        binary_count += evidence.size();
+        appendUniqueEvidence(results, evidence, dedup);
+      }
     }
   }
 
   if (enable_pagefile_) {
     const std::vector<fs::path> pagefile_candidates = {
-        fs::path(disk_root) / "pagefile.sys", fs::path(disk_root) / "swapfile.sys",
+        fs::path(disk_root) / "pagefile.sys",
+        fs::path(disk_root) / "swapfile.sys",
         fs::path(disk_root) / "Windows" / "Temp" / "pagefile.sys"};
     for (const auto& candidate : pagefile_candidates) {
       const auto resolved = findPathCaseInsensitive(candidate);
       if (!resolved.has_value()) continue;
 
-      auto evidence = scanRecoveryFile(*resolved, "Pagefile", "Pagefile",
-                                       max_bytes, max_candidates_per_source_);
-      results.insert(results.end(), std::make_move_iterator(evidence.begin()),
-                     std::make_move_iterator(evidence.end()));
+      auto evidence =
+          scanRecoveryFileBinary(*resolved, "Pagefile", "Pagefile", max_bytes,
+                                 max_candidates_per_source_);
+      binary_count += evidence.size();
+      appendUniqueEvidence(results, evidence, dedup);
     }
   }
 
@@ -193,10 +429,11 @@ std::vector<RecoveryEvidence> VSSAnalyzer::collect(
       const auto resolved = findPathCaseInsensitive(candidate);
       if (!resolved.has_value()) continue;
 
-      auto evidence = scanRecoveryFile(*resolved, "Memory", "Memory", max_bytes,
-                                       max_candidates_per_source_);
-      results.insert(results.end(), std::make_move_iterator(evidence.begin()),
-                     std::make_move_iterator(evidence.end()));
+      auto evidence =
+          scanRecoveryFileBinary(*resolved, "Memory", "Memory", max_bytes,
+                                 max_candidates_per_source_);
+      binary_count += evidence.size();
+      appendUniqueEvidence(results, evidence, dedup);
     }
   }
 
@@ -205,16 +442,17 @@ std::vector<RecoveryEvidence> VSSAnalyzer::collect(
     std::error_code ec;
     if (fs::exists(image_path, ec) && !ec && fs::is_regular_file(image_path, ec) &&
         !ec) {
-      auto evidence = scanRecoveryFile(image_path, "Unallocated", "Unallocated",
-                                       max_bytes, max_candidates_per_source_);
-      results.insert(results.end(), std::make_move_iterator(evidence.begin()),
-                     std::make_move_iterator(evidence.end()));
+      auto evidence =
+          scanRecoveryFileBinary(image_path, "Unallocated", "Unallocated",
+                                 max_bytes, max_candidates_per_source_);
+      binary_count += evidence.size();
+      appendUniqueEvidence(results, evidence, dedup);
     }
   }
 
-  logger->info("Recovery(VSS/Pagefile/Memory/Unallocated): добавлено {} "
-               "кандидат(ов)",
-               results.size());
+  logger->info("Recovery(VSS/Pagefile/Memory/Unallocated): native={} binary={} "
+               "total={}",
+               native_count, binary_count, results.size());
   return results;
 }
 

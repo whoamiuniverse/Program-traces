@@ -42,18 +42,24 @@ struct CSVExportOptions {
 
   /// @brief Включить правило prefetch_missing_but_other_artifacts_present
   bool tamper_rule_prefetch_missing_enabled = true;
+  /// @brief Требовать, чтобы строка выглядела как образ процесса (`*.exe/...`)
   bool tamper_rule_prefetch_missing_require_process_image = true;
+  /// @brief Источники runtime-доказательств для правила отсутствующего Prefetch
   std::vector<std::string> tamper_prefetch_missing_runtime_sources = {
-      "EventLog", "UserAssist", "RunMRU", "BAM",
-      "DAM",      "JumpList",   "LNKRecent", "SRUM"};
+      "EventLog", "UserAssist", "RunMRU", "FeatureUsage", "BAM",
+      "DAM", "JumpList", "LNKRecent", "RecentApps", "TaskScheduler",
+      "IFEO", "WER", "Timeline", "BITS", "WMIRepository", "WindowsSearch",
+      "SRUM"};
 
   /// @brief Включить правило amcache_deleted_trace
   bool tamper_rule_amcache_deleted_trace_enabled = true;
 
   /// @brief Включить правило registry_inconsistency
   bool tamper_rule_registry_inconsistency_enabled = true;
+  /// @brief Источники, которые считаются "только реестровыми"
   std::vector<std::string> tamper_registry_only_sources = {
       "RunMRU", "UserAssist", "BAM", "DAM", "ShimCache"};
+  /// @brief Сильные источники корреляции (не только реестр)
   std::vector<std::string> tamper_registry_strong_sources = {
       "Prefetch", "Amcache", "EventLog", "SRUM"};
 };

@@ -1,15 +1,17 @@
+/// @file csv_exporter.cpp
+/// @brief Реализация экспорта агрегированных артефактов в CSV.
+
 #include "csv_exporter.hpp"
 
 #include <algorithm>
 #include <cctype>
-#include <ctime>
 #include <filesystem>
 #include <fstream>
-#include <iomanip>
 #include <map>
 #include <sstream>
 #include <set>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #include "analysis/artifacts/data/analysis_data.hpp"
@@ -59,23 +61,35 @@ struct MetricFilterRules {
   std::size_t upper_alnum_min_length = 8;
 };
 
+/// @brief Приводит ASCII-символ к нижнему регистру.
+/// @param c Символ ASCII.
+/// @return Нормализованный символ.
 char toLowerAsciiChar(const unsigned char c) {
   if (c >= 'A' && c <= 'Z') return static_cast<char>(c - 'A' + 'a');
   return static_cast<char>(c);
 }
 
+/// @brief Приводит ASCII-строку к нижнему регистру.
+/// @param value Исходная строка.
+/// @return Копия строки в нижнем регистре.
 std::string toLowerAscii(std::string value) {
   std::ranges::transform(value, value.begin(),
                          [](const unsigned char c) { return toLowerAsciiChar(c); });
   return value;
 }
 
+/// @brief Сортирует вектор и удаляет дубликаты.
+/// @tparam T Тип элементов.
+/// @param values Вектор значений (изменяется на месте).
 template <typename T>
 void sortAndUnique(std::vector<T>& values) {
   std::sort(values.begin(), values.end());
   values.erase(std::unique(values.begin(), values.end()), values.end());
 }
 
+/// @brief Нормализует список фильтров метрик к lower-case без пустых значений.
+/// @param values Исходные токены.
+/// @return Отфильтрованный/нормализованный набор токенов.
 std::vector<std::string> normalizeFilterTokens(
     const std::vector<std::string>& values) {
   std::vector<std::string> normalized;
@@ -93,6 +107,9 @@ std::vector<std::string> normalizeFilterTokens(
   return normalized;
 }
 
+/// @brief Строит runtime-правила фильтрации метрик из конфигурации.
+/// @param options Настройки экспорта CSV.
+/// @return Подготовленные правила для быстрого применения.
 MetricFilterRules buildMetricFilterRules(
     const WindowsDiskAnalysis::CSVExportOptions& options) {
   MetricFilterRules rules;
@@ -119,10 +136,16 @@ MetricFilterRules buildMetricFilterRules(
   return rules;
 }
 
+/// @brief Проверяет, содержит ли имя файла расширение.
+/// @param filename Имя файла.
+/// @return `true`, если расширение присутствует.
 bool hasFileExtension(const std::string& filename) {
   return filename.find('.') != std::string::npos;
 }
 
+/// @brief Проверяет, что строка состоит только из верхнего ASCII регистра.
+/// @param value Проверяемая строка.
+/// @return `true`, если все символы в диапазоне `A-Z`.
 bool isAllUpperAsciiLetters(const std::string& value) {
   if (value.empty()) return false;
 
@@ -134,6 +157,10 @@ bool isAllUpperAsciiLetters(const std::string& value) {
   return true;
 }
 
+/// @brief Определяет, похож ли токен на hex-like идентификатор.
+/// @param value Проверяемая строка.
+/// @param min_length Минимальная длина токена.
+/// @return `true`, если строка похожа на hex-like шум.
 bool isMostlyHexLikeToken(const std::string& value,
                           const std::size_t min_length) {
   if (value.size() < min_length) return false;
@@ -151,6 +178,10 @@ bool isMostlyHexLikeToken(const std::string& value,
   return has_digit;
 }
 
+/// @brief Проверяет upper-alnum токен с `_`, характерный для шума.
+/// @param value Проверяемая строка.
+/// @param min_length Минимальная длина токена.
+/// @return `true`, если токен удовлетворяет эвристике.
 bool isUpperAlphaNumUnderscoreToken(const std::string& value,
                                     const std::size_t min_length) {
   if (value.size() < min_length) return false;
@@ -171,6 +202,10 @@ bool isUpperAlphaNumUnderscoreToken(const std::string& value,
   return has_digit && has_letter;
 }
 
+/// @brief Проверяет отбрасывание имени по пользовательским правилам.
+/// @param metric_filename_lower Имя метрики в lower-case.
+/// @param rules Правила фильтрации.
+/// @return `true`, если значение нужно исключить.
 bool shouldSkipByUserRules(const std::string& metric_filename_lower,
                            const MetricFilterRules& rules) {
   if (rules.skip_exact.contains(metric_filename_lower)) {
@@ -192,6 +227,10 @@ bool shouldSkipByUserRules(const std::string& metric_filename_lower,
   return false;
 }
 
+/// @brief Проверяет необходимость отбрасывания имени метрики.
+/// @param metric_filename Имя файла метрики.
+/// @param rules Правила фильтрации.
+/// @return `true`, если имя следует исключить.
 bool shouldSkipMetricFilename(const std::string& metric_filename,
                               const MetricFilterRules& rules) {
   if (metric_filename.empty()) return true;
@@ -221,6 +260,10 @@ bool shouldSkipMetricFilename(const std::string& metric_filename,
   return false;
 }
 
+/// @brief Формирует финальный набор метрик для CSV c фильтрами и лимитом.
+/// @param metrics Список файловых метрик.
+/// @param rules Правила фильтрации.
+/// @return Набор имен для колонки `ФайловыеМетрики`.
 std::vector<std::string> buildMetricValuesForCsv(
     const std::vector<FileMetric>& metrics, const MetricFilterRules& rules) {
   std::vector<std::string> metric_values;
@@ -248,6 +291,9 @@ std::vector<std::string> buildMetricValuesForCsv(
   return metric_values;
 }
 
+/// @brief Нормализует путь/командную строку до пути исполняемого файла.
+/// @param path Исходная строка.
+/// @return Нормализованный путь или пустая строка.
 std::string normalizePath(const std::string& path) {
   if (path.empty()) return "";
 
@@ -285,7 +331,9 @@ std::string normalizePath(const std::string& path) {
   return result.substr(start, end - start + 1);
 }
 
-// Функция для извлечения имени файла из пути
+/// @brief Извлекает имя файла из полного пути.
+/// @param path Полный или относительный путь.
+/// @return Имя файла.
 std::string getFilenameFromPath(const std::string& path) {
   if (path.empty()) return {};
   std::string normalized = path;
@@ -295,6 +343,9 @@ std::string getFilenameFromPath(const std::string& path) {
   return normalized.substr(sep_pos + 1);
 }
 
+/// @brief Преобразует тип тома в строковое представление.
+/// @param type Числовой `VolumeType`.
+/// @return Человеко-читаемое обозначение типа тома.
 std::string volumeTypeToString(uint32_t type) {
   switch (static_cast<VolumeType>(type)) {
     case VolumeType::FIXED:
@@ -318,35 +369,66 @@ std::string volumeTypeToString(uint32_t type) {
   }
 }
 
+/// @brief Нормализует имя источника артефакта к каноническому виду.
+/// @param source Исходное имя источника.
+/// @return Каноническое имя источника.
 std::string normalizeEvidenceSource(std::string source) {
   trim(source);
   if (source.empty()) return {};
 
+  static const std::unordered_map<std::string, std::string_view>
+      kCanonicalEvidenceSources = {
+          {"prefetch", "Prefetch"},
+          {"eventlog", "EventLog"},
+          {"event log", "EventLog"},
+          {"amcache", "Amcache"},
+          {"autorun", "Autorun"},
+          {"networkevent", "NetworkEvent"},
+          {"network event", "NetworkEvent"},
+          {"userassist", "UserAssist"},
+          {"runmru", "RunMRU"},
+          {"featureusage", "FeatureUsage"},
+          {"feature usage", "FeatureUsage"},
+          {"bam", "BAM"},
+          {"dam", "DAM"},
+          {"shimcache", "ShimCache"},
+          {"recentapps", "RecentApps"},
+          {"recent apps", "RecentApps"},
+          {"taskscheduler", "TaskScheduler"},
+          {"task scheduler", "TaskScheduler"},
+          {"ifeo", "IFEO"},
+          {"wer", "WER"},
+          {"timeline", "Timeline"},
+          {"bits", "BITS"},
+          {"wmirepository", "WMIRepository"},
+          {"wmi repository", "WMIRepository"},
+          {"windowssearch", "WindowsSearch"},
+          {"windows search", "WindowsSearch"},
+          {"jumplist", "JumpList"},
+          {"jump list", "JumpList"},
+          {"lnkrecent", "LNKRecent"},
+          {"lnk recent", "LNKRecent"},
+          {"srum", "SRUM"},
+          {"usn", "USN"},
+          {"$logfile", "$LogFile"},
+          {"logfile", "$LogFile"},
+          {"vss", "VSS"},
+          {"pagefile", "Pagefile"},
+          {"memory", "Memory"},
+          {"unallocated", "Unallocated"},
+      };
+
   const std::string lowered = toLowerAscii(source);
-  if (lowered == "prefetch") return "Prefetch";
-  if (lowered == "eventlog" || lowered == "event log") return "EventLog";
-  if (lowered == "amcache") return "Amcache";
-  if (lowered == "autorun") return "Autorun";
-  if (lowered == "networkevent" || lowered == "network event") {
-    return "NetworkEvent";
+  const auto it = kCanonicalEvidenceSources.find(lowered);
+  if (it != kCanonicalEvidenceSources.end()) {
+    return std::string(it->second);
   }
-  if (lowered == "userassist") return "UserAssist";
-  if (lowered == "runmru") return "RunMRU";
-  if (lowered == "bam") return "BAM";
-  if (lowered == "dam") return "DAM";
-  if (lowered == "shimcache") return "ShimCache";
-  if (lowered == "jumplist" || lowered == "jump list") return "JumpList";
-  if (lowered == "lnkrecent" || lowered == "lnk recent") return "LNKRecent";
-  if (lowered == "srum") return "SRUM";
-  if (lowered == "usn") return "USN";
-  if (lowered == "$logfile" || lowered == "logfile") return "$LogFile";
-  if (lowered == "vss") return "VSS";
-  if (lowered == "pagefile") return "Pagefile";
-  if (lowered == "memory") return "Memory";
-  if (lowered == "unallocated") return "Unallocated";
   return source;
 }
 
+/// @brief Добавляет источник артефактов с нормализацией имени.
+/// @param data Агрегированные данные строки.
+/// @param source Источник для добавления.
 void addEvidenceSource(AggregatedData& data, std::string source) {
   source = normalizeEvidenceSource(std::move(source));
   if (!source.empty()) {
@@ -354,6 +436,9 @@ void addEvidenceSource(AggregatedData& data, std::string source) {
   }
 }
 
+/// @brief Добавляет tamper-флаг, если он не пуст.
+/// @param data Агрегированные данные строки.
+/// @param flag Имя флага.
 void addTamperFlag(AggregatedData& data, std::string flag) {
   trim(flag);
   if (!flag.empty()) {
@@ -361,10 +446,18 @@ void addTamperFlag(AggregatedData& data, std::string flag) {
   }
 }
 
+/// @brief Проверяет наличие конкретного источника в строке.
+/// @param data Агрегированные данные строки.
+/// @param source Искомый источник.
+/// @return `true`, если источник найден.
 bool hasEvidenceSource(const AggregatedData& data, const std::string& source) {
   return data.evidence_sources.contains(normalizeEvidenceSource(source));
 }
 
+/// @brief Проверяет наличие любого источника из заданного списка.
+/// @param data Агрегированные данные строки.
+/// @param sources Набор источников для проверки.
+/// @return `true`, если найден хотя бы один источник.
 bool hasAnyEvidenceSource(const AggregatedData& data,
                           const std::vector<std::string>& sources) {
   for (const auto& source : sources) {
@@ -373,6 +466,9 @@ bool hasAnyEvidenceSource(const AggregatedData& data,
   return false;
 }
 
+/// @brief Проверяет, похоже ли имя на образ процесса (`*.exe/...`).
+/// @param executable_name Имя процесса.
+/// @return `true`, если имя соответствует исполняемому образу.
 bool isLikelyProcessImageName(const std::string& executable_name) {
   const std::string lowered = toLowerAscii(executable_name);
   for (const std::string_view ext :
@@ -385,6 +481,9 @@ bool isLikelyProcessImageName(const std::string& executable_name) {
   return false;
 }
 
+/// @brief Выводит дополнительные tamper-флаги по правилам корреляции.
+/// @param data Агрегированные данные строки.
+/// @param options Параметры правил tamper.
 void deriveTamperFlags(
     AggregatedData& data, const WindowsDiskAnalysis::CSVExportOptions& options) {
   if (options.tamper_rule_prefetch_missing_enabled) {
@@ -415,11 +514,17 @@ void deriveTamperFlags(
   }
 }
 
+/// @brief Обновляет минимальное время первого наблюдения.
+/// @param data Агрегированные данные строки.
+/// @param timestamp Временная метка-кандидат.
 void updateRowFirstSeen(AggregatedData& data, const std::string& timestamp) {
   WindowsDiskAnalysis::EvidenceUtils::updateTimestampMin(data.first_seen_utc,
                                                          timestamp);
 }
 
+/// @brief Обновляет максимальное время последнего наблюдения.
+/// @param data Агрегированные данные строки.
+/// @param timestamp Временная метка-кандидат.
 void updateRowLastSeen(AggregatedData& data, const std::string& timestamp) {
   WindowsDiskAnalysis::EvidenceUtils::updateTimestampMax(data.last_seen_utc,
                                                          timestamp);
