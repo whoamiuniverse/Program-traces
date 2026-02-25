@@ -11,6 +11,7 @@
 #include <sstream>
 #include <string_view>
 #include <stdexcept>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
@@ -20,6 +21,7 @@
 #include "parsers/event_log/evtx/parser/parser.hpp"
 #include "parsers/registry/parser/parser.hpp"
 #include "analysis/os/os_detection.hpp"
+#include "analysis/artifacts/common/evidence_utils.hpp"
 #include "common/utils.hpp"
 
 #ifdef __APPLE__
@@ -69,6 +71,75 @@ std::string toLowerAscii(std::string text) {
     return static_cast<char>(std::tolower(ch));
   });
   return text;
+}
+
+void appendUniqueToken(std::vector<std::string>& target, std::string token) {
+  trim(token);
+  if (token.empty()) return;
+
+  const std::string lowered = toLowerAscii(token);
+  const bool already_exists = std::ranges::any_of(
+      target, [&](const std::string& current) {
+        return toLowerAscii(current) == lowered;
+      });
+  if (!already_exists) {
+    target.push_back(std::move(token));
+  }
+}
+
+void appendTamperFlag(ProcessInfo& info, const std::string& flag) {
+  appendUniqueToken(info.tamper_flags, flag);
+}
+
+void appendEvidenceSource(ProcessInfo& info, const std::string& source) {
+  appendUniqueToken(info.evidence_sources, source);
+}
+
+void appendTimelineArtifact(ProcessInfo& info, const std::string& artifact) {
+  appendUniqueToken(info.timeline_artifacts, artifact);
+}
+
+void appendRecoveredFrom(ProcessInfo& info, const std::string& source) {
+  appendUniqueToken(info.recovered_from, source);
+}
+
+bool hasEvidenceSource(const ProcessInfo& info, const std::string& source) {
+  const std::string source_lower = toLowerAscii(source);
+  return std::ranges::any_of(info.evidence_sources,
+                             [&](const std::string& current) {
+                               return toLowerAscii(current) == source_lower;
+                             });
+}
+
+double clampConfidence(const double value) {
+  return std::clamp(value, 0.0, 1.0);
+}
+
+double calculateBaseConfidenceScore(const ProcessInfo& info) {
+  double score = 0.0;
+
+  if (hasEvidenceSource(info, "Prefetch")) score += 0.45;
+  if (hasEvidenceSource(info, "EventLog")) score += 0.30;
+  if (hasEvidenceSource(info, "Amcache")) score += 0.20;
+  if (hasEvidenceSource(info, "Autorun")) score += 0.10;
+  if (hasEvidenceSource(info, "NetworkEvent")) score += 0.10;
+  if (hasEvidenceSource(info, "UserAssist")) score += 0.25;
+  if (hasEvidenceSource(info, "RunMRU")) score += 0.15;
+  if (hasEvidenceSource(info, "BAM")) score += 0.20;
+  if (hasEvidenceSource(info, "DAM")) score += 0.20;
+  if (hasEvidenceSource(info, "ShimCache")) score += 0.15;
+  if (hasEvidenceSource(info, "JumpList")) score += 0.15;
+  if (hasEvidenceSource(info, "LNKRecent")) score += 0.15;
+  if (hasEvidenceSource(info, "SRUM")) score += 0.20;
+  if (hasEvidenceSource(info, "USN")) score += 0.25;
+  if (hasEvidenceSource(info, "$LogFile")) score += 0.25;
+  if (hasEvidenceSource(info, "VSS")) score += 0.25;
+  if (hasEvidenceSource(info, "Pagefile")) score += 0.20;
+  if (hasEvidenceSource(info, "Memory")) score += 0.20;
+  if (hasEvidenceSource(info, "Unallocated")) score += 0.20;
+
+  score -= static_cast<double>(info.tamper_flags.size()) * 0.10;
+  return clampConfidence(score);
 }
 
 bool isAutoDiskRootValue(std::string value) {
@@ -640,6 +711,50 @@ std::string formatWindowsLabel(const WindowsRootSummary& summary) {
   return name + " (build " + summary.build + ")";
 }
 
+void mergeRecoveryEvidenceToProcessData(
+    const std::vector<RecoveryEvidence>& recovery_entries,
+    std::map<std::string, ProcessInfo>& process_data) {
+  for (const auto& evidence : recovery_entries) {
+    std::string executable_path = evidence.executable_path;
+    trim(executable_path);
+    if (executable_path.empty()) continue;
+
+    auto& info = process_data[executable_path];
+    if (info.filename.empty()) {
+      info.filename = executable_path;
+    }
+
+    appendEvidenceSource(info,
+                         evidence.source.empty() ? "Recovery" : evidence.source);
+    appendRecoveredFrom(
+        info, evidence.recovered_from.empty() ? evidence.source
+                                              : evidence.recovered_from);
+
+    if (!evidence.timestamp.empty()) {
+      info.run_times.push_back(evidence.timestamp);
+      if (EvidenceUtils::isTimestampLike(evidence.timestamp)) {
+        EvidenceUtils::updateTimestampMin(info.first_seen_utc, evidence.timestamp);
+        EvidenceUtils::updateTimestampMax(info.last_seen_utc, evidence.timestamp);
+      }
+    }
+
+    if (!evidence.tamper_flag.empty()) {
+      appendTamperFlag(info, evidence.tamper_flag);
+    }
+
+    std::string timeline = "[" + (evidence.source.empty() ? "Recovery"
+                                                          : evidence.source) +
+                           "]";
+    if (!evidence.timestamp.empty()) {
+      timeline = evidence.timestamp + " " + timeline;
+    }
+    if (!evidence.details.empty()) {
+      timeline += " " + evidence.details;
+    }
+    appendTimelineArtifact(info, timeline);
+  }
+}
+
 bool hasInteractiveStdin() {
 #if defined(__APPLE__) || defined(__linux__)
   return isatty(fileno(stdin)) != 0;
@@ -922,12 +1037,15 @@ void WindowsDiskAnalyzer::loadLoggingOptions(const Config& config) {
   debug_options_.prefetch = readFlag("DebugPrefetch", debug_options_.prefetch);
   debug_options_.eventlog = readFlag("DebugEventLog", debug_options_.eventlog);
   debug_options_.amcache = readFlag("DebugAmcache", debug_options_.amcache);
+  debug_options_.execution = readFlag("DebugExecution", debug_options_.execution);
+  debug_options_.recovery = readFlag("DebugRecovery", debug_options_.recovery);
 
   logger->debug(
       "Загружены настройки [Logging]: OSDetection={}, Autorun={}, "
-      "Prefetch={}, EventLog={}, Amcache={}",
+      "Prefetch={}, EventLog={}, Amcache={}, Execution={}, Recovery={}",
       debug_options_.os_detection, debug_options_.autorun,
-      debug_options_.prefetch, debug_options_.eventlog, debug_options_.amcache);
+      debug_options_.prefetch, debug_options_.eventlog, debug_options_.amcache,
+      debug_options_.execution, debug_options_.recovery);
 }
 
 void WindowsDiskAnalyzer::initializeComponents() {
@@ -960,6 +1078,20 @@ void WindowsDiskAnalyzer::initializeComponents() {
         std::make_unique<RegistryAnalysis::RegistryParser>();
     amcache_analyzer_ = std::make_unique<AmcacheAnalyzer>(
         std::move(amcache_registry_parser), os_info_.ini_version, config_path_);
+  }
+
+  {
+    ScopedDebugLevelOverride scoped_debug(debug_options_.execution);
+    auto execution_registry_parser =
+        std::make_unique<RegistryAnalysis::RegistryParser>();
+    execution_evidence_analyzer_ = std::make_unique<ExecutionEvidenceAnalyzer>(
+        std::move(execution_registry_parser), os_info_.ini_version, config_path_);
+  }
+
+  {
+    ScopedDebugLevelOverride scoped_debug(debug_options_.recovery);
+    usn_analyzer_ = std::make_unique<USNAnalyzer>(config_path_);
+    vss_analyzer_ = std::make_unique<VSSAnalyzer>(config_path_);
   }
 }
 
@@ -1059,16 +1191,57 @@ CSVExportOptions WindowsDiskAnalyzer::loadCSVExportOptions() const {
 }
 
 void WindowsDiskAnalyzer::analyze(const std::string& output_path) {
+  process_data_.clear();
+  network_connections_.clear();
+  global_tamper_flags_.clear();
+  usn_recovery_evidence_.clear();
+  vss_recovery_evidence_.clear();
+
   // 1. Сбор данных об автозагрузке
   {
     ScopedDebugLevelOverride scoped_debug(debug_options_.autorun);
     autorun_entries_ = autorun_analyzer_->collect(disk_root_);
   }
 
+  for (const auto& entry : autorun_entries_) {
+    if (entry.path.empty()) continue;
+    auto& info = process_data_[entry.path];
+    if (info.filename.empty()) {
+      info.filename = entry.path;
+    }
+    appendEvidenceSource(info, "Autorun");
+    appendTimelineArtifact(info, "[Autorun] " + entry.location);
+  }
+
   // 2. Сбор данных из Amcache.hve
   {
     ScopedDebugLevelOverride scoped_debug(debug_options_.amcache);
     amcache_entries_ = amcache_analyzer_->collect(disk_root_);
+  }
+
+  for (const auto& entry : amcache_entries_) {
+    std::string path = entry.file_path.empty() ? entry.name : entry.file_path;
+    trim(path);
+    if (path.empty()) continue;
+
+    auto& info = process_data_[path];
+    if (info.filename.empty()) {
+      info.filename = path;
+    }
+    appendEvidenceSource(info, "Amcache");
+    if (!entry.modification_time_str.empty() && entry.modification_time_str != "N/A") {
+      info.run_times.push_back(entry.modification_time_str);
+      if (EvidenceUtils::isTimestampLike(entry.modification_time_str)) {
+        EvidenceUtils::updateTimestampMin(info.first_seen_utc,
+                                          entry.modification_time_str);
+        EvidenceUtils::updateTimestampMax(info.last_seen_utc,
+                                          entry.modification_time_str);
+      }
+    }
+    if (entry.is_deleted) {
+      appendTamperFlag(info, "amcache_deleted_trace");
+    }
+    appendTimelineArtifact(info, "[Amcache] " + path);
   }
 
   // 3. Сбор данных из Prefetch
@@ -1090,15 +1263,94 @@ void WindowsDiskAnalyzer::analyze(const std::string& output_path) {
                           info.volumes.end());
     merged.metrics.insert(merged.metrics.end(), info.metrics.begin(),
                           info.metrics.end());
+    appendEvidenceSource(merged, "Prefetch");
+    if (!info.run_times.empty()) {
+      for (const auto& timestamp : info.run_times) {
+        if (EvidenceUtils::isTimestampLike(timestamp)) {
+          EvidenceUtils::updateTimestampMin(merged.first_seen_utc, timestamp);
+          EvidenceUtils::updateTimestampMax(merged.last_seen_utc, timestamp);
+        }
+      }
+      appendTimelineArtifact(merged, "[Prefetch] last=" + info.run_times.back());
+    } else {
+      appendTimelineArtifact(merged, "[Prefetch]");
+    }
   }
 
   // 4. Анализ журналов событий
+  std::unordered_map<std::string, uint32_t> run_count_before_eventlog;
+  run_count_before_eventlog.reserve(process_data_.size());
+  for (const auto& [process_key, info] : process_data_) {
+    run_count_before_eventlog[process_key] = info.run_count;
+  }
+
   {
     ScopedDebugLevelOverride scoped_debug(debug_options_.eventlog);
     eventlog_analyzer_->collect(disk_root_, process_data_, network_connections_);
   }
 
-  // 5. Экспорт результатов (обновленный вызов)
+  for (auto& [process_key, info] : process_data_) {
+    const auto it_before = run_count_before_eventlog.find(process_key);
+    const bool is_new_process = it_before == run_count_before_eventlog.end();
+    const bool has_new_runs =
+        !is_new_process && info.run_count > it_before->second;
+
+    if (is_new_process || has_new_runs) {
+      appendEvidenceSource(info, "EventLog");
+      appendTimelineArtifact(
+          info, "[EventLog] run_count=" + std::to_string(info.run_count));
+    }
+
+    for (const auto& timestamp : info.run_times) {
+      if (EvidenceUtils::isTimestampLike(timestamp)) {
+        EvidenceUtils::updateTimestampMin(info.first_seen_utc, timestamp);
+        EvidenceUtils::updateTimestampMax(info.last_seen_utc, timestamp);
+      }
+    }
+  }
+
+  // 5. Дополнительные источники исполнения
+  {
+    ScopedDebugLevelOverride scoped_debug(debug_options_.execution);
+    execution_evidence_analyzer_->collect(disk_root_, process_data_,
+                                          global_tamper_flags_);
+  }
+
+  for (const auto& connection : network_connections_) {
+    if (connection.process_name.empty()) continue;
+    auto& info = process_data_[connection.process_name];
+    if (info.filename.empty()) {
+      info.filename = connection.process_name;
+    }
+    appendEvidenceSource(info, "NetworkEvent");
+    appendTimelineArtifact(
+        info, "[NetworkEvent] " + connection.protocol + ":" +
+                  connection.local_address + "->" + connection.remote_address +
+                  ":" + std::to_string(connection.port));
+  }
+
+  // 6. Восстановимые источники (USN/VSS и file-based recovery)
+  {
+    ScopedDebugLevelOverride scoped_debug(debug_options_.recovery);
+    usn_recovery_evidence_ = usn_analyzer_->collect(disk_root_);
+    vss_recovery_evidence_ = vss_analyzer_->collect(disk_root_);
+  }
+
+  mergeRecoveryEvidenceToProcessData(usn_recovery_evidence_, process_data_);
+  mergeRecoveryEvidenceToProcessData(vss_recovery_evidence_, process_data_);
+
+  for (auto& [_, info] : process_data_) {
+    for (const auto& global_flag : global_tamper_flags_) {
+      appendTamperFlag(info, global_flag);
+    }
+  }
+
+  // 7. Обновляем базовую оценку достоверности на уровне ProcessInfo
+  for (auto& [_, info] : process_data_) {
+    info.confidence_score = calculateBaseConfidenceScore(info);
+  }
+
+  // 8. Экспорт результатов
   ensureDirectoryExists(output_path);
   const CSVExportOptions csv_export_options = loadCSVExportOptions();
   CSVExporter::exportToCSV(output_path, autorun_entries_, process_data_,

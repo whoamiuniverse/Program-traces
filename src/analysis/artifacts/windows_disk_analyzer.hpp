@@ -11,8 +11,11 @@
 #include "infra/export/csv_exporter.hpp"
 #include "amcache/amcache_analyzer.hpp"
 #include "autorun/autorun_analyzer.hpp"
+#include "execution/execution_evidence_analyzer.hpp"
 #include "event_logs/eventlog_analyzer.hpp"
 #include "prefetch/prefetch_analyzer.hpp"
+#include "recovery/usn/usn_analyzer.hpp"
+#include "recovery/vss/vss_analyzer.hpp"
 
 namespace WindowsDiskAnalysis {
 
@@ -43,6 +46,8 @@ class WindowsDiskAnalyzer {
     bool prefetch = true;
     bool eventlog = true;
     bool amcache = true;
+    bool execution = true;
+    bool recovery = true;
   };
 
   /// @brief Инициализирует внутренние анализаторы на основе версии ОС
@@ -101,6 +106,11 @@ class WindowsDiskAnalyzer {
       eventlog_analyzer_;  ///< Анализатор журналов событий
   std::unique_ptr<AmcacheAnalyzer>
       amcache_analyzer_;  ///< Анализатор артефактов Amcache
+  std::unique_ptr<ExecutionEvidenceAnalyzer>
+      execution_evidence_analyzer_;  ///< Анализатор доп. источников исполнения
+  std::unique_ptr<USNAnalyzer> usn_analyzer_;  ///< Анализатор USN/$LogFile
+  std::unique_ptr<VSSAnalyzer>
+      vss_analyzer_;  ///< Анализатор VSS/Pagefile/Memory/Unallocated
 
   std::vector<AutorunEntry>
       autorun_entries_;  ///< Результаты анализа автозагрузки
@@ -109,6 +119,12 @@ class WindowsDiskAnalyzer {
   std::vector<NetworkConnection>
       network_connections_;  ///< Выявленные сетевые соединения
   std::vector<AmcacheEntry> amcache_entries_;  ///< Записи из Amcache
+  std::vector<RecoveryEvidence>
+      usn_recovery_evidence_;  ///< Восстановленные доказательства USN
+  std::vector<RecoveryEvidence>
+      vss_recovery_evidence_;  ///< Восстановленные доказательства VSS
+  std::vector<std::string>
+      global_tamper_flags_;  ///< Глобальные tamper-флаги окружения
 };
 
 }

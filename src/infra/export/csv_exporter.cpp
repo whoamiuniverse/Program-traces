@@ -5,12 +5,15 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <map>
+#include <sstream>
 #include <set>
 #include <string_view>
 #include <vector>
 
 #include "analysis/artifacts/data/analysis_data.hpp"
+#include "analysis/artifacts/common/evidence_utils.hpp"
 #include "common/utils.hpp"
 #include "errors/csv_export_exception.hpp"
 
@@ -32,6 +35,13 @@ struct AggregatedData {
   std::set<std::string> hashes;
   std::set<uint64_t> file_sizes;  // Размеры файлов
   bool has_deleted_trace = false;
+  std::set<std::string> evidence_sources;
+  std::set<std::string> tamper_flags;
+  std::set<std::string> timeline_artifacts;
+  std::set<std::string> recovered_from;
+  std::string first_seen_utc;
+  std::string last_seen_utc;
+  double confidence_score = 0.0;
 };
 
 constexpr char kCsvDelimiter = ';';
@@ -309,6 +319,139 @@ std::string volumeTypeToString(uint32_t type) {
   }
 }
 
+std::string normalizeEvidenceSource(std::string source) {
+  trim(source);
+  if (source.empty()) return {};
+
+  const std::string lowered = toLowerAscii(source);
+  if (lowered == "prefetch") return "Prefetch";
+  if (lowered == "eventlog" || lowered == "event log") return "EventLog";
+  if (lowered == "amcache") return "Amcache";
+  if (lowered == "autorun") return "Autorun";
+  if (lowered == "networkevent" || lowered == "network event") {
+    return "NetworkEvent";
+  }
+  if (lowered == "userassist") return "UserAssist";
+  if (lowered == "runmru") return "RunMRU";
+  if (lowered == "bam") return "BAM";
+  if (lowered == "dam") return "DAM";
+  if (lowered == "shimcache") return "ShimCache";
+  if (lowered == "jumplist" || lowered == "jump list") return "JumpList";
+  if (lowered == "lnkrecent" || lowered == "lnk recent") return "LNKRecent";
+  if (lowered == "srum") return "SRUM";
+  if (lowered == "usn") return "USN";
+  if (lowered == "$logfile" || lowered == "logfile") return "$LogFile";
+  if (lowered == "vss") return "VSS";
+  if (lowered == "pagefile") return "Pagefile";
+  if (lowered == "memory") return "Memory";
+  if (lowered == "unallocated") return "Unallocated";
+  return source;
+}
+
+void addEvidenceSource(AggregatedData& data, std::string source) {
+  source = normalizeEvidenceSource(std::move(source));
+  if (!source.empty()) {
+    data.evidence_sources.insert(std::move(source));
+  }
+}
+
+void addTamperFlag(AggregatedData& data, std::string flag) {
+  trim(flag);
+  if (!flag.empty()) {
+    data.tamper_flags.insert(std::move(flag));
+  }
+}
+
+bool hasEvidenceSource(const AggregatedData& data, const std::string& source) {
+  return data.evidence_sources.contains(source);
+}
+
+bool isLikelyProcessImageName(const std::string& executable_name) {
+  const std::string lowered = toLowerAscii(executable_name);
+  for (const std::string_view ext :
+       {".exe", ".com", ".bat", ".cmd", ".ps1", ".msi"}) {
+    if (lowered.size() >= ext.size() &&
+        lowered.rfind(ext) == lowered.size() - ext.size()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void deriveTamperFlags(AggregatedData& data) {
+  const bool has_prefetch = hasEvidenceSource(data, "Prefetch");
+  const bool has_runtime_sources =
+      hasEvidenceSource(data, "EventLog") || hasEvidenceSource(data, "UserAssist") ||
+      hasEvidenceSource(data, "RunMRU") || hasEvidenceSource(data, "BAM") ||
+      hasEvidenceSource(data, "DAM") || hasEvidenceSource(data, "JumpList") ||
+      hasEvidenceSource(data, "LNKRecent") || hasEvidenceSource(data, "SRUM");
+
+  if (!has_prefetch && has_runtime_sources &&
+      isLikelyProcessImageName(data.executable_name)) {
+    addTamperFlag(data, "prefetch_missing_but_other_artifacts_present");
+  }
+  if (data.has_deleted_trace) {
+    addTamperFlag(data, "amcache_deleted_trace");
+  }
+
+  const bool has_registry_only_sources =
+      hasEvidenceSource(data, "RunMRU") || hasEvidenceSource(data, "UserAssist") ||
+      hasEvidenceSource(data, "BAM") || hasEvidenceSource(data, "DAM") ||
+      hasEvidenceSource(data, "ShimCache");
+  const bool has_strong_correlated_sources =
+      hasEvidenceSource(data, "Prefetch") || hasEvidenceSource(data, "Amcache") ||
+      hasEvidenceSource(data, "EventLog") || hasEvidenceSource(data, "SRUM");
+  if (has_registry_only_sources && !has_strong_correlated_sources) {
+    addTamperFlag(data, "registry_inconsistency");
+  }
+}
+
+double clampConfidence(const double value) {
+  return std::clamp(value, 0.0, 1.0);
+}
+
+double calculateConfidenceScore(const AggregatedData& data) {
+  double score = 0.0;
+  if (hasEvidenceSource(data, "Prefetch")) score += 0.45;
+  if (hasEvidenceSource(data, "EventLog")) score += 0.30;
+  if (hasEvidenceSource(data, "Amcache")) score += 0.20;
+  if (hasEvidenceSource(data, "Autorun")) score += 0.10;
+  if (hasEvidenceSource(data, "NetworkEvent")) score += 0.10;
+  if (hasEvidenceSource(data, "UserAssist")) score += 0.25;
+  if (hasEvidenceSource(data, "RunMRU")) score += 0.15;
+  if (hasEvidenceSource(data, "BAM")) score += 0.20;
+  if (hasEvidenceSource(data, "DAM")) score += 0.20;
+  if (hasEvidenceSource(data, "ShimCache")) score += 0.15;
+  if (hasEvidenceSource(data, "JumpList")) score += 0.15;
+  if (hasEvidenceSource(data, "LNKRecent")) score += 0.15;
+  if (hasEvidenceSource(data, "SRUM")) score += 0.20;
+  if (hasEvidenceSource(data, "USN")) score += 0.25;
+  if (hasEvidenceSource(data, "$LogFile")) score += 0.25;
+  if (hasEvidenceSource(data, "VSS")) score += 0.25;
+  if (hasEvidenceSource(data, "Pagefile")) score += 0.20;
+  if (hasEvidenceSource(data, "Memory")) score += 0.20;
+  if (hasEvidenceSource(data, "Unallocated")) score += 0.20;
+
+  score -= static_cast<double>(data.tamper_flags.size()) * 0.10;
+  return clampConfidence(score);
+}
+
+std::string formatConfidenceScore(const double score) {
+  std::ostringstream stream;
+  stream << std::fixed << std::setprecision(2) << clampConfidence(score);
+  return stream.str();
+}
+
+void updateRowFirstSeen(AggregatedData& data, const std::string& timestamp) {
+  WindowsDiskAnalysis::EvidenceUtils::updateTimestampMin(data.first_seen_utc,
+                                                         timestamp);
+}
+
+void updateRowLastSeen(AggregatedData& data, const std::string& timestamp) {
+  WindowsDiskAnalysis::EvidenceUtils::updateTimestampMax(data.last_seen_utc,
+                                                         timestamp);
+}
+
 }  // namespace
 
 namespace WindowsDiskAnalysis {
@@ -370,12 +513,18 @@ void CSVExporter::exportToCSV(
     file << "ИсполняемыйФайл" << kCsvDelimiter << "Пути" << kCsvDelimiter
          << "Версии" << kCsvDelimiter << "Хэши" << kCsvDelimiter
          << "РазмерФайла" << kCsvDelimiter << "ВременаЗапуска" << kCsvDelimiter
-         << "Автозагрузка" << kCsvDelimiter << "СледыУдаления"
+         << "FirstSeenUTC" << kCsvDelimiter << "LastSeenUTC" << kCsvDelimiter
+         << "TimelineArtifacts" << kCsvDelimiter << "RecoveredFrom"
+         << kCsvDelimiter << "Автозагрузка" << kCsvDelimiter << "СледыУдаления"
          << kCsvDelimiter << "КоличествоЗапусков" << kCsvDelimiter
          << "Тома(серийный:тип)" << kCsvDelimiter << "СетевыеПодключения"
-         << kCsvDelimiter << "ФайловыеМетрики\n";
+         << kCsvDelimiter << "ФайловыеМетрики" << kCsvDelimiter
+         << "EvidenceSources" << kCsvDelimiter << "TamperFlags"
+         << kCsvDelimiter << "ConfidenceScore\n";
 
-    // Основная карта для агрегации данных по имени файла
+    // Основная карта для агрегации данных по нормализованному идентификатору
+    // процесса.
+    // Приоритет: полный путь (если есть), иначе имя файла.
     std::map<std::string, AggregatedData> aggregated_data;
 
     // Обработка всех типов данных с объединением по имени файла
@@ -386,10 +535,19 @@ void CSVExporter::exportToCSV(
       // Получаем имя файла - основной ключ для агрегации
       std::string filename = getFilenameFromPath(norm_path);
       if (filename.empty()) return;
-      const std::string filename_key = toLowerAscii(filename);
+
+      const bool has_explicit_path =
+          norm_path.find('\\') != std::string::npos ||
+          norm_path.find('/') != std::string::npos ||
+          (norm_path.size() >= 3 &&
+           std::isalpha(static_cast<unsigned char>(norm_path[0])) != 0 &&
+           norm_path[1] == ':' &&
+           (norm_path[2] == '\\' || norm_path[2] == '/'));
+      const std::string aggregation_key =
+          toLowerAscii(has_explicit_path ? norm_path : filename);
 
       // Обрабатываем данные
-      auto& bucket = aggregated_data[filename_key];
+      auto& bucket = aggregated_data[aggregation_key];
       if (bucket.executable_name.empty()) {
         bucket.executable_name = filename;
       }
@@ -403,6 +561,8 @@ void CSVExporter::exportToCSV(
                    [&](AggregatedData& data, const std::string& path) {
                      data.paths.insert(path);
                      data.autorun_locations.insert(entry.location);
+                     addEvidenceSource(data, "Autorun");
+                     data.timeline_artifacts.insert("[Autorun] " + entry.location);
                    });
     }
 
@@ -418,6 +578,43 @@ void CSVExporter::exportToCSV(
                                 info.volumes.end());
             data.metrics.insert(data.metrics.end(), info.metrics.begin(),
                                 info.metrics.end());
+
+            for (const auto& source : info.evidence_sources) {
+              addEvidenceSource(data, source);
+            }
+            for (const auto& flag : info.tamper_flags) {
+              addTamperFlag(data, flag);
+            }
+            for (const auto& timeline : info.timeline_artifacts) {
+              if (!timeline.empty()) {
+                data.timeline_artifacts.insert(timeline);
+              }
+            }
+            for (const auto& recovered_from : info.recovered_from) {
+              if (!recovered_from.empty()) {
+                data.recovered_from.insert(recovered_from);
+              }
+            }
+
+            updateRowFirstSeen(data, info.first_seen_utc);
+            updateRowLastSeen(data, info.last_seen_utc);
+            for (const auto& timestamp : info.run_times) {
+              updateRowFirstSeen(data, timestamp);
+              updateRowLastSeen(data, timestamp);
+            }
+
+            // Fallback для старых источников, где evidence_sources еще не
+            // заполнены на этапе сбора.
+            if (info.evidence_sources.empty()) {
+              if (!info.metrics.empty() || !info.volumes.empty()) {
+                addEvidenceSource(data, "Prefetch");
+              } else if (info.run_count > 0 || !info.run_times.empty()) {
+                addEvidenceSource(data, "EventLog");
+              }
+            }
+
+            data.confidence_score =
+                std::max(data.confidence_score, info.confidence_score);
           });
     }
 
@@ -427,6 +624,11 @@ void CSVExporter::exportToCSV(
                    [&](AggregatedData& data, const std::string& path) {
                      data.paths.insert(path);
                      data.network_connections.push_back(conn);
+                     addEvidenceSource(data, "NetworkEvent");
+                     data.timeline_artifacts.insert(
+                         "[NetworkEvent] " + conn.protocol + ":" +
+                         conn.local_address + "->" + conn.remote_address + ":" +
+                         std::to_string(conn.port));
                    });
     }
 
@@ -443,6 +645,7 @@ void CSVExporter::exportToCSV(
       processEntry(path,
                    [&](AggregatedData& data, const std::string& norm_path) {
                      data.paths.insert(norm_path);
+                     addEvidenceSource(data, "Amcache");
 
                      // Добавляем версии и хэши
                      if (!entry.version.empty()) {
@@ -459,6 +662,10 @@ void CSVExporter::exportToCSV(
 
                      if (!entry.modification_time_str.empty()) {
                        data.run_times.push_back(entry.modification_time_str);
+                       updateRowFirstSeen(data, entry.modification_time_str);
+                       updateRowLastSeen(data, entry.modification_time_str);
+                       data.timeline_artifacts.insert(
+                           "[Amcache] " + entry.modification_time_str);
                      }
 
                      if (entry.is_deleted) {
@@ -468,32 +675,36 @@ void CSVExporter::exportToCSV(
     }
 
     // 5. Генерируем выходные данные
-    for (const auto& [filename_key, data] : aggregated_data) {
-      const std::string& filename =
-          data.executable_name.empty() ? filename_key : data.executable_name;
+    for (const auto& [aggregation_key, data] : aggregated_data) {
+      AggregatedData row = data;
+      deriveTamperFlags(row);
+      row.confidence_score = calculateConfidenceScore(row);
 
-      std::string paths_str = joinStrings(data.paths);
-      std::string versions_str = joinStrings(data.versions);
-      std::string hashes_str = joinStrings(data.hashes);
+      const std::string& filename =
+          row.executable_name.empty() ? aggregation_key : row.executable_name;
+
+      std::string paths_str = joinStrings(row.paths);
+      std::string versions_str = joinStrings(row.versions);
+      std::string hashes_str = joinStrings(row.hashes);
 
       std::vector<std::string> file_sizes;
-      file_sizes.reserve(data.file_sizes.size());
-      for (const auto size : data.file_sizes) {
+      file_sizes.reserve(row.file_sizes.size());
+      for (const auto size : row.file_sizes) {
         file_sizes.push_back(std::to_string(size));
       }
       std::string file_sizes_str = joinStrings(file_sizes);
 
       // Форматирование времени запуска (включая время изменения)
-      std::vector<std::string> unique_run_times = data.run_times;
+      std::vector<std::string> unique_run_times = row.run_times;
       sortAndUnique(unique_run_times);
       std::string run_times_str = joinStrings(unique_run_times);
 
       // Форматирование автозагрузки
       std::string autorun_str;
-      if (!data.autorun_locations.empty()) {
+      if (!row.autorun_locations.empty()) {
         autorun_str = "Да(";
         bool first_location = true;
-        for (const auto& location : data.autorun_locations) {
+        for (const auto& location : row.autorun_locations) {
           if (!first_location) autorun_str += ", ";
           autorun_str += location;
           first_location = false;
@@ -504,12 +715,12 @@ void CSVExporter::exportToCSV(
       }
 
       // Следы удалённых файлов
-      std::string deleted_str = data.has_deleted_trace ? "Да" : "Нет";
+      std::string deleted_str = row.has_deleted_trace ? "Да" : "Нет";
 
       // Форматирование сетевых подключений
       std::vector<std::string> network_values;
-      network_values.reserve(data.network_connections.size());
-      for (const auto& conn : data.network_connections) {
+      network_values.reserve(row.network_connections.size());
+      for (const auto& conn : row.network_connections) {
         network_values.push_back(conn.protocol + ":" + conn.local_address +
                                  "->" + conn.remote_address + ":" +
                                  std::to_string(conn.port));
@@ -519,8 +730,8 @@ void CSVExporter::exportToCSV(
 
       // Форматирование томов
       std::vector<std::string> volume_values;
-      volume_values.reserve(data.volumes.size());
-      for (const auto& vol : data.volumes) {
+      volume_values.reserve(row.volumes.size());
+      for (const auto& vol : row.volumes) {
         volume_values.push_back(std::to_string(vol.getSerialNumber()) + ":" +
                                 volumeTypeToString(vol.getVolumeType()));
       }
@@ -529,18 +740,32 @@ void CSVExporter::exportToCSV(
 
       // Форматирование файловых метрик
       std::vector<std::string> metric_values =
-          buildMetricValuesForCsv(data.metrics, metric_rules);
+          buildMetricValuesForCsv(row.metrics, metric_rules);
       std::string metrics_str = joinStrings(metric_values);
+
+      std::string timeline_artifacts_str = joinStrings(row.timeline_artifacts);
+      std::string recovered_from_str = joinStrings(row.recovered_from);
+      std::string evidence_sources_str = joinStrings(row.evidence_sources);
+      std::string tamper_flags_str = joinStrings(row.tamper_flags);
+      const std::string confidence_score_str =
+          formatConfidenceScore(row.confidence_score);
 
       // Запись данных в строго фиксированном порядке колонок
       file << escape(filename) << kCsvDelimiter << escape(paths_str)
            << kCsvDelimiter << escape(versions_str) << kCsvDelimiter
            << escape(hashes_str) << kCsvDelimiter << escape(file_sizes_str)
            << kCsvDelimiter << escape(run_times_str) << kCsvDelimiter
-           << escape(autorun_str) << kCsvDelimiter << escape(deleted_str)
-           << kCsvDelimiter << data.run_count << kCsvDelimiter
+           << escape(row.first_seen_utc) << kCsvDelimiter
+           << escape(row.last_seen_utc) << kCsvDelimiter
+           << escape(timeline_artifacts_str) << kCsvDelimiter
+           << escape(recovered_from_str) << kCsvDelimiter << escape(autorun_str)
+           << kCsvDelimiter << escape(deleted_str)
+           << kCsvDelimiter << row.run_count << kCsvDelimiter
            << escape(volumes_str) << kCsvDelimiter << escape(network_str)
-           << kCsvDelimiter << escape(metrics_str) << "\n";
+           << kCsvDelimiter << escape(metrics_str) << kCsvDelimiter
+           << escape(evidence_sources_str) << kCsvDelimiter
+           << escape(tamper_flags_str) << kCsvDelimiter
+           << escape(confidence_score_str) << "\n";
     }
   } catch (const std::exception& e) {
     throw CsvExportException(std::string("Ошибка при экспорте данных: ") +
