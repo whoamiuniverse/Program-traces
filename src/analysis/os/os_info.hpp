@@ -21,6 +21,9 @@ struct OSInfo {
                                   ///< "Server", "Server Core")
   std::string system_product_type;  ///< ProductType из SYSTEM hive
                                     ///< ("WinNT", "ServerNT", "LanmanNT")
+  std::string host_name;  ///< Имя хоста из SYSTEM hive
+  std::string
+      time_zone_key_name;  ///< Часовой пояс (TimeZoneKeyName/StandardName)
   std::string current_build;  ///< Номер сборки ОС (например "22000" для Windows
                               ///< 11 21H2)
   std::string
