@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -51,6 +52,15 @@ struct ProcessInfo {
   std::vector<std::string> run_times;  ///< Временные метки запусков процесса
   uint32_t run_count = 0;              ///< Количество запусков процесса
   std::string command;                 ///< Командная строка запуска
+  std::vector<std::string> users;  ///< Пользователи, от имени которых запускалось ПО
+  std::vector<std::string> user_sids;  ///< SID пользователей
+  std::vector<std::string> logon_ids;  ///< Идентификаторы сеансов входа (LogonId)
+  std::vector<std::string> logon_types;  ///< Типы входа (LogonType)
+  std::string elevation_type;  ///< Тип повышения привилегий (TokenElevationType)
+  std::string elevated_token;  ///< Признак повышенного токена
+  std::string integrity_level;  ///< Уровень целостности процесса/токена
+  std::vector<std::string>
+      privileges;  ///< Список привилегий безопасности (например SeDebugPrivilege)
   std::vector<PrefetchAnalysis::VolumeInfo>
       volumes;  ///< Тома, на которых обнаружена активность процесса
   std::vector<PrefetchAnalysis::FileMetric>
@@ -81,11 +91,18 @@ struct RecoveryEvidence {
 /// @struct NetworkConnection
 /// @brief Информация о сетевом подключении
 struct NetworkConnection {
-  std::string process_name;    ///< Имя процесса, установившего соединение
-  std::string local_address;   ///< Локальный IP-адрес
-  std::string remote_address;  ///< Удалённый IP-адрес
-  uint16_t port = 0;           ///< Номер порта
-  std::string protocol;        ///< Протокол соединения (TCP/UDP)
+  uint32_t event_id = 0;        ///< ID события журнала (например 5156/5157)
+  std::string timestamp;        ///< Время сетевого события
+  std::string process_name;     ///< Имя процесса, установившего соединение
+  uint32_t process_id = 0;      ///< PID процесса
+  std::string application;      ///< Полный путь к приложению (если известен)
+  std::string source_ip;        ///< Исходный IP-адрес
+  uint16_t source_port = 0;     ///< Исходный порт
+  std::string dest_ip;          ///< Целевой IP-адрес
+  uint16_t dest_port = 0;       ///< Целевой порт
+  std::string protocol;         ///< Протокол (TCP/UDP/ICMP/...)
+  std::string direction;        ///< Направление (inbound/outbound)
+  std::string action;           ///< Действие (allow/block)
 };
 
 }

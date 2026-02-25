@@ -264,16 +264,38 @@ void WindowsDiskAnalyzer::runExecutionStage() {
   }
 
   for (const auto& connection : network_connections_) {
-    if (connection.process_name.empty()) continue;
-    auto& info = process_data_[connection.process_name];
+    std::string process_key = connection.process_name;
+    if (process_key.empty()) {
+      process_key = connection.application;
+    }
+    if (process_key.empty()) continue;
+
+    auto& info = process_data_[process_key];
     if (info.filename.empty()) {
-      info.filename = connection.process_name;
+      info.filename = process_key;
     }
     appendEvidenceSource(info, "NetworkEvent");
+    const auto format_port = [](const uint16_t port) {
+      return port == 0 ? std::string("-") : std::to_string(port);
+    };
+    const std::string protocol =
+        connection.protocol.empty() ? "N/A" : connection.protocol;
+    const std::string source_ip =
+        connection.source_ip.empty() ? "N/A" : connection.source_ip;
+    const std::string dest_ip =
+        connection.dest_ip.empty() ? "N/A" : connection.dest_ip;
+    const std::string direction =
+        connection.direction.empty() ? "N/A" : connection.direction;
+    const std::string action =
+        connection.action.empty() ? "N/A" : connection.action;
+
     appendTimelineArtifact(
-        info, "[NetworkEvent] " + connection.protocol + ":" +
-                  connection.local_address + "->" + connection.remote_address +
-                  ":" + std::to_string(connection.port));
+        info,
+        "[NetworkEvent] id=" + std::to_string(connection.event_id) + " " +
+            protocol + " " + source_ip + ":" + format_port(connection.source_port) +
+            "->" + dest_ip + ":" + format_port(connection.dest_port) + " " +
+            "pid=" + std::to_string(connection.process_id) + " dir=" + direction +
+            " action=" + action);
   }
 
   logger->info("Этап 5/7 завершен: {} процессов в агрегате", process_data_.size());

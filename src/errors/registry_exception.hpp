@@ -5,11 +5,67 @@
 
 #include "errors/app_exception.hpp"
 
-#include <fmt/format.h>
-
+#include <cstdint>
+#include <sstream>
 #include <string>
 
 namespace RegistryAnalysis {
+namespace detail {
+
+/// @brief Формирует сообщение об ошибке доступа к значению.
+inline std::string buildInvalidValueAccessMessage(
+    const std::string& value_name, const std::string& expected_type,
+    const std::string& actual_type) {
+  std::ostringstream stream;
+  stream << "Некорректный доступ к значению \"" << value_name
+         << "\": ожидался тип \"" << expected_type
+         << "\", фактический тип \"" << actual_type << "\"";
+  return stream.str();
+}
+
+/// @brief Формирует сообщение об ошибке преобразования значения.
+inline std::string buildValueConversionMessage(const std::string& value_name,
+                                               const std::string& details) {
+  std::ostringstream stream;
+  stream << "Ошибка преобразования значения \"" << value_name << "\": \""
+         << details << "\"";
+  return stream.str();
+}
+
+/// @brief Формирует сообщение о неподдерживаемом типе в hex-формате.
+inline std::string buildUnsupportedTypeMessage(const uint32_t type) {
+  std::ostringstream stream;
+  stream << "Неподдерживаемый тип данных реестра: 0x" << std::uppercase
+         << std::hex << type;
+  return stream.str();
+}
+
+/// @brief Формирует сообщение о несовместимости типов.
+inline std::string buildTypeCompatibilityMessage(
+    const std::string& value_name, const std::string& expected_type,
+    const std::string& actual_type) {
+  std::ostringstream stream;
+  stream << "Несовместимость типов для значения \"" << value_name
+         << "\": ожидался \"" << expected_type << "\", фактический \""
+         << actual_type << "\"";
+  return stream.str();
+}
+
+/// @brief Формирует сообщение об использовании неоткрытого реестра.
+inline std::string buildRegistryNotOpenMessage(const std::string& details) {
+  std::ostringstream stream;
+  stream << "Ошибка доступа к неоткрытому реестру: \"" << details << "\"";
+  return stream.str();
+}
+
+/// @brief Формирует сообщение о невалидном пути.
+inline std::string buildInvalidPathMessage(const std::string& path) {
+  std::ostringstream stream;
+  stream << "Неверный путь в реестре: \"" << path << "\"";
+  return stream.str();
+}
+
+}
 
 /// @class RegistryException
 /// @brief Базовый класс для ошибок, связанных с реестром
@@ -94,10 +150,8 @@ class InvalidValueAccess : public RegistryException {
   explicit InvalidValueAccess(const std::string& expected_type,
                               const std::string& actual_type,
                               const std::string& value_name = "")
-      : RegistryException(
-            fmt::format("Некорректный доступ к значению \"{}\": "
-                        "ожидался тип \"{}\", фактический тип \"{}\"",
-                        value_name, expected_type, actual_type)) {}
+      : RegistryException(detail::buildInvalidValueAccessMessage(
+            value_name, expected_type, actual_type)) {}
 };
 
 /// @class ValueConversionError
@@ -110,8 +164,7 @@ class ValueConversionError : public RegistryException {
   explicit ValueConversionError(const std::string& value_name,
                                 const std::string& details)
       : RegistryException(
-            fmt::format("Ошибка преобразования значения \"{}\": \"{}\"",
-                        value_name, details)) {}
+            detail::buildValueConversionMessage(value_name, details)) {}
 };
 
 /// @class UnsupportedTypeError
@@ -121,8 +174,7 @@ class UnsupportedTypeError : public RegistryException {
   /// @brief Формирует ошибку неподдерживаемого типа реестра
   /// @param type Числовой код типа из источника
   explicit UnsupportedTypeError(uint32_t type)
-      : RegistryException(
-            fmt::format("Неподдерживаемый тип данных реестра: 0x{:X}", type)) {}
+      : RegistryException(detail::buildUnsupportedTypeMessage(type)) {}
 };
 
 /// @class TypeCompatibilityError
@@ -136,10 +188,8 @@ class TypeCompatibilityError : public RegistryException {
   explicit TypeCompatibilityError(const std::string& expected_type,
                                   const std::string& actual_type,
                                   const std::string& value_name = "")
-      : RegistryException(
-            fmt::format("Несовместимость типов для значения "
-                        "\"{}\": ожидался \"{}\", фактический \"{}\"",
-                        value_name, expected_type, actual_type)) {}
+      : RegistryException(detail::buildTypeCompatibilityMessage(
+            value_name, expected_type, actual_type)) {}
 };
 
 /// @class RegistryNotOpenError
@@ -149,8 +199,7 @@ class RegistryNotOpenError : public RegistryException {
   /// @brief Формирует ошибку доступа к неинициализированному парсеру
   /// @param details Контекст, в котором обнаружен некорректный доступ
   explicit RegistryNotOpenError(const std::string& details)
-      : RegistryException(fmt::format(
-            "Ошибка доступа к неоткрытому реестру: \"{}\"", details)) {}
+      : RegistryException(detail::buildRegistryNotOpenMessage(details)) {}
 };
 
 /// @class InvalidPathError
@@ -160,8 +209,7 @@ class InvalidPathError : public RegistryException {
   /// @brief Формирует ошибку некорректного пути реестра
   /// @param path Путь, не прошедший валидацию
   explicit InvalidPathError(const std::string& path)
-      : RegistryException(
-            fmt::format("Неверный путь в реестре: \"{}\"", path)) {}
+      : RegistryException(detail::buildInvalidPathMessage(path)) {}
 };
 
 }
