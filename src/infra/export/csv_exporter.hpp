@@ -89,10 +89,14 @@ class CSVExporter {
   ///    - Первое/последнее наблюдение (UTC)
   ///    - Таймлайн артефактов
   ///    - Источники восстановления (RecoveredFrom)
+  ///    - Контекст пользователя и прав (Users/UserSIDs/LogonIDs/LogonTypes,
+  ///      ElevationType/ElevatedToken/IntegrityLevel/Privileges)
   ///    - Статус автозагрузки (Да/Нет)
   ///    - Следы удаления файла в Amcache (Да/Нет)
   ///    - Версия ПО
-  ///    - Сетевые подключения
+  ///    - Сетевые подключения + поля сетевого контекста
+  ///      (NetworkEventIDs/NetworkTimestamps/NetworkProcessIDs/
+  ///       NetworkApplications/NetworkDirections/NetworkActions)
   ///    - Количество запусков
   ///    - Источники доказательств (EvidenceSources)
   ///    - Флаги подозрительности (TamperFlags)

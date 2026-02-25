@@ -62,7 +62,6 @@ target_include_directories(program_traces PRIVATE
     ${LIBS_BASE_PATH}/libevtx/include
     ${LIBS_BASE_PATH}/libevt/include
     ${LIBS_BASE_PATH}/libspdlog/include
-    ${LIBS_BASE_PATH}/libfmt/include
 )
 
 set(THIRD_PARTY_STATIC_LIBS
@@ -71,7 +70,6 @@ set(THIRD_PARTY_STATIC_LIBS
     ${LIBS_BASE_PATH}/libevtx/libevtx.a
     ${LIBS_BASE_PATH}/libevt/libevt.a
     ${LIBS_BASE_PATH}/libspdlog/libspdlog.a
-    ${LIBS_BASE_PATH}/libfmt/libfmt.a
 )
 
 set(PROGRAM_TRACES_HAVE_LIBESEDB 0)

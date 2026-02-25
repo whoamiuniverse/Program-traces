@@ -1,10 +1,16 @@
 #include "eventlog_analyzer.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <filesystem>
+#include <limits>
+#include <optional>
+#include <sstream>
 #include <string_view>
+#include <unordered_map>
 
+#include "analysis/artifacts/common/evidence_utils.hpp"
 #include "infra/config/config.hpp"
 #include "infra/logging/logger.hpp"
 #include "common/utils.hpp"
@@ -59,6 +65,260 @@ std::string formatEventTimestamp(const uint64_t raw_timestamp) {
   }
 
   return convert_run_times(raw_timestamp);
+}
+
+const std::string* findDataValue(
+    const std::unordered_map<std::string, std::string>& data,
+    const std::initializer_list<std::string_view>& keys) {
+  for (const std::string_view key : keys) {
+    if (const auto it = data.find(std::string(key)); it != data.end()) {
+      return &it->second;
+    }
+  }
+  return nullptr;
+}
+
+std::optional<uint16_t> parseUInt16Flexible(std::string raw_value) {
+  trim(raw_value);
+  if (raw_value.empty()) return std::nullopt;
+
+  uint16_t parsed_value = 0;
+  if (tryParseUInt16(raw_value, parsed_value)) {
+    return parsed_value;
+  }
+
+  try {
+    const unsigned long parsed_long = std::stoul(raw_value, nullptr, 0);
+    if (parsed_long <= std::numeric_limits<uint16_t>::max()) {
+      return static_cast<uint16_t>(parsed_long);
+    }
+  } catch (...) {
+  }
+
+  return std::nullopt;
+}
+
+std::optional<uint32_t> parseUInt32Flexible(std::string raw_value) {
+  trim(raw_value);
+  if (raw_value.empty()) return std::nullopt;
+
+  uint32_t parsed_value = 0;
+  if (tryParseUInt32(raw_value, parsed_value)) {
+    return parsed_value;
+  }
+
+  try {
+    const unsigned long parsed_long = std::stoul(raw_value, nullptr, 0);
+    if (parsed_long <= std::numeric_limits<uint32_t>::max()) {
+      return static_cast<uint32_t>(parsed_long);
+    }
+  } catch (...) {
+  }
+
+  return std::nullopt;
+}
+
+std::string normalizeProtocol(const std::string& raw_protocol) {
+  std::string protocol = trim_copy(raw_protocol);
+  if (protocol.empty()) return {};
+
+  const std::string lowered = to_lower(protocol);
+  if (lowered == "6") return "TCP";
+  if (lowered == "17") return "UDP";
+  if (lowered == "1") return "ICMP";
+  if (lowered == "58") return "ICMPv6";
+  if (lowered == "tcp") return "TCP";
+  if (lowered == "udp") return "UDP";
+  if (lowered == "icmp") return "ICMP";
+  if (lowered == "icmpv6") return "ICMPv6";
+  return protocol;
+}
+
+std::string normalizeDirection(const std::string& raw_direction) {
+  const std::string lowered = to_lower(trim_copy(raw_direction));
+  if (lowered.empty()) return {};
+  if (lowered == "%%14592" || lowered == "outbound") return "outbound";
+  if (lowered == "%%14593" || lowered == "inbound") return "inbound";
+  return lowered;
+}
+
+std::string normalizeAction(std::string raw_action, const uint32_t event_id) {
+  trim(raw_action);
+  const std::string lowered = to_lower(raw_action);
+  if (lowered == "%%14500" || lowered == "allow" || lowered == "allowed") {
+    return "allow";
+  }
+  if (lowered == "%%14501" || lowered == "block" || lowered == "blocked" ||
+      lowered == "deny" || lowered == "denied") {
+    return "block";
+  }
+
+  if (event_id == 5156) return "allow";
+  if (event_id == 5157) return "block";
+  return raw_action;
+}
+
+std::string normalizeLogonType(std::string raw_type) {
+  trim(raw_type);
+  if (raw_type.empty()) return {};
+
+  const auto logon_type = parseUInt32Flexible(raw_type);
+  if (!logon_type.has_value()) return raw_type;
+
+  switch (*logon_type) {
+    case 2:
+      return "2(Interactive)";
+    case 3:
+      return "3(Network)";
+    case 4:
+      return "4(Batch)";
+    case 5:
+      return "5(Service)";
+    case 7:
+      return "7(Unlock)";
+    case 8:
+      return "8(NetworkCleartext)";
+    case 9:
+      return "9(NewCredentials)";
+    case 10:
+      return "10(RemoteInteractive)";
+    case 11:
+      return "11(CachedInteractive)";
+    default:
+      return std::to_string(*logon_type);
+  }
+}
+
+std::string normalizeElevationType(std::string raw_type) {
+  trim(raw_type);
+  const std::string lowered = to_lower(raw_type);
+  if (lowered.empty()) return {};
+  if (lowered == "%%1936" || lowered == "1") return "TokenElevationTypeDefault";
+  if (lowered == "%%1937" || lowered == "2") return "TokenElevationTypeFull";
+  if (lowered == "%%1938" || lowered == "3") return "TokenElevationTypeLimited";
+  return raw_type;
+}
+
+std::string normalizeElevatedToken(std::string raw_value) {
+  trim(raw_value);
+  const std::string lowered = to_lower(raw_value);
+  if (lowered.empty()) return {};
+  if (lowered == "%%1842" || lowered == "yes" || lowered == "true" ||
+      lowered == "1") {
+    return "Yes";
+  }
+  if (lowered == "%%1843" || lowered == "no" || lowered == "false" ||
+      lowered == "0") {
+    return "No";
+  }
+  return raw_value;
+}
+
+std::string normalizeIntegrityLevel(std::string raw_value) {
+  trim(raw_value);
+  const std::string lowered = to_lower(raw_value);
+  if (lowered.empty()) return {};
+
+  if (lowered == "s-1-16-0") return "Untrusted";
+  if (lowered == "s-1-16-4096") return "Low";
+  if (lowered == "s-1-16-8192") return "Medium";
+  if (lowered == "s-1-16-8448") return "MediumPlus";
+  if (lowered == "s-1-16-12288") return "High";
+  if (lowered == "s-1-16-16384") return "System";
+  if (lowered == "s-1-16-20480") return "ProtectedProcess";
+
+  return raw_value;
+}
+
+void appendPrivilegesFromString(ProcessInfo& info, std::string raw_privileges) {
+  trim(raw_privileges);
+  if (raw_privileges.empty() || raw_privileges == "-") return;
+
+  for (char& ch : raw_privileges) {
+    if (ch == ',' || ch == ';' || ch == '|' || ch == '\t' || ch == '\n') {
+      ch = ' ';
+    }
+  }
+
+  std::istringstream stream(raw_privileges);
+  std::string token;
+  while (stream >> token) {
+    trim(token);
+    if (!token.empty() && token != "-") {
+      EvidenceUtils::appendUniqueToken(info.privileges, std::move(token));
+    }
+  }
+}
+
+void enrichProcessContextFromEvent(const std::unordered_map<std::string, std::string>& data,
+                                   ProcessInfo& info) {
+  const std::string user_name =
+      findDataValue(data, {"SubjectUserName", "TargetUserName", "UserName"}) == nullptr
+          ? ""
+          : *findDataValue(data, {"SubjectUserName", "TargetUserName", "UserName"});
+  const std::string user_domain =
+      findDataValue(data, {"SubjectDomainName", "TargetDomainName", "UserDomain"}) ==
+              nullptr
+          ? ""
+          : *findDataValue(data, {"SubjectDomainName", "TargetDomainName", "UserDomain"});
+
+  if (!user_name.empty() && user_name != "-") {
+    std::string normalized_user = trim_copy(user_name);
+    if (!user_domain.empty() && user_domain != "-" &&
+        to_lower(user_domain) != "n/a") {
+      normalized_user = trim_copy(user_domain) + "\\" + normalized_user;
+    }
+    EvidenceUtils::appendUniqueToken(info.users, std::move(normalized_user));
+  }
+
+  if (const auto* sid = findDataValue(
+          data, {"SubjectUserSid", "TargetUserSid", "UserSid", "SecurityID"});
+      sid != nullptr) {
+    EvidenceUtils::appendUniqueToken(info.user_sids, *sid);
+  }
+
+  if (const auto* logon_id = findDataValue(
+          data, {"SubjectLogonId", "TargetLogonId", "LogonId"});
+      logon_id != nullptr) {
+    EvidenceUtils::appendUniqueToken(info.logon_ids, *logon_id);
+  }
+
+  if (const auto* logon_type = findDataValue(data, {"LogonType"});
+      logon_type != nullptr) {
+    EvidenceUtils::appendUniqueToken(info.logon_types,
+                                     normalizeLogonType(*logon_type));
+  }
+
+  if (const auto* elevation = findDataValue(data, {"TokenElevationType"});
+      elevation != nullptr) {
+    const std::string normalized_elevation = normalizeElevationType(*elevation);
+    if (!normalized_elevation.empty()) {
+      info.elevation_type = normalized_elevation;
+    }
+  }
+
+  if (const auto* elevated_token = findDataValue(data, {"ElevatedToken"});
+      elevated_token != nullptr) {
+    const std::string normalized_elevated_token =
+        normalizeElevatedToken(*elevated_token);
+    if (!normalized_elevated_token.empty()) {
+      info.elevated_token = normalized_elevated_token;
+    }
+  }
+
+  if (const auto* integrity_level =
+          findDataValue(data, {"MandatoryLabel", "IntegrityLevel"});
+      integrity_level != nullptr) {
+    const std::string normalized_integrity = normalizeIntegrityLevel(*integrity_level);
+    if (!normalized_integrity.empty()) {
+      info.integrity_level = normalized_integrity;
+    }
+  }
+
+  if (const auto* privileges = findDataValue(data, {"PrivilegeList"});
+      privileges != nullptr) {
+    appendPrivilegesFromString(info, *privileges);
+  }
 }
 
 }  // namespace
@@ -188,16 +448,29 @@ void EventLogAnalyzer::collect(
           for (const auto& event :
                parser->getEventsByType(file_path, event_id)) {
             const auto& data = event->getData();
-            if (auto it = data.find("NewProcessName"); it != data.end()) {
-              std::string name = it->second;
+            const auto* process_name = findDataValue(
+                data, {"NewProcessName", "ProcessName", "Application", "Image"});
+            if (process_name != nullptr) {
+              std::string name = trim_copy(*process_name);
+              if (name.empty()) continue;
+
               ProcessInfo& info = process_data[name];
               info.filename = name;
+
+              if (const auto* command_line = findDataValue(
+                      data, {"CommandLine", "ProcessCommandLine"});
+                  command_line != nullptr) {
+                if (info.command.empty()) {
+                  info.command = *command_line;
+                }
+              }
               try {
                 info.run_times.push_back(formatEventTimestamp(event->getTimestamp()));
               } catch (const std::exception& e) {
                 logger->debug("{}", e.what());
               }
               info.run_count++;
+              enrichProcessContextFromEvent(data, info);
             }
           }
         } catch (const std::exception& e) {
@@ -215,26 +488,85 @@ void EventLogAnalyzer::collect(
                parser->getEventsByType(file_path, event_id)) {
             const auto& data = event->getData();
             NetworkConnection conn;
-            if (data.contains("ProcessName")) {
-              conn.process_name = data.at("ProcessName");
-            } else {
-              continue;
+
+            conn.event_id = event_id;
+            conn.timestamp = formatEventTimestamp(event->getTimestamp());
+
+            if (const auto* process_name =
+                    findDataValue(data, {"ProcessName", "NewProcessName", "Image"});
+                process_name != nullptr) {
+              conn.process_name = *process_name;
             }
-            if (data.contains("LocalAddress")) {
-              conn.local_address = data.at("LocalAddress");
-            }
-            if (data.contains("RemoteAddress")) {
-              conn.remote_address = data.at("RemoteAddress");
-            }
-            if (data.contains("Port")) {
-              uint16_t parsed_port = 0;
-              if (tryParseUInt16(data.at("Port"), parsed_port)) {
-                conn.port = parsed_port;
-              } else {
-                conn.port = 0;
+
+            if (const auto* application = findDataValue(
+                    data, {"Application", "ApplicationPath", "AppPath"});
+                application != nullptr) {
+              conn.application = *application;
+              if (conn.process_name.empty()) {
+                conn.process_name = fs::path(*application).filename().string();
               }
             }
-            if (data.contains("Protocol")) conn.protocol = data.at("Protocol");
+
+            if (conn.process_name.empty() && conn.application.empty()) {
+              continue;
+            }
+
+            if (const auto* process_id = findDataValue(
+                    data, {"ProcessID", "ProcessId", "ExecutionProcessID", "PID"});
+                process_id != nullptr) {
+              if (const auto parsed_pid = parseUInt32Flexible(*process_id);
+                  parsed_pid.has_value()) {
+                conn.process_id = *parsed_pid;
+              }
+            }
+
+            if (const auto* source_ip =
+                    findDataValue(data, {"SourceAddress", "LocalAddress", "SourceIP"});
+                source_ip != nullptr) {
+              conn.source_ip = *source_ip;
+            }
+
+            if (const auto* dest_ip =
+                    findDataValue(data, {"DestAddress", "RemoteAddress", "DestIP"});
+                dest_ip != nullptr) {
+              conn.dest_ip = *dest_ip;
+            }
+
+            if (const auto* source_port =
+                    findDataValue(data, {"SourcePort", "LocalPort"});
+                source_port != nullptr) {
+              if (const auto parsed_source_port = parseUInt16Flexible(*source_port);
+                  parsed_source_port.has_value()) {
+                conn.source_port = *parsed_source_port;
+              }
+            }
+
+            if (const auto* dest_port =
+                    findDataValue(data, {"DestPort", "RemotePort", "Port"});
+                dest_port != nullptr) {
+              if (const auto parsed_dest_port = parseUInt16Flexible(*dest_port);
+                  parsed_dest_port.has_value()) {
+                conn.dest_port = *parsed_dest_port;
+              }
+            }
+
+            if (const auto* protocol = findDataValue(data, {"Protocol"});
+                protocol != nullptr) {
+              conn.protocol = normalizeProtocol(*protocol);
+            }
+
+            if (const auto* direction = findDataValue(data, {"Direction"});
+                direction != nullptr) {
+              conn.direction = normalizeDirection(*direction);
+            }
+
+            if (const auto* action = findDataValue(data, {"Action"});
+                action != nullptr) {
+              conn.action = normalizeAction(*action, event_id);
+            } else {
+              conn.action = normalizeAction("", event_id);
+            }
+
             network_connections.push_back(conn);
           }
         } catch (const std::exception& e) {

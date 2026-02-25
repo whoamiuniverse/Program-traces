@@ -183,6 +183,134 @@ std::string makeTimelineLabel(const std::string& source,
   return stream.str();
 }
 
+/// @brief Извлекает значение `key=value` из details (поиск без учета регистра).
+/// @param details Строка details.
+/// @param key_lower Искомый ключ в lower-case c символом `=` (например `sid=`).
+/// @return Значение после ключа либо `std::nullopt`.
+std::optional<std::string> extractDetailsValue(const std::string& details,
+                                               const std::string& key_lower) {
+  if (details.empty() || key_lower.empty()) return std::nullopt;
+
+  const std::string lowered = toLowerAscii(details);
+  const std::size_t key_pos = lowered.find(key_lower);
+  if (key_pos == std::string::npos) return std::nullopt;
+
+  std::size_t value_start = key_pos + key_lower.size();
+  while (value_start < details.size() &&
+         std::isspace(static_cast<unsigned char>(details[value_start])) != 0) {
+    ++value_start;
+  }
+
+  std::size_t value_end = value_start;
+  while (value_end < details.size()) {
+    const char ch = details[value_end];
+    if (ch == ',' || ch == ';') break;
+    ++value_end;
+  }
+
+  std::string value = details.substr(value_start, value_end - value_start);
+  trim(value);
+  if (value.empty()) return std::nullopt;
+  return value;
+}
+
+/// @brief Добавляет список привилегий из сырой строки в `ProcessInfo`.
+/// @param info Запись процесса.
+/// @param raw_privileges Строка с привилегиями.
+void appendPrivileges(ProcessInfo& info, std::string raw_privileges) {
+  trim(raw_privileges);
+  if (raw_privileges.empty() || raw_privileges == "-") return;
+
+  for (char& ch : raw_privileges) {
+    if (ch == ',' || ch == ';' || ch == '|' || ch == '\t' || ch == '\n') {
+      ch = ' ';
+    }
+  }
+
+  std::istringstream stream(raw_privileges);
+  std::string privilege;
+  while (stream >> privilege) {
+    trim(privilege);
+    if (!privilege.empty() && privilege != "-") {
+      appendUniqueToken(info.privileges, std::move(privilege));
+    }
+  }
+}
+
+/// @brief Обогащает запись процесса identity/privilege-контекстом из details.
+/// @param info Запись процесса.
+/// @param details Строка details.
+void enrichProcessIdentityFromDetails(ProcessInfo& info,
+                                      const std::string& details) {
+  if (details.empty()) return;
+
+  if (const auto user = extractDetailsValue(details, "user=");
+      user.has_value()) {
+    appendUniqueToken(info.users, *user);
+  }
+  if (const auto sid = extractDetailsValue(details, "sid=");
+      sid.has_value()) {
+    appendUniqueToken(info.user_sids, *sid);
+  }
+  if (const auto logon_id = extractDetailsValue(details, "logonid=");
+      logon_id.has_value()) {
+    appendUniqueToken(info.logon_ids, *logon_id);
+  }
+  if (const auto logon_id_alt = extractDetailsValue(details, "logon_id=");
+      logon_id_alt.has_value()) {
+    appendUniqueToken(info.logon_ids, *logon_id_alt);
+  }
+  if (const auto logon_type = extractDetailsValue(details, "logontype=");
+      logon_type.has_value()) {
+    appendUniqueToken(info.logon_types, *logon_type);
+  }
+  if (const auto logon_type_alt = extractDetailsValue(details, "logon_type=");
+      logon_type_alt.has_value()) {
+    appendUniqueToken(info.logon_types, *logon_type_alt);
+  }
+
+  if (const auto elevation_type = extractDetailsValue(details, "elevationtype=");
+      elevation_type.has_value()) {
+    if (info.elevation_type.empty()) {
+      info.elevation_type = *elevation_type;
+    }
+  }
+  if (const auto elevation_type_alt =
+          extractDetailsValue(details, "tokenelevationtype=");
+      elevation_type_alt.has_value()) {
+    if (info.elevation_type.empty()) {
+      info.elevation_type = *elevation_type_alt;
+    }
+  }
+  if (const auto elevated_token = extractDetailsValue(details, "elevatedtoken=");
+      elevated_token.has_value()) {
+    if (info.elevated_token.empty()) {
+      info.elevated_token = *elevated_token;
+    }
+  }
+  if (const auto integrity_level = extractDetailsValue(details, "integritylevel=");
+      integrity_level.has_value()) {
+    if (info.integrity_level.empty()) {
+      info.integrity_level = *integrity_level;
+    }
+  }
+  if (const auto integrity_level_alt = extractDetailsValue(details, "mandatorylabel=");
+      integrity_level_alt.has_value()) {
+    if (info.integrity_level.empty()) {
+      info.integrity_level = *integrity_level_alt;
+    }
+  }
+
+  if (const auto privileges = extractDetailsValue(details, "privileges=");
+      privileges.has_value()) {
+    appendPrivileges(info, *privileges);
+  }
+  if (const auto privilege = extractDetailsValue(details, "privilege=");
+      privilege.has_value()) {
+    appendPrivileges(info, *privilege);
+  }
+}
+
 /// @brief Возвращает bucket процесса, создавая его при необходимости.
 /// @param process_data Общая карта процессов.
 /// @param executable_path Ключ процесса (путь/имя).
@@ -213,6 +341,7 @@ void addExecutionEvidence(std::map<std::string, ProcessInfo>& process_data,
   appendEvidenceSource(info, source);
   addTimestamp(info, timestamp);
   appendTimelineArtifact(info, makeTimelineLabel(source, timestamp, details));
+  enrichProcessIdentityFromDetails(info, details);
 }
 
 /// @brief Находит пользовательские hive (`NTUSER.DAT`) в профилях.

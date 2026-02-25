@@ -28,8 +28,28 @@ struct AggregatedData {
   std::string executable_name;  // Отображаемое имя исполняемого файла
   std::set<std::string> paths;  // Все пути для данного файла
   std::vector<std::string> run_times;
+  std::set<std::string> users;
+  std::set<std::string> user_sids;
+  std::set<std::string> logon_ids;
+  std::set<std::string> logon_types;
+  std::set<std::string> elevation_types;
+  std::set<std::string> elevated_tokens;
+  std::set<std::string> integrity_levels;
+  std::set<std::string> privileges;
   std::set<std::string> autorun_locations;
   std::vector<WindowsDiskAnalysis::NetworkConnection> network_connections;
+  std::set<std::string> network_event_ids;
+  std::set<std::string> network_timestamps;
+  std::set<std::string> network_process_names;
+  std::set<std::string> network_process_ids;
+  std::set<std::string> network_applications;
+  std::set<std::string> network_protocols;
+  std::set<std::string> network_source_ips;
+  std::set<std::string> network_source_ports;
+  std::set<std::string> network_dest_ips;
+  std::set<std::string> network_dest_ports;
+  std::set<std::string> network_directions;
+  std::set<std::string> network_actions;
   std::vector<VolumeInfo> volumes;
   std::vector<FileMetric> metrics;
   uint32_t run_count = 0;
@@ -593,10 +613,23 @@ void CSVExporter::exportToCSV(
          << "РазмерФайла" << kCsvDelimiter << "ВременаЗапуска" << kCsvDelimiter
          << "FirstSeenUTC" << kCsvDelimiter << "LastSeenUTC" << kCsvDelimiter
          << "TimelineArtifacts" << kCsvDelimiter << "RecoveredFrom"
-         << kCsvDelimiter << "Автозагрузка" << kCsvDelimiter << "СледыУдаления"
-         << kCsvDelimiter << "КоличествоЗапусков" << kCsvDelimiter
-         << "Тома(серийный:тип)" << kCsvDelimiter << "СетевыеПодключения"
-         << kCsvDelimiter << "ФайловыеМетрики" << kCsvDelimiter
+         << kCsvDelimiter << "Users" << kCsvDelimiter << "UserSIDs"
+         << kCsvDelimiter << "LogonIDs" << kCsvDelimiter << "LogonTypes"
+         << kCsvDelimiter << "ElevationType" << kCsvDelimiter
+         << "ElevatedToken" << kCsvDelimiter << "IntegrityLevel"
+         << kCsvDelimiter << "Privileges" << kCsvDelimiter << "Автозагрузка"
+         << kCsvDelimiter << "СледыУдаления" << kCsvDelimiter
+         << "КоличествоЗапусков" << kCsvDelimiter << "Тома(серийный:тип)"
+         << kCsvDelimiter << "СетевыеПодключения" << kCsvDelimiter
+         << "NetworkEventIDs" << kCsvDelimiter << "NetworkTimestamps"
+         << kCsvDelimiter << "NetworkProcessNames" << kCsvDelimiter
+         << "NetworkProcessIDs" << kCsvDelimiter << "NetworkApplications"
+         << kCsvDelimiter << "NetworkProtocols" << kCsvDelimiter
+         << "NetworkSourceIPs" << kCsvDelimiter << "NetworkSourcePorts"
+         << kCsvDelimiter << "NetworkDestIPs" << kCsvDelimiter
+         << "NetworkDestPorts" << kCsvDelimiter << "NetworkDirections"
+         << kCsvDelimiter << "NetworkActions" << kCsvDelimiter
+         << "ФайловыеМетрики" << kCsvDelimiter
          << "EvidenceSources" << kCsvDelimiter << "TamperFlags\n";
 
     // Основная карта для агрегации данных по нормализованному идентификатору
@@ -655,6 +688,20 @@ void CSVExporter::exportToCSV(
                                 info.volumes.end());
             data.metrics.insert(data.metrics.end(), info.metrics.begin(),
                                 info.metrics.end());
+            data.users.insert(info.users.begin(), info.users.end());
+            data.user_sids.insert(info.user_sids.begin(), info.user_sids.end());
+            data.logon_ids.insert(info.logon_ids.begin(), info.logon_ids.end());
+            data.logon_types.insert(info.logon_types.begin(), info.logon_types.end());
+            data.privileges.insert(info.privileges.begin(), info.privileges.end());
+            if (!info.elevation_type.empty()) {
+              data.elevation_types.insert(info.elevation_type);
+            }
+            if (!info.elevated_token.empty()) {
+              data.elevated_tokens.insert(info.elevated_token);
+            }
+            if (!info.integrity_level.empty()) {
+              data.integrity_levels.insert(info.integrity_level);
+            }
 
             for (const auto& source : info.evidence_sources) {
               addEvidenceSource(data, source);
@@ -695,15 +742,80 @@ void CSVExporter::exportToCSV(
 
     // 3. Обрабатываем сетевые подключения
     for (const auto& conn : network_connections) {
-      processEntry(conn.process_name,
+      std::string network_key = conn.process_name;
+      if (network_key.empty()) {
+        network_key = conn.application;
+      }
+      if (network_key.empty()) continue;
+
+      processEntry(network_key,
                    [&](AggregatedData& data, const std::string& path) {
                      data.paths.insert(path);
                      data.network_connections.push_back(conn);
                      addEvidenceSource(data, "NetworkEvent");
+
+                     if (conn.event_id > 0) {
+                       data.network_event_ids.insert(std::to_string(conn.event_id));
+                     }
+                     if (!conn.timestamp.empty()) {
+                       data.network_timestamps.insert(conn.timestamp);
+                     }
+                     if (!conn.process_name.empty()) {
+                       data.network_process_names.insert(conn.process_name);
+                     }
+                     if (conn.process_id > 0) {
+                       data.network_process_ids.insert(
+                           std::to_string(conn.process_id));
+                     }
+                     if (!conn.application.empty()) {
+                       data.network_applications.insert(conn.application);
+                     }
+                     if (!conn.protocol.empty()) {
+                       data.network_protocols.insert(conn.protocol);
+                     }
+                     if (!conn.source_ip.empty()) {
+                       data.network_source_ips.insert(conn.source_ip);
+                     }
+                     if (conn.source_port > 0) {
+                       data.network_source_ports.insert(
+                           std::to_string(conn.source_port));
+                     }
+                     if (!conn.dest_ip.empty()) {
+                       data.network_dest_ips.insert(conn.dest_ip);
+                     }
+                     if (conn.dest_port > 0) {
+                       data.network_dest_ports.insert(std::to_string(conn.dest_port));
+                     }
+                     if (!conn.direction.empty()) {
+                       data.network_directions.insert(conn.direction);
+                     }
+                     if (!conn.action.empty()) {
+                       data.network_actions.insert(conn.action);
+                     }
+
+                     const auto port_to_string = [](const uint16_t value) {
+                       return value == 0 ? std::string("-")
+                                         : std::to_string(value);
+                     };
+
+                     const std::string protocol =
+                         conn.protocol.empty() ? "N/A" : conn.protocol;
+                     const std::string source_ip =
+                         conn.source_ip.empty() ? "N/A" : conn.source_ip;
+                     const std::string dest_ip =
+                         conn.dest_ip.empty() ? "N/A" : conn.dest_ip;
+                     const std::string direction =
+                         conn.direction.empty() ? "N/A" : conn.direction;
+                     const std::string action =
+                         conn.action.empty() ? "N/A" : conn.action;
+
                      data.timeline_artifacts.insert(
-                         "[NetworkEvent] " + conn.protocol + ":" +
-                         conn.local_address + "->" + conn.remote_address + ":" +
-                         std::to_string(conn.port));
+                         "[NetworkEvent] id=" + std::to_string(conn.event_id) + " " +
+                         protocol + " " + source_ip + ":" +
+                         port_to_string(conn.source_port) + "->" + dest_ip +
+                         ":" + port_to_string(conn.dest_port) + " pid=" +
+                         std::to_string(conn.process_id) + " dir=" + direction +
+                         " action=" + action);
                    });
     }
 
@@ -772,6 +884,14 @@ void CSVExporter::exportToCSV(
       std::vector<std::string> unique_run_times = row.run_times;
       sortAndUnique(unique_run_times);
       std::string run_times_str = joinStrings(unique_run_times);
+      std::string users_str = joinStrings(row.users);
+      std::string user_sids_str = joinStrings(row.user_sids);
+      std::string logon_ids_str = joinStrings(row.logon_ids);
+      std::string logon_types_str = joinStrings(row.logon_types);
+      std::string elevation_types_str = joinStrings(row.elevation_types);
+      std::string elevated_tokens_str = joinStrings(row.elevated_tokens);
+      std::string integrity_levels_str = joinStrings(row.integrity_levels);
+      std::string privileges_str = joinStrings(row.privileges);
 
       // Форматирование автозагрузки
       std::string autorun_str;
@@ -794,13 +914,40 @@ void CSVExporter::exportToCSV(
       // Форматирование сетевых подключений
       std::vector<std::string> network_values;
       network_values.reserve(row.network_connections.size());
+      const auto port_to_string = [](const uint16_t value) {
+        return value == 0 ? std::string("-") : std::to_string(value);
+      };
       for (const auto& conn : row.network_connections) {
-        network_values.push_back(conn.protocol + ":" + conn.local_address +
-                                 "->" + conn.remote_address + ":" +
-                                 std::to_string(conn.port));
+        const std::string protocol = conn.protocol.empty() ? "N/A" : conn.protocol;
+        const std::string source_ip =
+            conn.source_ip.empty() ? "N/A" : conn.source_ip;
+        const std::string dest_ip = conn.dest_ip.empty() ? "N/A" : conn.dest_ip;
+        const std::string direction =
+            conn.direction.empty() ? "N/A" : conn.direction;
+        const std::string action = conn.action.empty() ? "N/A" : conn.action;
+        const std::string application =
+            conn.application.empty() ? "N/A" : conn.application;
+        network_values.push_back(
+            "id=" + std::to_string(conn.event_id) + " ts=" + conn.timestamp + " " +
+            protocol + " " + source_ip + ":" + port_to_string(conn.source_port) +
+            "->" + dest_ip + ":" + port_to_string(conn.dest_port) + " pid=" +
+            std::to_string(conn.process_id) + " app=" + application +
+            " dir=" + direction + " action=" + action);
       }
       sortAndUnique(network_values);
       std::string network_str = joinStrings(network_values);
+      std::string network_event_ids_str = joinStrings(row.network_event_ids);
+      std::string network_timestamps_str = joinStrings(row.network_timestamps);
+      std::string network_process_names_str = joinStrings(row.network_process_names);
+      std::string network_process_ids_str = joinStrings(row.network_process_ids);
+      std::string network_applications_str = joinStrings(row.network_applications);
+      std::string network_protocols_str = joinStrings(row.network_protocols);
+      std::string network_source_ips_str = joinStrings(row.network_source_ips);
+      std::string network_source_ports_str = joinStrings(row.network_source_ports);
+      std::string network_dest_ips_str = joinStrings(row.network_dest_ips);
+      std::string network_dest_ports_str = joinStrings(row.network_dest_ports);
+      std::string network_directions_str = joinStrings(row.network_directions);
+      std::string network_actions_str = joinStrings(row.network_actions);
 
       // Форматирование томов
       std::vector<std::string> volume_values;
@@ -830,10 +977,28 @@ void CSVExporter::exportToCSV(
            << escape(row.first_seen_utc) << kCsvDelimiter
            << escape(row.last_seen_utc) << kCsvDelimiter
            << escape(timeline_artifacts_str) << kCsvDelimiter
-           << escape(recovered_from_str) << kCsvDelimiter << escape(autorun_str)
+           << escape(recovered_from_str) << kCsvDelimiter << escape(users_str)
+           << kCsvDelimiter << escape(user_sids_str) << kCsvDelimiter
+           << escape(logon_ids_str) << kCsvDelimiter << escape(logon_types_str)
+           << kCsvDelimiter << escape(elevation_types_str) << kCsvDelimiter
+           << escape(elevated_tokens_str) << kCsvDelimiter
+           << escape(integrity_levels_str) << kCsvDelimiter
+           << escape(privileges_str) << kCsvDelimiter << escape(autorun_str)
            << kCsvDelimiter << escape(deleted_str)
            << kCsvDelimiter << row.run_count << kCsvDelimiter
            << escape(volumes_str) << kCsvDelimiter << escape(network_str)
+           << kCsvDelimiter << escape(network_event_ids_str)
+           << kCsvDelimiter << escape(network_timestamps_str)
+           << kCsvDelimiter << escape(network_process_names_str)
+           << kCsvDelimiter << escape(network_process_ids_str)
+           << kCsvDelimiter << escape(network_applications_str)
+           << kCsvDelimiter << escape(network_protocols_str)
+           << kCsvDelimiter << escape(network_source_ips_str)
+           << kCsvDelimiter << escape(network_source_ports_str)
+           << kCsvDelimiter << escape(network_dest_ips_str)
+           << kCsvDelimiter << escape(network_dest_ports_str)
+           << kCsvDelimiter << escape(network_directions_str)
+           << kCsvDelimiter << escape(network_actions_str)
            << kCsvDelimiter << escape(metrics_str) << kCsvDelimiter
            << escape(evidence_sources_str) << kCsvDelimiter
            << escape(tamper_flags_str) << "\n";
