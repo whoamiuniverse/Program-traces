@@ -3,15 +3,16 @@
 
 #pragma once
 
-#include <stdexcept>
+#include "errors/app_exception.hpp"
+
 #include <string>
 
 /// @class LoggerInitException
 /// @brief Исключение при инициализации логгера
-class LoggerInitException : public std::runtime_error {
+class LoggerInitException : public AppException {
  public:
   /// @brief Конструктор
   /// @param message Сообщение об ошибке
   explicit LoggerInitException(const std::string& message)
-      : std::runtime_error(message) {}
+      : AppException(message) {}
 };

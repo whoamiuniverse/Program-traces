@@ -5,17 +5,20 @@
 
 #include <map>
 #include <memory>
+#include <string>
 #include <vector>
 
+#include "analysis/artifacts/amcache/amcache_analyzer.hpp"
+#include "analysis/artifacts/autorun/autorun_analyzer.hpp"
+#include "analysis/artifacts/execution/execution_evidence_analyzer.hpp"
+#include "analysis/artifacts/event_logs/eventlog_analyzer.hpp"
+#include "analysis/artifacts/prefetch/prefetch_analyzer.hpp"
+#include "analysis/artifacts/recovery/usn/usn_analyzer.hpp"
+#include "analysis/artifacts/recovery/vss/vss_analyzer.hpp"
+#include "analysis/os/os_info.hpp"
+#include "errors/disk_analyzer_exception.hpp"
 #include "infra/config/config.hpp"
 #include "infra/export/csv_exporter.hpp"
-#include "amcache/amcache_analyzer.hpp"
-#include "autorun/autorun_analyzer.hpp"
-#include "execution/execution_evidence_analyzer.hpp"
-#include "event_logs/eventlog_analyzer.hpp"
-#include "prefetch/prefetch_analyzer.hpp"
-#include "recovery/usn/usn_analyzer.hpp"
-#include "recovery/vss/vss_analyzer.hpp"
 
 namespace WindowsDiskAnalysis {
 
@@ -33,6 +36,7 @@ class WindowsDiskAnalyzer {
   /// @param output_path Путь к каталогу или файлу для результатов
   /// @throws ConfigException При ошибках загрузки конфигурации
   /// @throws OSDetectionException При ошибках определения версии ОС
+  /// @throws DiskAnalyzerException При ошибках выбора/валидации диска
   /// @throws ParsingException При ошибках разбора артефактов
   /// @throws CsvExportException При ошибках экспорта отчёта
   void analyze(const std::string& output_path);
@@ -58,7 +62,7 @@ class WindowsDiskAnalyzer {
 
   /// @brief Проверяет наличие hive-файлов из конфигурации в корне диска
   /// @param config Загруженная конфигурация
-  /// @throws std::runtime_error Если ни один путь реестра не найден
+  /// @throws RegistryHiveValidationException Если hive не найден
   void validateRegistryHivePresence(const Config& config) const;
 
   /// @brief Проверяет наличие hive-файлов в указанном корне
@@ -81,7 +85,7 @@ class WindowsDiskAnalyzer {
 
   /// @brief Гарантирует наличие каталога для выхода
   /// @param path Путь к каталогу, который должен существовать
-  /// @throws std::runtime_error Если каталог невозможно создать
+  /// @throws OutputDirectoryException Если каталог невозможно создать
   static void ensureDirectoryExists(const std::string& path);
 
   /// @brief Загружает настройки CSV-экспорта из секции [CSVExport]
@@ -91,6 +95,34 @@ class WindowsDiskAnalyzer {
   /// @brief Загружает настройки [Logging] для debug-логов по артефактам
   /// @param config Загруженная конфигурация
   void loadLoggingOptions(const Config& config);
+
+  /// @brief Очищает внутреннее состояние перед новым запуском анализа.
+  void resetAnalysisState();
+
+  /// @brief Выполняет этап автозагрузки и мержит результат в `process_data_`.
+  void runAutorunStage();
+
+  /// @brief Выполняет этап Amcache и мержит результат в `process_data_`.
+  void runAmcacheStage();
+
+  /// @brief Выполняет этап Prefetch и мержит результат в `process_data_`.
+  void runPrefetchStage();
+
+  /// @brief Выполняет этап EventLog и обновляет `process_data_`.
+  void runEventLogStage();
+
+  /// @brief Выполняет этап доп. источников исполнения и network timeline merge.
+  void runExecutionStage();
+
+  /// @brief Выполняет этап recovery (USN/VSS) и мержит восстановленные evidence.
+  void runRecoveryStage();
+
+  /// @brief Применяет глобальные tamper-флаги ко всем процессам.
+  void applyGlobalTamperFlags();
+
+  /// @brief Экспортирует агрегированные данные в CSV.
+  /// @param output_path Путь к выходному CSV-файлу.
+  void exportCsv(const std::string& output_path);
 
   std::string disk_root_;    ///< Корневой путь подключённого диска
   std::string config_path_;  ///< Путь к конфигурационному файлу
@@ -127,4 +159,4 @@ class WindowsDiskAnalyzer {
       global_tamper_flags_;  ///< Глобальные tamper-флаги окружения
 };
 
-}
+}  // namespace WindowsDiskAnalysis

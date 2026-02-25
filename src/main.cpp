@@ -2,7 +2,7 @@
 #include <iostream>
 #include <string>
 
-#include "analysis/artifacts/windows_disk_analyzer.hpp"
+#include "analysis/artifacts/orchestrator/windows_disk_analyzer.hpp"
 #include "infra/logging/logger.hpp"
 
 int main(int argc, char* argv[]) {

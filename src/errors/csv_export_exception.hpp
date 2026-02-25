@@ -3,21 +3,22 @@
 
 #pragma once
 
-#include <stdexcept>
+#include "errors/app_exception.hpp"
+
 #include <string>
 
 namespace WindowsDiskAnalysis {
 
 /// @class CsvExportException
 /// @brief Базовое исключение для ошибок экспорта в CSV
-/// @details Наследуется от std::runtime_error. Используется как базовый класс
-/// для всех специализированных исключений модуля экспорта
-class CsvExportException : public std::runtime_error {
+/// @details Используется как базовый класс для всех специализированных
+/// исключений модуля экспорта.
+class CsvExportException : public AppException {
  public:
   /// @brief Конструктор исключения
   /// @param message Сообщение об ошибке
   explicit CsvExportException(const std::string& message)
-      : std::runtime_error(message) {}
+      : AppException(message) {}
 };
 
 /// @class FileOpenException

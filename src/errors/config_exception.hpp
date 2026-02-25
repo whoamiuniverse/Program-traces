@@ -4,19 +4,20 @@
 
 #pragma once
 
-#include <stdexcept>
+#include "errors/app_exception.hpp"
+
 #include <string>
 
 /// @class ConfigException
 /// @brief Базовое исключение для всех ошибок, связанных с конфигурацией
-/// @details Наследуется от std::runtime_error. Используется как базовый класс
-/// для более специализированных исключений конфигурации.
-class ConfigException : public std::runtime_error {
+/// @details Используется как базовый класс для специализированных
+/// исключений конфигурации.
+class ConfigException : public AppException {
  public:
   /// @brief Конструктор исключения
   /// @param message Сообщение об ошибке
   explicit ConfigException(const std::string& message)
-      : std::runtime_error(message) {}
+      : AppException(message) {}
 };
 
 /// @class ConfigFileException

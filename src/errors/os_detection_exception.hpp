@@ -3,19 +3,20 @@
 
 #pragma once
 
-#include <stdexcept>
+#include "errors/app_exception.hpp"
+
 #include <string>
 
 namespace WindowsVersion {
 
 /// @class OSDetectionException
 /// @brief Исключение, возникающее при ошибках определения операционной системы
-class OSDetectionException : public std::runtime_error {
+class OSDetectionException : public AppException {
  public:
   /// @brief Конструктор исключения
   /// @param message Сообщение об ошибке
   explicit OSDetectionException(const std::string& message)
-      : std::runtime_error(message) {}
+      : AppException(message) {}
 };
 
 }

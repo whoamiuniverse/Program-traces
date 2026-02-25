@@ -3,9 +3,10 @@
 
 #pragma once
 
+#include "errors/app_exception.hpp"
+
 #include <fmt/format.h>
 
-#include <stdexcept>
 #include <string>
 
 namespace RegistryAnalysis {
@@ -13,12 +14,12 @@ namespace RegistryAnalysis {
 /// @class RegistryException
 /// @brief Базовый класс для ошибок, связанных с реестром
 /// @details Является базовым классом для всех исключений при работе с реестром
-class RegistryException : public std::runtime_error {
+class RegistryException : public AppException {
  public:
   /// @brief Конструктор базового исключения
   /// @param message Человекочитаемое описание ошибки
   explicit RegistryException(const std::string& message)
-      : std::runtime_error(message) {}
+      : AppException(message) {}
 };
 
 /// @class RootKeyError

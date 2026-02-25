@@ -1,4 +1,5 @@
 #include "execution_evidence_analyzer.hpp"
+#include "execution_evidence_helpers.hpp"
 
 #include <algorithm>
 #include <array>
@@ -26,8 +27,7 @@
 
 namespace fs = std::filesystem;
 
-namespace WindowsDiskAnalysis {
-namespace {
+namespace WindowsDiskAnalysis::ExecutionEvidenceDetail {
 
 using EvidenceUtils::appendUniqueToken;
 using EvidenceUtils::extractAsciiStrings;
@@ -515,7 +515,7 @@ bool hasExecutionExtension(const std::string& candidate,
 /// @param allow_com_extension Разрешать `.com`.
 /// @return `true`, если строка проходит эвристики.
 bool isLikelyExecutionPath(std::string candidate,
-                           const bool allow_com_extension = false) {
+                           const bool allow_com_extension) {
   trim(candidate);
   if (candidate.empty()) return false;
 
@@ -581,12 +581,6 @@ std::string formatReasonableFiletime(const uint64_t filetime) {
   }
   return filetimeToString(filetime);
 }
-
-struct ShimCacheStructuredCandidate {
-  std::string executable_path;
-  std::string timestamp;
-  std::string details;
-};
 
 /// @brief Читает `uint16_t` little-endian из бинарного буфера.
 /// @param bytes Буфер данных.
@@ -884,7 +878,11 @@ std::string getTableNameUtf8(libesedb_table_t* table) {
 }
 #endif  // defined(PROGRAM_TRACES_HAVE_LIBESEDB) && PROGRAM_TRACES_HAVE_LIBESEDB
 
-}  // namespace
+}  // namespace WindowsDiskAnalysis::ExecutionEvidenceDetail
+
+namespace WindowsDiskAnalysis {
+
+using namespace ExecutionEvidenceDetail;
 
 ExecutionEvidenceAnalyzer::ExecutionEvidenceAnalyzer(
     std::unique_ptr<RegistryAnalysis::IRegistryParser> parser,

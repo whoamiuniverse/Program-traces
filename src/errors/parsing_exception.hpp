@@ -3,35 +3,36 @@
 
 #pragma once
 
+#include "errors/app_exception.hpp"
+
 #include <cinttypes>
 #include <cstdio>
-#include <stdexcept>
 #include <string>
+
+/// @class ParsingException
+/// @brief Базовое исключение для ошибок парсинга
+/// @details Служит основой для всех специализированных исключений парсинга
+class ParsingException : public AppException {
+ public:
+  /// @brief Конструктор исключения
+  /// @param[in] message Описание ошибки
+  explicit ParsingException(const std::string& message)
+      : AppException(message) {}
+
+  /// @brief Виртуальный деструктор
+  ~ParsingException() noexcept override = default;
+};
 
 /// @class InitLibError
 /// @brief Исключение для ошибок инициализации библиотек
 /// @details Генерируется при невозможности инициализировать необходимые
 /// библиотеки для работы с Prefetch-файлами
-class InitLibError : public std::runtime_error {
+class InitLibError : public ParsingException {
  public:
   /// @brief Конструктор исключения
   /// @param[in] lib_name Название библиотеки, вызвавшей ошибку
   explicit InitLibError(const std::string& lib_name)
-      : std::runtime_error("Ошибка инициализации библиотеки " + lib_name) {}
-};
-
-/// @class ParsingException
-/// @brief Базовое исключение для ошибок парсинга
-/// @details Служит основой для всех специализированных исключений парсинга
-class ParsingException : public std::runtime_error {
- public:
-  /// @brief Конструктор исключения
-  /// @param[in] message Описание ошибки
-  explicit ParsingException(const std::string& message)
-      : std::runtime_error(message) {}
-
-  /// @brief Виртуальный деструктор
-  ~ParsingException() noexcept override = default;
+      : ParsingException("Ошибка инициализации библиотеки " + lib_name) {}
 };
 
 /// @class FileOpenException
