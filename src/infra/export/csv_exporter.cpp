@@ -41,7 +41,6 @@ struct AggregatedData {
   std::set<std::string> recovered_from;
   std::string first_seen_utc;
   std::string last_seen_utc;
-  double confidence_score = 0.0;
 };
 
 constexpr char kCsvDelimiter = ';';
@@ -363,7 +362,15 @@ void addTamperFlag(AggregatedData& data, std::string flag) {
 }
 
 bool hasEvidenceSource(const AggregatedData& data, const std::string& source) {
-  return data.evidence_sources.contains(source);
+  return data.evidence_sources.contains(normalizeEvidenceSource(source));
+}
+
+bool hasAnyEvidenceSource(const AggregatedData& data,
+                          const std::vector<std::string>& sources) {
+  for (const auto& source : sources) {
+    if (hasEvidenceSource(data, source)) return true;
+  }
+  return false;
 }
 
 bool isLikelyProcessImageName(const std::string& executable_name) {
@@ -378,68 +385,34 @@ bool isLikelyProcessImageName(const std::string& executable_name) {
   return false;
 }
 
-void deriveTamperFlags(AggregatedData& data) {
-  const bool has_prefetch = hasEvidenceSource(data, "Prefetch");
-  const bool has_runtime_sources =
-      hasEvidenceSource(data, "EventLog") || hasEvidenceSource(data, "UserAssist") ||
-      hasEvidenceSource(data, "RunMRU") || hasEvidenceSource(data, "BAM") ||
-      hasEvidenceSource(data, "DAM") || hasEvidenceSource(data, "JumpList") ||
-      hasEvidenceSource(data, "LNKRecent") || hasEvidenceSource(data, "SRUM");
+void deriveTamperFlags(
+    AggregatedData& data, const WindowsDiskAnalysis::CSVExportOptions& options) {
+  if (options.tamper_rule_prefetch_missing_enabled) {
+    const bool has_prefetch = hasEvidenceSource(data, "Prefetch");
+    const bool has_runtime_sources = hasAnyEvidenceSource(
+        data, options.tamper_prefetch_missing_runtime_sources);
+    const bool image_condition =
+        !options.tamper_rule_prefetch_missing_require_process_image ||
+        isLikelyProcessImageName(data.executable_name);
 
-  if (!has_prefetch && has_runtime_sources &&
-      isLikelyProcessImageName(data.executable_name)) {
-    addTamperFlag(data, "prefetch_missing_but_other_artifacts_present");
+    if (!has_prefetch && has_runtime_sources && image_condition) {
+      addTamperFlag(data, "prefetch_missing_but_other_artifacts_present");
+    }
   }
-  if (data.has_deleted_trace) {
+
+  if (options.tamper_rule_amcache_deleted_trace_enabled && data.has_deleted_trace) {
     addTamperFlag(data, "amcache_deleted_trace");
   }
 
-  const bool has_registry_only_sources =
-      hasEvidenceSource(data, "RunMRU") || hasEvidenceSource(data, "UserAssist") ||
-      hasEvidenceSource(data, "BAM") || hasEvidenceSource(data, "DAM") ||
-      hasEvidenceSource(data, "ShimCache");
-  const bool has_strong_correlated_sources =
-      hasEvidenceSource(data, "Prefetch") || hasEvidenceSource(data, "Amcache") ||
-      hasEvidenceSource(data, "EventLog") || hasEvidenceSource(data, "SRUM");
-  if (has_registry_only_sources && !has_strong_correlated_sources) {
-    addTamperFlag(data, "registry_inconsistency");
+  if (options.tamper_rule_registry_inconsistency_enabled) {
+    const bool has_registry_only_sources =
+        hasAnyEvidenceSource(data, options.tamper_registry_only_sources);
+    const bool has_strong_correlated_sources =
+        hasAnyEvidenceSource(data, options.tamper_registry_strong_sources);
+    if (has_registry_only_sources && !has_strong_correlated_sources) {
+      addTamperFlag(data, "registry_inconsistency");
+    }
   }
-}
-
-double clampConfidence(const double value) {
-  return std::clamp(value, 0.0, 1.0);
-}
-
-double calculateConfidenceScore(const AggregatedData& data) {
-  double score = 0.0;
-  if (hasEvidenceSource(data, "Prefetch")) score += 0.45;
-  if (hasEvidenceSource(data, "EventLog")) score += 0.30;
-  if (hasEvidenceSource(data, "Amcache")) score += 0.20;
-  if (hasEvidenceSource(data, "Autorun")) score += 0.10;
-  if (hasEvidenceSource(data, "NetworkEvent")) score += 0.10;
-  if (hasEvidenceSource(data, "UserAssist")) score += 0.25;
-  if (hasEvidenceSource(data, "RunMRU")) score += 0.15;
-  if (hasEvidenceSource(data, "BAM")) score += 0.20;
-  if (hasEvidenceSource(data, "DAM")) score += 0.20;
-  if (hasEvidenceSource(data, "ShimCache")) score += 0.15;
-  if (hasEvidenceSource(data, "JumpList")) score += 0.15;
-  if (hasEvidenceSource(data, "LNKRecent")) score += 0.15;
-  if (hasEvidenceSource(data, "SRUM")) score += 0.20;
-  if (hasEvidenceSource(data, "USN")) score += 0.25;
-  if (hasEvidenceSource(data, "$LogFile")) score += 0.25;
-  if (hasEvidenceSource(data, "VSS")) score += 0.25;
-  if (hasEvidenceSource(data, "Pagefile")) score += 0.20;
-  if (hasEvidenceSource(data, "Memory")) score += 0.20;
-  if (hasEvidenceSource(data, "Unallocated")) score += 0.20;
-
-  score -= static_cast<double>(data.tamper_flags.size()) * 0.10;
-  return clampConfidence(score);
-}
-
-std::string formatConfidenceScore(const double score) {
-  std::ostringstream stream;
-  stream << std::fixed << std::setprecision(2) << clampConfidence(score);
-  return stream.str();
 }
 
 void updateRowFirstSeen(AggregatedData& data, const std::string& timestamp) {
@@ -519,8 +492,7 @@ void CSVExporter::exportToCSV(
          << kCsvDelimiter << "КоличествоЗапусков" << kCsvDelimiter
          << "Тома(серийный:тип)" << kCsvDelimiter << "СетевыеПодключения"
          << kCsvDelimiter << "ФайловыеМетрики" << kCsvDelimiter
-         << "EvidenceSources" << kCsvDelimiter << "TamperFlags"
-         << kCsvDelimiter << "ConfidenceScore\n";
+         << "EvidenceSources" << kCsvDelimiter << "TamperFlags\n";
 
     // Основная карта для агрегации данных по нормализованному идентификатору
     // процесса.
@@ -613,8 +585,6 @@ void CSVExporter::exportToCSV(
               }
             }
 
-            data.confidence_score =
-                std::max(data.confidence_score, info.confidence_score);
           });
     }
 
@@ -677,8 +647,7 @@ void CSVExporter::exportToCSV(
     // 5. Генерируем выходные данные
     for (const auto& [aggregation_key, data] : aggregated_data) {
       AggregatedData row = data;
-      deriveTamperFlags(row);
-      row.confidence_score = calculateConfidenceScore(row);
+      deriveTamperFlags(row, options);
 
       const std::string& filename =
           row.executable_name.empty() ? aggregation_key : row.executable_name;
@@ -747,8 +716,6 @@ void CSVExporter::exportToCSV(
       std::string recovered_from_str = joinStrings(row.recovered_from);
       std::string evidence_sources_str = joinStrings(row.evidence_sources);
       std::string tamper_flags_str = joinStrings(row.tamper_flags);
-      const std::string confidence_score_str =
-          formatConfidenceScore(row.confidence_score);
 
       // Запись данных в строго фиксированном порядке колонок
       file << escape(filename) << kCsvDelimiter << escape(paths_str)
@@ -764,8 +731,7 @@ void CSVExporter::exportToCSV(
            << escape(volumes_str) << kCsvDelimiter << escape(network_str)
            << kCsvDelimiter << escape(metrics_str) << kCsvDelimiter
            << escape(evidence_sources_str) << kCsvDelimiter
-           << escape(tamper_flags_str) << kCsvDelimiter
-           << escape(confidence_score_str) << "\n";
+           << escape(tamper_flags_str) << "\n";
     }
   } catch (const std::exception& e) {
     throw CsvExportException(std::string("Ошибка при экспорте данных: ") +

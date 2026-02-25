@@ -103,45 +103,6 @@ void appendRecoveredFrom(ProcessInfo& info, const std::string& source) {
   appendUniqueToken(info.recovered_from, source);
 }
 
-bool hasEvidenceSource(const ProcessInfo& info, const std::string& source) {
-  const std::string source_lower = toLowerAscii(source);
-  return std::ranges::any_of(info.evidence_sources,
-                             [&](const std::string& current) {
-                               return toLowerAscii(current) == source_lower;
-                             });
-}
-
-double clampConfidence(const double value) {
-  return std::clamp(value, 0.0, 1.0);
-}
-
-double calculateBaseConfidenceScore(const ProcessInfo& info) {
-  double score = 0.0;
-
-  if (hasEvidenceSource(info, "Prefetch")) score += 0.45;
-  if (hasEvidenceSource(info, "EventLog")) score += 0.30;
-  if (hasEvidenceSource(info, "Amcache")) score += 0.20;
-  if (hasEvidenceSource(info, "Autorun")) score += 0.10;
-  if (hasEvidenceSource(info, "NetworkEvent")) score += 0.10;
-  if (hasEvidenceSource(info, "UserAssist")) score += 0.25;
-  if (hasEvidenceSource(info, "RunMRU")) score += 0.15;
-  if (hasEvidenceSource(info, "BAM")) score += 0.20;
-  if (hasEvidenceSource(info, "DAM")) score += 0.20;
-  if (hasEvidenceSource(info, "ShimCache")) score += 0.15;
-  if (hasEvidenceSource(info, "JumpList")) score += 0.15;
-  if (hasEvidenceSource(info, "LNKRecent")) score += 0.15;
-  if (hasEvidenceSource(info, "SRUM")) score += 0.20;
-  if (hasEvidenceSource(info, "USN")) score += 0.25;
-  if (hasEvidenceSource(info, "$LogFile")) score += 0.25;
-  if (hasEvidenceSource(info, "VSS")) score += 0.25;
-  if (hasEvidenceSource(info, "Pagefile")) score += 0.20;
-  if (hasEvidenceSource(info, "Memory")) score += 0.20;
-  if (hasEvidenceSource(info, "Unallocated")) score += 0.20;
-
-  score -= static_cast<double>(info.tamper_flags.size()) * 0.10;
-  return clampConfidence(score);
-}
-
 bool isAutoDiskRootValue(std::string value) {
   trim(value);
   const std::string lowered = toLowerAscii(std::move(value));
@@ -1107,82 +1068,107 @@ CSVExportOptions WindowsDiskAnalyzer::loadCSVExportOptions() const {
 
   CSVExportOptions options;
   Config config(config_path_);
-  if (!config.hasSection("CSVExport")) {
-    logger->debug(
-        "Секция [CSVExport] не найдена, используются значения по умолчанию");
-    return options;
-  }
 
-  auto readSizeOption = [&](const std::string& key,
+  auto readSizeOption = [&](const std::string& section, const std::string& key,
                             const std::size_t current_value) {
     try {
-      const int value =
-          config.getInt("CSVExport", key, static_cast<int>(current_value));
+      const int value = config.getInt(section, key, static_cast<int>(current_value));
       if (value < 0) {
         logger->warn(
-            "Параметр [CSVExport]/{} не может быть отрицательным ({}), "
+            "Параметр [{}/{}] не может быть отрицательным ({}), "
             "оставлено значение {}",
-            key, value, current_value);
+            section, key, value, current_value);
         return current_value;
       }
       return static_cast<std::size_t>(value);
     } catch (const std::exception& e) {
       logger->warn(
-          "Не удалось прочитать [CSVExport]/{} ({}), оставлено значение {}",
-          key, e.what(), current_value);
+          "Не удалось прочитать [{}/{}] ({}), оставлено значение {}",
+          section, key, e.what(), current_value);
       return current_value;
     }
   };
 
-  auto readBoolOption = [&](const std::string& key, bool current_value) {
+  auto readBoolOption = [&](const std::string& section, const std::string& key,
+                            bool current_value) {
     try {
-      return config.getBool("CSVExport", key, current_value);
+      return config.getBool(section, key, current_value);
     } catch (const std::exception& e) {
       logger->warn(
-          "Не удалось прочитать [CSVExport]/{} ({}), оставлено значение {}",
-          key, e.what(), current_value);
+          "Не удалось прочитать [{}/{}] ({}), оставлено значение {}",
+          section, key, e.what(), current_value);
       return current_value;
     }
   };
 
-  auto readListOption = [&](const std::string& key,
+  auto readListOption = [&](const std::string& section, const std::string& key,
                             const std::vector<std::string>& current_value) {
     try {
-      if (!config.hasKey("CSVExport", key)) return current_value;
-      const std::string raw = config.getString("CSVExport", key, "");
+      if (!config.hasKey(section, key)) return current_value;
+      const std::string raw = config.getString(section, key, "");
       return parseListSetting(raw);
     } catch (const std::exception& e) {
       logger->warn(
-          "Не удалось прочитать [CSVExport]/{} ({}), оставлено значение по "
+          "Не удалось прочитать [{}/{}] ({}), оставлено значение по "
           "умолчанию",
-          key, e.what());
+          section, key, e.what());
       return current_value;
     }
   };
 
-  options.max_metric_names =
-      readSizeOption("MetricMaxNames", options.max_metric_names);
-  options.metric_skip_prefixes =
-      readListOption("MetricSkipPrefixes", options.metric_skip_prefixes);
-  options.metric_skip_contains =
-      readListOption("MetricSkipContains", options.metric_skip_contains);
-  options.metric_skip_exact =
-      readListOption("MetricSkipExact", options.metric_skip_exact);
-  options.drop_short_upper_tokens =
-      readBoolOption("DropShortUpperTokens", options.drop_short_upper_tokens);
-  options.short_upper_token_max_length = readSizeOption(
-      "ShortUpperTokenMaxLength", options.short_upper_token_max_length);
-  options.drop_hex_like_tokens =
-      readBoolOption("DropHexLikeTokens", options.drop_hex_like_tokens);
-  options.hex_like_min_length =
-      readSizeOption("HexLikeMinLength", options.hex_like_min_length);
-  options.drop_upper_alnum_tokens =
-      readBoolOption("DropUpperAlnumTokens", options.drop_upper_alnum_tokens);
-  options.upper_alnum_min_length =
-      readSizeOption("UpperAlnumMinLength", options.upper_alnum_min_length);
+  if (config.hasSection("CSVExport")) {
+    options.max_metric_names =
+        readSizeOption("CSVExport", "MetricMaxNames", options.max_metric_names);
+    options.metric_skip_prefixes = readListOption(
+        "CSVExport", "MetricSkipPrefixes", options.metric_skip_prefixes);
+    options.metric_skip_contains = readListOption(
+        "CSVExport", "MetricSkipContains", options.metric_skip_contains);
+    options.metric_skip_exact =
+        readListOption("CSVExport", "MetricSkipExact", options.metric_skip_exact);
+    options.drop_short_upper_tokens = readBoolOption(
+        "CSVExport", "DropShortUpperTokens", options.drop_short_upper_tokens);
+    options.short_upper_token_max_length = readSizeOption(
+        "CSVExport", "ShortUpperTokenMaxLength",
+        options.short_upper_token_max_length);
+    options.drop_hex_like_tokens = readBoolOption(
+        "CSVExport", "DropHexLikeTokens", options.drop_hex_like_tokens);
+    options.hex_like_min_length = readSizeOption(
+        "CSVExport", "HexLikeMinLength", options.hex_like_min_length);
+    options.drop_upper_alnum_tokens = readBoolOption(
+        "CSVExport", "DropUpperAlnumTokens", options.drop_upper_alnum_tokens);
+    options.upper_alnum_min_length = readSizeOption(
+        "CSVExport", "UpperAlnumMinLength", options.upper_alnum_min_length);
+  } else {
+    logger->debug(
+        "Секция [CSVExport] не найдена, используются значения по умолчанию");
+  }
+
+  if (config.hasSection("TamperRules")) {
+    options.tamper_rule_prefetch_missing_enabled = readBoolOption(
+        "TamperRules", "EnablePrefetchMissingRule",
+        options.tamper_rule_prefetch_missing_enabled);
+    options.tamper_rule_prefetch_missing_require_process_image =
+        readBoolOption("TamperRules", "PrefetchMissingRequireProcessImage",
+                       options.tamper_rule_prefetch_missing_require_process_image);
+    options.tamper_prefetch_missing_runtime_sources = readListOption(
+        "TamperRules", "PrefetchMissingRuntimeSources",
+        options.tamper_prefetch_missing_runtime_sources);
+    options.tamper_rule_amcache_deleted_trace_enabled = readBoolOption(
+        "TamperRules", "EnableAmcacheDeletedTraceRule",
+        options.tamper_rule_amcache_deleted_trace_enabled);
+    options.tamper_rule_registry_inconsistency_enabled = readBoolOption(
+        "TamperRules", "EnableRegistryInconsistencyRule",
+        options.tamper_rule_registry_inconsistency_enabled);
+    options.tamper_registry_only_sources = readListOption(
+        "TamperRules", "RegistryOnlySources",
+        options.tamper_registry_only_sources);
+    options.tamper_registry_strong_sources = readListOption(
+        "TamperRules", "RegistryStrongSources",
+        options.tamper_registry_strong_sources);
+  }
 
   logger->debug(
-      "Загружены настройки [CSVExport]: MetricMaxNames={}, Prefixes={}, "
+      "Загружены настройки CSV/Tamper: MetricMaxNames={}, Prefixes={}, "
       "Contains={}, Exact={}",
       options.max_metric_names, options.metric_skip_prefixes.size(),
       options.metric_skip_contains.size(), options.metric_skip_exact.size());
@@ -1345,14 +1331,9 @@ void WindowsDiskAnalyzer::analyze(const std::string& output_path) {
     }
   }
 
-  // 7. Обновляем базовую оценку достоверности на уровне ProcessInfo
-  for (auto& [_, info] : process_data_) {
-    info.confidence_score = calculateBaseConfidenceScore(info);
-  }
-
-  // 8. Экспорт результатов
-  ensureDirectoryExists(output_path);
+  // 7. Экспорт результатов
   const CSVExportOptions csv_export_options = loadCSVExportOptions();
+  ensureDirectoryExists(output_path);
   CSVExporter::exportToCSV(output_path, autorun_entries_, process_data_,
                            network_connections_, amcache_entries_,
                            csv_export_options);

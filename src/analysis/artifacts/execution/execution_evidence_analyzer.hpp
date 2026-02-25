@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <filesystem>
 #include <map>
 #include <memory>
 #include <string>
@@ -23,10 +24,13 @@ struct ExecutionEvidenceConfig {
   bool enable_jump_lists = true;
   bool enable_lnk_recent = true;
   bool enable_srum = true;
+  bool enable_srum_native_parser = true;
+  bool srum_fallback_to_binary_on_native_failure = true;
   bool enable_security_log_tamper_check = true;
 
   std::size_t binary_scan_max_mb = 64;
   std::size_t max_candidates_per_source = 2000;
+  std::size_t srum_native_max_records_per_table = 25000;
 
   std::string userassist_key =
       "Software/Microsoft/Windows/CurrentVersion/Explorer/UserAssist";
@@ -45,6 +49,7 @@ struct ExecutionEvidenceConfig {
       "AppData/Roaming/Microsoft/Windows/Recent/CustomDestinations";
   std::string srum_path = "Windows/System32/sru/SRUDB.dat";
   std::string security_log_path = "Windows/System32/winevt/Logs/Security.evtx";
+  std::vector<std::string> srum_table_allowlist;
 };
 
 /// @class ExecutionEvidenceAnalyzer
@@ -82,6 +87,12 @@ class ExecutionEvidenceAnalyzer {
                         std::map<std::string, ProcessInfo>& process_data);
   void collectSrum(const std::string& disk_root,
                    std::map<std::string, ProcessInfo>& process_data);
+  std::size_t collectSrumNative(
+      const std::filesystem::path& srum_path,
+      std::map<std::string, ProcessInfo>& process_data);
+  std::size_t collectSrumBinaryFallback(
+      const std::filesystem::path& srum_path,
+      std::map<std::string, ProcessInfo>& process_data) const;
   void detectSecurityLogTampering(const std::string& disk_root,
                                   std::vector<std::string>& global_tamper_flags);
 

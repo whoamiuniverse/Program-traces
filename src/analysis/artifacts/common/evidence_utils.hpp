@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <regex>
 #include <set>
 #include <string>
 #include <string_view>
@@ -247,6 +248,42 @@ inline bool looksLikeExecutablePath(const std::string& text) {
 
 inline std::optional<std::string> extractExecutableFromCommand(
     std::string command) {
+  auto startsWithPathPrefix = [](const std::string& value) {
+    std::size_t pos = 0;
+    while (pos < value.size()) {
+      const unsigned char ch = static_cast<unsigned char>(value[pos]);
+      if (std::isspace(ch) != 0 || value[pos] == '"' || value[pos] == '\'' ||
+          value[pos] == '@' || value[pos] == '=') {
+        pos++;
+        continue;
+      }
+      break;
+    }
+
+    if (pos + 2 < value.size() &&
+        std::isalpha(static_cast<unsigned char>(value[pos])) != 0 &&
+        value[pos + 1] == ':' &&
+        (value[pos + 2] == '\\' || value[pos + 2] == '/')) {
+      return true;
+    }
+
+    const std::string lowered = toLowerAscii(value.substr(pos));
+    return lowered.rfind("\\device\\harddiskvolume", 0) == 0 ||
+           lowered.rfind("\\\\", 0) == 0;
+  };
+
+  auto normalizeCandidate = [&](std::string candidate)
+      -> std::optional<std::string> {
+    trim(candidate);
+    if (candidate.empty()) return std::nullopt;
+
+    candidate = trimExecutableSuffix(candidate);
+    if (!startsWithPathPrefix(candidate)) return std::nullopt;
+    if (!looksLikeExecutablePath(candidate)) return std::nullopt;
+    if (candidate.size() > 520) return std::nullopt;
+    return candidate;
+  };
+
   trim(command);
   if (command.empty()) return std::nullopt;
 
@@ -254,19 +291,28 @@ inline std::optional<std::string> extractExecutableFromCommand(
     const char quote = command.front();
     if (const std::size_t quote_end = command.find(quote, 1);
         quote_end != std::string::npos) {
-      command = command.substr(1, quote_end - 1);
+      if (auto quoted = normalizeCandidate(command.substr(1, quote_end - 1));
+          quoted.has_value()) {
+        return quoted;
+      }
     } else {
       command.erase(command.begin());
     }
   }
 
-  command = trimExecutableSuffix(command);
-  if (!looksLikeExecutablePath(command)) {
-    return std::nullopt;
+  if (auto direct = normalizeCandidate(command); direct.has_value()) {
+    return direct;
   }
 
-  if (command.size() > 520) return std::nullopt;
-  return command;
+  static const std::regex kWindowsPathRegex(
+      R"(([A-Za-z]:[\\/][^\"\'\r\n]{1,500}?\.(?:exe|com|bat|cmd|ps1|msi)))",
+      std::regex::icase);
+  std::smatch match;
+  if (std::regex_search(command, match, kWindowsPathRegex) && match.size() > 1) {
+    return normalizeCandidate(match.str(1));
+  }
+
+  return std::nullopt;
 }
 
 inline std::vector<std::string> extractExecutableCandidatesFromStrings(

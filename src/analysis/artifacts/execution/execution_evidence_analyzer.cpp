@@ -1,6 +1,8 @@
 #include "execution_evidence_analyzer.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cstdint>
 #include <filesystem>
 #include <iomanip>
 #include <limits>
@@ -8,6 +10,7 @@
 #include <sstream>
 #include <string_view>
 #include <system_error>
+#include <unordered_map>
 #include <unordered_set>
 
 #include "analysis/artifacts/common/evidence_utils.hpp"
@@ -17,14 +20,20 @@
 #include "parsers/event_log/evtx/parser/parser.hpp"
 #include "parsers/registry/enums/value_type.hpp"
 
+#if defined(PROGRAM_TRACES_HAVE_LIBESEDB) && PROGRAM_TRACES_HAVE_LIBESEDB
+#include <libesedb.h>
+#endif
+
 namespace fs = std::filesystem;
 
 namespace WindowsDiskAnalysis {
 namespace {
 
 using EvidenceUtils::appendUniqueToken;
+using EvidenceUtils::extractAsciiStrings;
 using EvidenceUtils::extractExecutableCandidatesFromBinary;
 using EvidenceUtils::extractExecutableFromCommand;
+using EvidenceUtils::extractUtf16LeStrings;
 using EvidenceUtils::fileTimeToUtcString;
 using EvidenceUtils::isTimestampLike;
 using EvidenceUtils::readFilePrefix;
@@ -292,6 +301,169 @@ std::string extractUsernameFromHivePath(const fs::path& hive_path) {
   return name.empty() ? "unknown" : name;
 }
 
+std::vector<std::string> parseListSetting(std::string raw) {
+  trim(raw);
+  if (raw.empty()) return {};
+
+  std::vector<std::string> values = split(raw, ',');
+  for (std::string& value : values) {
+    trim(value);
+  }
+
+  values.erase(std::remove_if(values.begin(), values.end(),
+                              [](const std::string& value) {
+                                return value.empty();
+                              }),
+               values.end());
+  return values;
+}
+
+bool containsIgnoreCase(std::string value, const std::string& pattern) {
+  value = toLowerAscii(std::move(value));
+  return value.find(toLowerAscii(pattern)) != std::string::npos;
+}
+
+bool looksLikeSid(std::string value) {
+  trim(value);
+  if (value.size() < 6) return false;
+  if (value.rfind("S-", 0) != 0 && value.rfind("s-", 0) != 0) return false;
+
+  bool has_digit = false;
+  for (char ch : value) {
+    if (std::isdigit(static_cast<unsigned char>(ch)) != 0) {
+      has_digit = true;
+      continue;
+    }
+    if (ch == '-' || ch == 'S' || ch == 's') continue;
+    return false;
+  }
+  return has_digit;
+}
+
+std::string formatReasonableFiletime(const uint64_t filetime) {
+  if (filetime < kFiletimeUnixEpoch || filetime > kMaxReasonableFiletime) {
+    return {};
+  }
+  return filetimeToString(filetime);
+}
+
+#if defined(PROGRAM_TRACES_HAVE_LIBESEDB) && PROGRAM_TRACES_HAVE_LIBESEDB
+std::string toLibesedbErrorMessage(libesedb_error_t* error) {
+  if (error == nullptr) return "неизвестная ошибка libesedb";
+
+  std::array<char, 2048> buffer{};
+  if (libesedb_error_sprint(error, buffer.data(), buffer.size()) > 0) {
+    return std::string(buffer.data());
+  }
+  return "не удалось получить текст ошибки libesedb";
+}
+
+std::string sanitizeUtf8Value(std::string value) {
+  value.erase(std::remove(value.begin(), value.end(), '\0'), value.end());
+  trim(value);
+  return value;
+}
+
+std::optional<std::string> readRecordColumnNameUtf8(libesedb_record_t* record,
+                                                    const int value_entry) {
+  size_t name_size = 0;
+  if (libesedb_record_get_utf8_column_name_size(record, value_entry, &name_size,
+                                                nullptr) != 1 ||
+      name_size == 0) {
+    return std::nullopt;
+  }
+
+  std::vector<uint8_t> buffer(name_size);
+  if (libesedb_record_get_utf8_column_name(record, value_entry, buffer.data(),
+                                           name_size, nullptr) != 1) {
+    return std::nullopt;
+  }
+
+  std::string value(reinterpret_cast<char*>(buffer.data()));
+  value = sanitizeUtf8Value(std::move(value));
+  if (value.empty()) return std::nullopt;
+  return value;
+}
+
+std::optional<std::string> readRecordValueUtf8(libesedb_record_t* record,
+                                               const int value_entry) {
+  size_t utf8_size = 0;
+  const int size_result = libesedb_record_get_value_utf8_string_size(
+      record, value_entry, &utf8_size, nullptr);
+  if (size_result <= 0 || utf8_size == 0) {
+    return std::nullopt;
+  }
+
+  std::vector<uint8_t> buffer(utf8_size);
+  if (libesedb_record_get_value_utf8_string(record, value_entry, buffer.data(),
+                                            utf8_size, nullptr) <= 0) {
+    return std::nullopt;
+  }
+
+  std::string value(reinterpret_cast<char*>(buffer.data()));
+  value = sanitizeUtf8Value(std::move(value));
+  if (value.empty()) return std::nullopt;
+  return value;
+}
+
+std::optional<std::vector<uint8_t>> readRecordValueBinary(
+    libesedb_record_t* record, const int value_entry) {
+  size_t binary_size = 0;
+  const int size_result = libesedb_record_get_value_binary_data_size(
+      record, value_entry, &binary_size, nullptr);
+  if (size_result <= 0 || binary_size == 0) return std::nullopt;
+
+  std::vector<uint8_t> data(binary_size);
+  if (libesedb_record_get_value_binary_data(record, value_entry, data.data(),
+                                            binary_size, nullptr) <= 0) {
+    return std::nullopt;
+  }
+  return data;
+}
+
+std::optional<uint64_t> readRecordValueU64(libesedb_record_t* record,
+                                           const int value_entry) {
+  uint64_t value = 0;
+  if (libesedb_record_get_value_64bit(record, value_entry, &value, nullptr) == 1) {
+    return value;
+  }
+
+  uint32_t value32 = 0;
+  if (libesedb_record_get_value_32bit(record, value_entry, &value32, nullptr) == 1) {
+    return static_cast<uint64_t>(value32);
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> readRecordValueFiletimeString(libesedb_record_t* record,
+                                                         const int value_entry) {
+  uint64_t filetime = 0;
+  if (libesedb_record_get_value_filetime(record, value_entry, &filetime,
+                                         nullptr) != 1) {
+    return std::nullopt;
+  }
+  const std::string timestamp = formatReasonableFiletime(filetime);
+  if (timestamp.empty()) return std::nullopt;
+  return timestamp;
+}
+
+std::string getTableNameUtf8(libesedb_table_t* table) {
+  size_t name_size = 0;
+  if (libesedb_table_get_utf8_name_size(table, &name_size, nullptr) != 1 ||
+      name_size == 0) {
+    return {};
+  }
+
+  std::vector<uint8_t> buffer(name_size);
+  if (libesedb_table_get_utf8_name(table, buffer.data(), name_size, nullptr) != 1) {
+    return {};
+  }
+
+  std::string name(reinterpret_cast<char*>(buffer.data()));
+  return sanitizeUtf8Value(std::move(name));
+}
+#endif  // defined(PROGRAM_TRACES_HAVE_LIBESEDB) && PROGRAM_TRACES_HAVE_LIBESEDB
+
 }  // namespace
 
 ExecutionEvidenceAnalyzer::ExecutionEvidenceAnalyzer(
@@ -348,6 +520,18 @@ void ExecutionEvidenceAnalyzer::loadConfiguration() {
       }
     };
 
+    auto readList = [&](const std::string& key,
+                        std::vector<std::string> default_value) {
+      try {
+        if (!config.hasKey("ExecutionArtifacts", key)) return default_value;
+        const std::string raw = config.getString("ExecutionArtifacts", key, "");
+        auto parsed = parseListSetting(raw);
+        return parsed.empty() ? default_value : parsed;
+      } catch (...) {
+        return default_value;
+      }
+    };
+
     config_.enable_shimcache =
         readBool("EnableShimCache", config_.enable_shimcache);
     config_.enable_userassist =
@@ -359,6 +543,11 @@ void ExecutionEvidenceAnalyzer::loadConfiguration() {
     config_.enable_lnk_recent =
         readBool("EnableLnkRecent", config_.enable_lnk_recent);
     config_.enable_srum = readBool("EnableSRUM", config_.enable_srum);
+    config_.enable_srum_native_parser =
+        readBool("EnableNativeSRUM", config_.enable_srum_native_parser);
+    config_.srum_fallback_to_binary_on_native_failure = readBool(
+        "SrumFallbackToBinaryOnNativeFailure",
+        config_.srum_fallback_to_binary_on_native_failure);
     config_.enable_security_log_tamper_check = readBool(
         "EnableSecurityLogTamperCheck", config_.enable_security_log_tamper_check);
 
@@ -366,6 +555,8 @@ void ExecutionEvidenceAnalyzer::loadConfiguration() {
         readSize("BinaryScanMaxMB", config_.binary_scan_max_mb);
     config_.max_candidates_per_source =
         readSize("MaxCandidatesPerSource", config_.max_candidates_per_source);
+    config_.srum_native_max_records_per_table = readSize(
+        "SrumNativeMaxRecordsPerTable", config_.srum_native_max_records_per_table);
 
     config_.userassist_key = readString("UserAssistKey", config_.userassist_key);
     config_.runmru_key = readString("RunMRUKey", config_.runmru_key);
@@ -381,6 +572,8 @@ void ExecutionEvidenceAnalyzer::loadConfiguration() {
     config_.srum_path = readString("SRUMPath", config_.srum_path);
     config_.security_log_path =
         readString("SecurityLogPath", config_.security_log_path);
+    config_.srum_table_allowlist =
+        readList("SrumTableAllowlist", config_.srum_table_allowlist);
   } catch (const std::exception& e) {
     logger->warn("Не удалось загрузить [ExecutionArtifacts]");
     logger->debug("Ошибка чтения конфигурации ExecutionArtifacts: {}", e.what());
@@ -754,22 +947,364 @@ void ExecutionEvidenceAnalyzer::collectSrum(
   const auto resolved = findPathCaseInsensitive(srum_path);
   if (!resolved.has_value()) return;
 
+  std::size_t collected = 0;
+  bool native_attempted = false;
+
+  if (config_.enable_srum_native_parser) {
+    native_attempted = true;
+    collected = collectSrumNative(*resolved, process_data);
+    if (collected > 0) {
+      logger->info("SRUM(native): добавлено {} кандидат(ов)", collected);
+      return;
+    }
+  }
+
+  if (!config_.srum_fallback_to_binary_on_native_failure &&
+      native_attempted) {
+    logger->debug(
+        "SRUM fallback отключен, бинарный режим не используется после "
+        "неуспеха native-парсера");
+    return;
+  }
+
+  collected = collectSrumBinaryFallback(*resolved, process_data);
+  logger->info("SRUM(binary): добавлено {} кандидат(ов)", collected);
+}
+
+std::size_t ExecutionEvidenceAnalyzer::collectSrumBinaryFallback(
+    const fs::path& srum_path,
+    std::map<std::string, ProcessInfo>& process_data) const {
   const std::size_t max_bytes = toByteLimit(config_.binary_scan_max_mb);
-  const auto data = readFilePrefix(*resolved, max_bytes);
-  if (!data.has_value()) return;
+  const auto data = readFilePrefix(srum_path, max_bytes);
+  if (!data.has_value()) return 0;
 
   const std::vector<std::string> candidates = extractExecutableCandidatesFromBinary(
       *data, config_.max_candidates_per_source);
   std::error_code ec;
-  const std::string timestamp =
-      fileTimeToUtcString(fs::last_write_time(*resolved, ec));
+  const std::string timestamp = fileTimeToUtcString(
+      fs::last_write_time(srum_path, ec));
 
   for (const auto& executable : candidates) {
     addExecutionEvidence(process_data, executable, "SRUM", timestamp,
-                        "sru=SRUDB.dat");
+                        "sru=SRUDB.dat (binary)");
+  }
+  return candidates.size();
+}
+
+std::size_t ExecutionEvidenceAnalyzer::collectSrumNative(
+    const fs::path& srum_path,
+    std::map<std::string, ProcessInfo>& process_data) {
+#if !defined(PROGRAM_TRACES_HAVE_LIBESEDB) || !PROGRAM_TRACES_HAVE_LIBESEDB
+  static_cast<void>(srum_path);
+  static_cast<void>(process_data);
+  return 0;
+#else
+  const auto logger = GlobalLogger::get();
+
+  const std::string path_string = srum_path.string();
+  if (path_string.empty()) return 0;
+
+  std::unordered_set<std::string> table_allowlist_lower;
+  for (std::string table_name : config_.srum_table_allowlist) {
+    trim(table_name);
+    if (!table_name.empty()) {
+      table_allowlist_lower.insert(toLowerAscii(std::move(table_name)));
+    }
   }
 
-  logger->info("SRUM: добавлено {} кандидат(ов)", candidates.size());
+  auto is_table_allowed = [&](const std::string& table_name) {
+    if (table_allowlist_lower.empty()) return true;
+    return table_allowlist_lower.contains(toLowerAscii(table_name));
+  };
+
+  libesedb_file_t* file = nullptr;
+  libesedb_error_t* error = nullptr;
+
+  auto free_error = [&]() {
+    if (error != nullptr) {
+      libesedb_error_free(&error);
+      error = nullptr;
+    }
+  };
+  auto close_file = [&]() {
+    if (file != nullptr) {
+      libesedb_file_close(file, nullptr);
+      libesedb_file_free(&file, nullptr);
+      file = nullptr;
+    }
+  };
+
+  if (libesedb_file_initialize(&file, &error) != 1) {
+    const std::string details = toLibesedbErrorMessage(error);
+    free_error();
+    close_file();
+    logger->debug("SRUM(native): не удалось инициализировать libesedb: {}",
+                  details);
+    return 0;
+  }
+
+  if (libesedb_file_open(file, path_string.c_str(), LIBESEDB_OPEN_READ, &error) !=
+      1) {
+    const std::string details = toLibesedbErrorMessage(error);
+    free_error();
+    close_file();
+    logger->warn("SRUM(native): не удалось открыть \"{}\" ({})", path_string,
+                 details);
+    return 0;
+  }
+
+  int number_of_tables = 0;
+  if (libesedb_file_get_number_of_tables(file, &number_of_tables, &error) != 1 ||
+      number_of_tables <= 0) {
+    const std::string details = toLibesedbErrorMessage(error);
+    free_error();
+    close_file();
+    logger->debug("SRUM(native): не удалось получить список таблиц: {}",
+                  details);
+    return 0;
+  }
+  free_error();
+
+  std::unordered_map<uint64_t, std::string> id_map;
+
+  auto parse_id_map_table = [&](libesedb_table_t* table) {
+    int number_of_records = 0;
+    if (libesedb_table_get_number_of_records(table, &number_of_records,
+                                             nullptr) != 1 ||
+        number_of_records <= 0) {
+      return;
+    }
+
+    const int record_limit = static_cast<int>(std::min<std::size_t>(
+        static_cast<std::size_t>(number_of_records),
+        config_.srum_native_max_records_per_table));
+
+    for (int record_entry = 0; record_entry < record_limit; ++record_entry) {
+      libesedb_record_t* record = nullptr;
+      if (libesedb_table_get_record(table, record_entry, &record, nullptr) != 1 ||
+          record == nullptr) {
+        continue;
+      }
+
+      std::optional<uint64_t> id_index;
+      std::vector<std::string> values;
+
+      int value_count = 0;
+      if (libesedb_record_get_number_of_values(record, &value_count, nullptr) ==
+          1) {
+        for (int value_entry = 0; value_entry < value_count; ++value_entry) {
+          const auto column_name_opt =
+              readRecordColumnNameUtf8(record, value_entry);
+          const std::string column_name =
+              column_name_opt.has_value() ? *column_name_opt : "";
+          const std::string column_lower = toLowerAscii(column_name);
+
+          if (!id_index.has_value() &&
+              (column_lower == "idindex" || column_lower == "id_index" ||
+               column_lower == "id")) {
+            id_index = readRecordValueU64(record, value_entry);
+          }
+
+          if (auto text = readRecordValueUtf8(record, value_entry);
+              text.has_value()) {
+            values.push_back(*text);
+          }
+
+          if (auto binary = readRecordValueBinary(record, value_entry);
+              binary.has_value()) {
+            auto ascii_strings = extractAsciiStrings(*binary, 6);
+            auto utf16_strings = extractUtf16LeStrings(*binary, 6);
+            values.insert(values.end(), ascii_strings.begin(), ascii_strings.end());
+            values.insert(values.end(), utf16_strings.begin(), utf16_strings.end());
+          }
+        }
+      }
+
+      libesedb_record_free(&record, nullptr);
+
+      if (!id_index.has_value()) continue;
+
+      std::string best_value;
+      for (std::string value : values) {
+        value = sanitizeUtf8Value(std::move(value));
+        if (value.empty()) continue;
+        if (looksLikeSid(value)) {
+          best_value = value;
+          break;
+        }
+        if (auto executable = extractExecutableFromCommand(value);
+            executable.has_value()) {
+          best_value = *executable;
+          break;
+        }
+      }
+
+      if (!best_value.empty()) {
+        id_map[*id_index] = best_value;
+      }
+    }
+  };
+
+  for (int table_entry = 0; table_entry < number_of_tables; ++table_entry) {
+    libesedb_table_t* table = nullptr;
+    if (libesedb_file_get_table(file, table_entry, &table, nullptr) != 1 ||
+        table == nullptr) {
+      continue;
+    }
+
+    const std::string table_name = getTableNameUtf8(table);
+    const std::string table_lower = toLowerAscii(table_name);
+    if (table_lower.find("idmap") != std::string::npos ||
+        table_lower == "srudbidmaptable") {
+      parse_id_map_table(table);
+    }
+
+    libesedb_table_free(&table, nullptr);
+  }
+
+  std::size_t collected = 0;
+  for (int table_entry = 0; table_entry < number_of_tables; ++table_entry) {
+    if (collected >= config_.max_candidates_per_source) break;
+
+    libesedb_table_t* table = nullptr;
+    if (libesedb_file_get_table(file, table_entry, &table, nullptr) != 1 ||
+        table == nullptr) {
+      continue;
+    }
+
+    const std::string table_name = getTableNameUtf8(table);
+    const std::string table_lower = toLowerAscii(table_name);
+
+    if (!is_table_allowed(table_name)) {
+      libesedb_table_free(&table, nullptr);
+      continue;
+    }
+    if (table_lower.find("idmap") != std::string::npos ||
+        table_lower == "srudbidmaptable") {
+      libesedb_table_free(&table, nullptr);
+      continue;
+    }
+
+    int number_of_records = 0;
+    if (libesedb_table_get_number_of_records(table, &number_of_records,
+                                             nullptr) != 1 ||
+        number_of_records <= 0) {
+      libesedb_table_free(&table, nullptr);
+      continue;
+    }
+
+    const int record_limit = static_cast<int>(std::min<std::size_t>(
+        static_cast<std::size_t>(number_of_records),
+        config_.srum_native_max_records_per_table));
+
+    for (int record_entry = 0; record_entry < record_limit; ++record_entry) {
+      if (collected >= config_.max_candidates_per_source) break;
+
+      libesedb_record_t* record = nullptr;
+      if (libesedb_table_get_record(table, record_entry, &record, nullptr) != 1 ||
+          record == nullptr) {
+        continue;
+      }
+
+      std::string row_timestamp;
+      std::string row_sid;
+      std::vector<std::string> row_executables;
+
+      int value_count = 0;
+      if (libesedb_record_get_number_of_values(record, &value_count, nullptr) ==
+          1) {
+        for (int value_entry = 0; value_entry < value_count; ++value_entry) {
+          const auto column_name_opt =
+              readRecordColumnNameUtf8(record, value_entry);
+          const std::string column_name =
+              column_name_opt.has_value() ? *column_name_opt : "";
+          const std::string column_lower = toLowerAscii(column_name);
+
+          if (auto filetime_value =
+                  readRecordValueFiletimeString(record, value_entry);
+              filetime_value.has_value() &&
+              (row_timestamp.empty() ||
+               containsIgnoreCase(column_name, "time") ||
+               containsIgnoreCase(column_name, "date") ||
+               containsIgnoreCase(column_name, "stamp"))) {
+            row_timestamp = *filetime_value;
+          }
+
+          if (auto text = readRecordValueUtf8(record, value_entry);
+              text.has_value()) {
+            std::string value = *text;
+            if (row_sid.empty() && looksLikeSid(value) &&
+                (containsIgnoreCase(column_name, "sid") ||
+                 containsIgnoreCase(column_name, "user"))) {
+              row_sid = value;
+            }
+
+            if (auto executable = extractExecutableFromCommand(value);
+                executable.has_value()) {
+              appendUniqueToken(row_executables, *executable);
+            }
+          }
+
+          if (auto numeric_value = readRecordValueU64(record, value_entry);
+              numeric_value.has_value()) {
+            if (const auto it = id_map.find(*numeric_value); it != id_map.end()) {
+              if (row_sid.empty() && looksLikeSid(it->second)) {
+                row_sid = it->second;
+              }
+              if (auto executable = extractExecutableFromCommand(it->second);
+                  executable.has_value()) {
+                appendUniqueToken(row_executables, *executable);
+              }
+            }
+          }
+
+          if (auto binary = readRecordValueBinary(record, value_entry);
+              binary.has_value()) {
+            const auto binary_candidates = extractExecutableCandidatesFromBinary(
+                *binary, config_.max_candidates_per_source);
+            for (const auto& executable : binary_candidates) {
+              appendUniqueToken(row_executables, executable);
+            }
+
+            if (row_sid.empty()) {
+              auto ascii_strings = extractAsciiStrings(*binary, 6);
+              auto utf16_strings = extractUtf16LeStrings(*binary, 6);
+              ascii_strings.insert(ascii_strings.end(), utf16_strings.begin(),
+                                   utf16_strings.end());
+              for (std::string candidate : ascii_strings) {
+                candidate = sanitizeUtf8Value(std::move(candidate));
+                if (looksLikeSid(candidate)) {
+                  row_sid = candidate;
+                  break;
+                }
+              }
+            }
+          }
+        }
+      }
+
+      libesedb_record_free(&record, nullptr);
+
+      if (row_executables.empty()) continue;
+      for (const auto& executable : row_executables) {
+        if (collected >= config_.max_candidates_per_source) break;
+
+        std::string details = "table=" + table_name;
+        if (!row_sid.empty()) {
+          details += ", sid=" + row_sid;
+        }
+        addExecutionEvidence(process_data, executable, "SRUM", row_timestamp,
+                            details);
+        collected++;
+      }
+    }
+
+    libesedb_table_free(&table, nullptr);
+  }
+
+  close_file();
+  return collected;
+#endif
 }
 
 void ExecutionEvidenceAnalyzer::detectSecurityLogTampering(

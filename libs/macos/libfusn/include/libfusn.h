@@ -1,0 +1,244 @@
+/*
+ * Library to access the Update Sequence Number (USN) Journal format
+ *
+ * Copyright (C) 2011-2025, Joachim Metz <joachim.metz@gmail.com>
+ *
+ * Refer to AUTHORS for acknowledgements.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+#if !defined( _LIBFUSN_H )
+#define _LIBFUSN_H
+
+#include <libfusn/codepage.h>
+#include <libfusn/definitions.h>
+#include <libfusn/error.h>
+#include <libfusn/extern.h>
+#include <libfusn/features.h>
+#include <libfusn/types.h>
+
+#include <stdio.h>
+
+#if defined( __cplusplus )
+extern "C" {
+#endif
+
+/* -------------------------------------------------------------------------
+ * Support functions
+ * ------------------------------------------------------------------------- */
+
+/* Returns the library version
+ */
+LIBFUSN_EXTERN \
+const char *libfusn_get_version(
+             void );
+
+/* -------------------------------------------------------------------------
+ * Error functions
+ * ------------------------------------------------------------------------- */
+
+/* Frees an error
+ */
+LIBFUSN_EXTERN \
+void libfusn_error_free(
+      libfusn_error_t **error );
+
+/* Prints a descriptive string of the error to the stream
+ * Returns the amount of printed characters if successful or -1 on error
+ */
+LIBFUSN_EXTERN \
+int libfusn_error_fprint(
+     libfusn_error_t *error,
+     FILE *stream );
+
+/* Prints a descriptive string of the error to the string
+ * The end-of-string character is not included in the return value
+ * Returns the amount of printed characters if successful or -1 on error
+ */
+LIBFUSN_EXTERN \
+int libfusn_error_sprint(
+     libfusn_error_t *error,
+     char *string,
+     size_t size );
+
+/* Prints a backtrace of the error to the stream
+ * Returns the amount of printed characters if successful or -1 on error
+ */
+LIBFUSN_EXTERN \
+int libfusn_error_backtrace_fprint(
+     libfusn_error_t *error,
+     FILE *stream );
+
+/* Prints a backtrace of the error to the string
+ * The end-of-string character is not included in the return value
+ * Returns the amount of printed characters if successful or -1 on error
+ */
+LIBFUSN_EXTERN \
+int libfusn_error_backtrace_sprint(
+     libfusn_error_t *error,
+     char *string,
+     size_t size );
+
+/* -------------------------------------------------------------------------
+ * Record functions
+ * ------------------------------------------------------------------------- */
+
+/* Creates a record
+ * Make sure the value record is referencing, is set to NULL
+ * Returns 1 if successful or -1 on error
+ */
+LIBFUSN_EXTERN \
+int libfusn_record_initialize(
+     libfusn_record_t **usn_record,
+     libfusn_error_t **error );
+
+/* Frees a record
+ * Returns 1 if successful or -1 on error
+ */
+LIBFUSN_EXTERN \
+int libfusn_record_free(
+     libfusn_record_t **usn_record,
+     libfusn_error_t **error );
+
+/* Copies the record from the byte stream
+ * Returns 1 if successful or -1 on error
+ */
+LIBFUSN_EXTERN \
+int libfusn_record_copy_from_byte_stream(
+     libfusn_record_t *usn_record,
+     const uint8_t *byte_stream,
+     size_t byte_stream_size,
+     libfusn_error_t **error );
+
+/* Retrieves the size
+ * Returns 1 if successful or -1 on error
+ */
+LIBFUSN_EXTERN \
+int libfusn_record_get_size(
+     libfusn_record_t *usn_record,
+     uint32_t *size,
+     libfusn_error_t **error );
+
+/* Retrieves the update time
+ * Returns 1 if successful or -1 on error
+ */
+LIBFUSN_EXTERN \
+int libfusn_record_get_update_time(
+     libfusn_record_t *record,
+     uint64_t *update_time,
+     libfusn_error_t **error );
+
+/* Retrieves the file reference
+ * Returns 1 if successful or -1 on error
+ */
+LIBFUSN_EXTERN \
+int libfusn_record_get_file_reference(
+     libfusn_record_t *record,
+     uint64_t *file_reference,
+     libfusn_error_t **error );
+
+/* Retrieves the parent file reference
+ * Returns 1 if successful or -1 on error
+ */
+LIBFUSN_EXTERN \
+int libfusn_record_get_parent_file_reference(
+     libfusn_record_t *record,
+     uint64_t *parent_file_reference,
+     libfusn_error_t **error );
+
+/* Retrieves the update sequence number
+ * Returns 1 if successful or -1 on error
+ */
+LIBFUSN_EXTERN \
+int libfusn_record_get_update_sequence_number(
+     libfusn_record_t *record,
+     uint64_t *update_sequence_number,
+     libfusn_error_t **error );
+
+/* Retrieves the update reason flags
+ * Returns 1 if successful or -1 on error
+ */
+LIBFUSN_EXTERN \
+int libfusn_record_get_update_reason_flags(
+     libfusn_record_t *record,
+     uint32_t *update_reason_flags,
+     libfusn_error_t **error );
+
+/* Retrieves the update source flags
+ * Returns 1 if successful or -1 on error
+ */
+LIBFUSN_EXTERN \
+int libfusn_record_get_update_source_flags(
+     libfusn_record_t *record,
+     uint32_t *update_source_flags,
+     libfusn_error_t **error );
+
+/* Retrieves the file attribute flags
+ * Returns 1 if successful or -1 on error
+ */
+LIBFUSN_EXTERN \
+int libfusn_record_get_file_attribute_flags(
+     libfusn_record_t *record,
+     uint32_t *file_attribute_flags,
+     libfusn_error_t **error );
+
+/* Retrieves the size of the UTF-8 encoded name
+ * The returned size includes the end of string character
+ * Returns 1 if successful or -1 on error
+ */
+LIBFUSN_EXTERN \
+int libfusn_record_get_utf8_name_size(
+     libfusn_record_t *record,
+     size_t *utf8_string_size,
+     libfusn_error_t **error );
+
+/* Retrieves the UTF-8 encoded name
+ * The size should include the end of string character
+ * Returns 1 if successful or -1 on error
+ */
+LIBFUSN_EXTERN \
+int libfusn_record_get_utf8_name(
+     libfusn_record_t *record,
+     uint8_t *utf8_string,
+     size_t utf8_string_size,
+     libfusn_error_t **error );
+
+/* Retrieves the size of the UTF-16 encoded name
+ * The returned size includes the end of string character
+ * Returns 1 if successful or -1 on error
+ */
+LIBFUSN_EXTERN \
+int libfusn_record_get_utf16_name_size(
+     libfusn_record_t *record,
+     size_t *utf16_string_size,
+     libfusn_error_t **error );
+
+/* Retrieves the UTF-16 encoded name
+ * The size should include the end of string character
+ * Returns 1 if successful or -1 on error
+ */
+LIBFUSN_EXTERN \
+int libfusn_record_get_utf16_name(
+     libfusn_record_t *record,
+     uint16_t *utf16_string,
+     size_t utf16_string_size,
+     libfusn_error_t **error );
+
+#if defined( __cplusplus )
+}
+#endif
+
+#endif /* !defined( _LIBFUSN_H ) */
+

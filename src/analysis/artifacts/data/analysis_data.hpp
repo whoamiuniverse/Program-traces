@@ -65,7 +65,6 @@ struct ProcessInfo {
       timeline_artifacts;  ///< Таймлайн артефактов с деталями источника
   std::vector<std::string>
       recovered_from;  ///< Источники восстановления (USN, $LogFile, VSS и др.)
-  double confidence_score = 0.0;  ///< Оценка достоверности [0.0..1.0]
 };
 
 /// @struct RecoveryEvidence
