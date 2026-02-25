@@ -1,58 +1,72 @@
-# Setup and configuration
+# Configuration
 
-Краткий справочник по структуре проекта, настройке `config.ini` и расширению поддержки версий Windows.
+Краткий справочник по архитектуре, секциям `config.ini` и расширению поддержки Windows-версий.
 
 ## Архитектура
 
 ```text
 src/
-  main.cpp                     # точка входа
-  analysis/                    # сценарии анализа диска
-    os/                        # определение версии/типа Windows
-    artifacts/                 # анализ артефактов запуска ПО
-  parsers/                     # адаптеры форматов (registry, prefetch, evt/evtx)
-  errors/                      # типы исключений
-  infra/                       # config, logging, export
-  common/                      # общие утилиты (string/time/parse)
+  main.cpp
+  analysis/
+    os/                                  # определение версии/типа Windows
+    artifacts/
+      orchestrator/                      # WindowsDiskAnalyzer + pipeline stages
+      autorun/ amcache/ prefetch/
+      event_logs/ execution/ recovery/
+  parsers/                               # registry/prefetch/evt/evtx
+  infra/                                 # config/logging/csv export
+  errors/                                # типизированные исключения
+  common/                                # string/time/number utils
 ```
 
-Зависимости по слоям:
-- `main.cpp -> analysis`
-- `analysis -> parsers + infra + errors + common`
-- `parsers -> errors + common`
-- `infra` и `common` не зависят от `analysis`
+Ключевой orchestration-слой:
+- `orchestrator/windows_disk_analyzer.cpp` — 7-этапный pipeline анализа.
+- `orchestrator/windows_disk_analyzer_os.cpp` — выбор тома и OS detection.
+- `orchestrator/windows_disk_analyzer_config.cpp` — чтение `[Logging]`, `[CSVExport]`, `[TamperRules]`.
+- `orchestrator/windows_disk_analyzer_helpers.*` — FS/mount/registry helper API.
 
-## Структура config.ini
+## Секции config.ini
 
-Основные секции:
-- `[General]` — список поддерживаемых версий (`Versions`).
-- `[Logging]` — флаги детального debug по этапам анализа.
-- `[CSVExport]` — правила экспорта и фильтрации CSV.
-- `[OSInfo*]` — параметры определения версии Windows.
-- `[VersionDefaults]` — базовые параметры артефактов для всех версий.
-- `[WindowsXX]` — override только отличающихся параметров.
+Основные:
+- `[General]`: `Versions`.
+- `[Logging]`: `DebugOSDetection`, `DebugAutorun`, `DebugPrefetch`, `DebugEventLog`, `DebugAmcache`, `DebugExecution`, `DebugRecovery`.
+- `[CSVExport]`: фильтры и лимиты экспортируемых метрик.
+- `[TamperRules]`: правила `TamperFlags`.
+- `[OSInfoRegistryPaths]`, `[OSInfoSystemRegistryPaths]`: пути к `SOFTWARE`/`SYSTEM` hive (по версии + `Default`).
+- `[BuildMappingsClient]`, `[BuildMappingsServer]`: пороговые build-мэппинги.
+- `[VersionDefaults]` + `[WindowsXX]`: артефактные пути/ключи по версиям.
+- `[ExecutionArtifacts]`: доп. источники исполнения (ShimCache/UserAssist/RunMRU/BAM/DAM/JumpLists/SRUM/WindowsSearch/…).
+- `[Recovery]`: USN/VSS/Pagefile/Memory/Unallocated и native/fallback режимы.
 
-## Добавление Новой Версии Windows
+Логирование:
+- `info/warn/error` должны оставаться короткими и операционными.
+- детальные причины и технический контекст выводятся в `debug` по соответствующим флагам `[Logging]`.
 
-1. Добавьте имя версии в `[General] -> Versions` в [config.ini](config.ini).
-2. Если пути к `SOFTWARE`/`SYSTEM` нестандартные, добавьте override в
-   `[OSInfoRegistryPaths]` и `[OSInfoSystemRegistryPaths]`.
-3. Создайте секцию `[<Version>]` и укажите только отличия от `[VersionDefaults]`.
-4. При необходимости обновите `[BuildMappingsClient]` или `[BuildMappingsServer]`:
-   указывайте только минимальные (пороговые) сборки семейств.
-5. Запустите анализ и проверьте в логах строку `Версия Windows определена: ...`.
+## Добавление новой версии Windows
 
-Минимальный пример:
+1. Добавьте идентификатор в `[General] -> Versions`.
+2. При нестандартных hive-путях добавьте ключи в:
+   - `[OSInfoRegistryPaths]`
+   - `[OSInfoSystemRegistryPaths]`
+3. Добавьте/обновите пороги в `[BuildMappingsClient]` или `[BuildMappingsServer]`.
+4. Создайте секцию `[WindowsXX]` только с отличиями от `[VersionDefaults]`.
+5. Проверьте запуск и строку в логах: `Версия Windows определена: ...`.
 
-```ini
-[General]
-Versions = WindowsXP,WindowsVista,Windows7,Windows8,Windows10,Windows11,WindowsServer,Windows12
+## Исключения
 
-[Windows12]
-NetworkEventIDs = 5156,5157,3
-```
+Базовый тип: `src/errors/app_exception.hpp` (`AppException`).
 
-## Генерация документации
+Оркестратор (`src/errors/disk_analyzer_exception.hpp`):
+- `DiskAnalyzerException`
+- `InvalidDiskRootException`
+- `DiskNotMountedException`
+- `RegistryHiveValidationException`
+- `WindowsVolumeSelectionException`
+- `OutputDirectoryException`
+
+Модульные исключения (`config/parsing/prefetch/registry/os/csv/logger`) также наследуются от `AppException`.
+
+## Doxygen
 
 ```bash
 sudo apt update && sudo apt install doxygen -y

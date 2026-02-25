@@ -1,23 +1,21 @@
 # Program traces
 
-Инструмент для анализа артефактов запуска программ на подключенном Windows-диске.
+Инструмент для forensic-анализа артефактов запуска ПО на смонтированном Windows-диске (macOS/Linux).
 
-Архитектура и настройка `config.ini`: [CONFIGURATION.md](CONFIGURATION.md).
+Подробная архитектура и настройка `config.ini`: [CONFIGURATION.md](CONFIGURATION.md).
 
 ## Зависимости
 
-Проект по умолчанию использует prebuilt-библиотеки из `libs/<platform>/`.
-Если prebuilt отсутствуют, соберите зависимости вручную.
+Проект ожидает prebuilt-статические библиотеки в `libs/<platform>/`:
+- `libregf`
+- `libscca`
+- `libevtx`
+- `libevt`
+- `libspdlog`
+- `libfmt`
+- опционально: `libesedb`, `libfusn`, `libvshadow`
 
-### Быстрая установка базовых пакетов (Linux)
-
-```bash
-sudo apt update && sudo apt install autopoint cmake git autoconf automake libtool pkg-config gcc g++ make libfuse-dev -y
-```
-
-### Сборка зависимостей вручную
-
-Универсальный шаблон:
+Если prebuilt отсутствуют, соберите зависимости вручную (по шаблону libyal):
 
 ```bash
 git clone https://github.com/libyal/<repo>.git
@@ -28,18 +26,9 @@ cd <repo>
 make
 sudo make install
 sudo ldconfig
-cd ..
 ```
 
-Нужные репозитории:
-- `libregf` (проверка: `regfinfo`)
-- `libscca` (проверка: `sccainfo`)
-- `libevtx` (проверка: `evtxexport --version`)
-- `libevt` (проверка: `evtexport --version`)
-
 ## Сборка
-
-Из корня репозитория:
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -47,8 +36,6 @@ cmake --build build -j
 ```
 
 ## Запуск
-
-Формат:
 
 ```bash
 ./build/program_traces <корень_диска|auto> <config.ini> <output.csv>
@@ -58,6 +45,23 @@ cmake --build build -j
 Примеры:
 
 ```bash
-./build/program_traces /Volumes/Untitled/ config.ini ~/Desktop/result.csv
-./build/program_traces config.ini ~/Desktop/result.csv
+./build/program_traces /Volumes/Untitled/ ./config.ini ~/Desktop/result.csv
+./build/program_traces ./config.ini ~/Desktop/result.csv
 ```
+
+## Что делает пайплайн
+
+`WindowsDiskAnalyzer` выполняет 7 этапов (с логированием прогресса):
+1. Autorun
+2. Amcache
+3. Prefetch
+4. EventLog
+5. Execution artifacts (ShimCache/UserAssist/RunMRU/BAM/DAM/JumpLists/SRUM/…)
+6. Recovery (USN/VSS/Pagefile/Memory/Unallocated)
+7. CSV export
+
+## Логирование и исключения
+
+- `info/warn/error`: короткие сообщения по этапам и итогам.
+- подробная диагностика включается через debug-флаги в `[Logging]` (`config.ini`).
+- ошибки приложения типизированы (иерархия от `AppException`), для оркестратора используются `DiskAnalyzerException` и наследники.
