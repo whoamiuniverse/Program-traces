@@ -3,9 +3,10 @@
 
 #pragma once
 
+#include "errors/app_exception.hpp"
+
 #include <cstdint>
 #include <cstdio>
-#include <stdexcept>
 #include <string>
 
 namespace PrefetchAnalysis {
@@ -13,14 +14,13 @@ namespace PrefetchAnalysis {
 /// @class PrefetchDataException
 /// @brief Базовое исключение для ошибок обработки данных Prefetch
 /// @details Служит основой для всех специализированных исключений в модуле
-/// анализа Prefetch-файлов. Наследует стандартное исключение std::runtime_error
-/// для совместимости с STL.
-class PrefetchDataException : public std::runtime_error {
+/// анализа Prefetch-файлов.
+class PrefetchDataException : public AppException {
  public:
   /// @brief Конструктор базового исключения
   /// @param[in] message Описание ошибки
   explicit PrefetchDataException(const std::string& message)
-      : std::runtime_error(message) {}
+      : AppException(message) {}
 };
 
 /// @class InvalidExecutableNameException

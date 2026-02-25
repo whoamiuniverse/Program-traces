@@ -1,16 +1,21 @@
+/// @file csv_exporter.cpp
+/// @brief Реализация экспорта агрегированных артефактов в CSV.
+
 #include "csv_exporter.hpp"
 
 #include <algorithm>
 #include <cctype>
-#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <sstream>
 #include <set>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #include "analysis/artifacts/data/analysis_data.hpp"
+#include "analysis/artifacts/common/evidence_utils.hpp"
 #include "common/utils.hpp"
 #include "errors/csv_export_exception.hpp"
 
@@ -32,6 +37,12 @@ struct AggregatedData {
   std::set<std::string> hashes;
   std::set<uint64_t> file_sizes;  // Размеры файлов
   bool has_deleted_trace = false;
+  std::set<std::string> evidence_sources;
+  std::set<std::string> tamper_flags;
+  std::set<std::string> timeline_artifacts;
+  std::set<std::string> recovered_from;
+  std::string first_seen_utc;
+  std::string last_seen_utc;
 };
 
 constexpr char kCsvDelimiter = ';';
@@ -50,23 +61,35 @@ struct MetricFilterRules {
   std::size_t upper_alnum_min_length = 8;
 };
 
+/// @brief Приводит ASCII-символ к нижнему регистру.
+/// @param c Символ ASCII.
+/// @return Нормализованный символ.
 char toLowerAsciiChar(const unsigned char c) {
   if (c >= 'A' && c <= 'Z') return static_cast<char>(c - 'A' + 'a');
   return static_cast<char>(c);
 }
 
+/// @brief Приводит ASCII-строку к нижнему регистру.
+/// @param value Исходная строка.
+/// @return Копия строки в нижнем регистре.
 std::string toLowerAscii(std::string value) {
   std::ranges::transform(value, value.begin(),
                          [](const unsigned char c) { return toLowerAsciiChar(c); });
   return value;
 }
 
+/// @brief Сортирует вектор и удаляет дубликаты.
+/// @tparam T Тип элементов.
+/// @param values Вектор значений (изменяется на месте).
 template <typename T>
 void sortAndUnique(std::vector<T>& values) {
   std::sort(values.begin(), values.end());
   values.erase(std::unique(values.begin(), values.end()), values.end());
 }
 
+/// @brief Нормализует список фильтров метрик к lower-case без пустых значений.
+/// @param values Исходные токены.
+/// @return Отфильтрованный/нормализованный набор токенов.
 std::vector<std::string> normalizeFilterTokens(
     const std::vector<std::string>& values) {
   std::vector<std::string> normalized;
@@ -84,6 +107,9 @@ std::vector<std::string> normalizeFilterTokens(
   return normalized;
 }
 
+/// @brief Строит runtime-правила фильтрации метрик из конфигурации.
+/// @param options Настройки экспорта CSV.
+/// @return Подготовленные правила для быстрого применения.
 MetricFilterRules buildMetricFilterRules(
     const WindowsDiskAnalysis::CSVExportOptions& options) {
   MetricFilterRules rules;
@@ -110,10 +136,16 @@ MetricFilterRules buildMetricFilterRules(
   return rules;
 }
 
+/// @brief Проверяет, содержит ли имя файла расширение.
+/// @param filename Имя файла.
+/// @return `true`, если расширение присутствует.
 bool hasFileExtension(const std::string& filename) {
   return filename.find('.') != std::string::npos;
 }
 
+/// @brief Проверяет, что строка состоит только из верхнего ASCII регистра.
+/// @param value Проверяемая строка.
+/// @return `true`, если все символы в диапазоне `A-Z`.
 bool isAllUpperAsciiLetters(const std::string& value) {
   if (value.empty()) return false;
 
@@ -125,6 +157,10 @@ bool isAllUpperAsciiLetters(const std::string& value) {
   return true;
 }
 
+/// @brief Определяет, похож ли токен на hex-like идентификатор.
+/// @param value Проверяемая строка.
+/// @param min_length Минимальная длина токена.
+/// @return `true`, если строка похожа на hex-like шум.
 bool isMostlyHexLikeToken(const std::string& value,
                           const std::size_t min_length) {
   if (value.size() < min_length) return false;
@@ -142,6 +178,10 @@ bool isMostlyHexLikeToken(const std::string& value,
   return has_digit;
 }
 
+/// @brief Проверяет upper-alnum токен с `_`, характерный для шума.
+/// @param value Проверяемая строка.
+/// @param min_length Минимальная длина токена.
+/// @return `true`, если токен удовлетворяет эвристике.
 bool isUpperAlphaNumUnderscoreToken(const std::string& value,
                                     const std::size_t min_length) {
   if (value.size() < min_length) return false;
@@ -162,6 +202,10 @@ bool isUpperAlphaNumUnderscoreToken(const std::string& value,
   return has_digit && has_letter;
 }
 
+/// @brief Проверяет отбрасывание имени по пользовательским правилам.
+/// @param metric_filename_lower Имя метрики в lower-case.
+/// @param rules Правила фильтрации.
+/// @return `true`, если значение нужно исключить.
 bool shouldSkipByUserRules(const std::string& metric_filename_lower,
                            const MetricFilterRules& rules) {
   if (rules.skip_exact.contains(metric_filename_lower)) {
@@ -183,6 +227,10 @@ bool shouldSkipByUserRules(const std::string& metric_filename_lower,
   return false;
 }
 
+/// @brief Проверяет необходимость отбрасывания имени метрики.
+/// @param metric_filename Имя файла метрики.
+/// @param rules Правила фильтрации.
+/// @return `true`, если имя следует исключить.
 bool shouldSkipMetricFilename(const std::string& metric_filename,
                               const MetricFilterRules& rules) {
   if (metric_filename.empty()) return true;
@@ -212,6 +260,10 @@ bool shouldSkipMetricFilename(const std::string& metric_filename,
   return false;
 }
 
+/// @brief Формирует финальный набор метрик для CSV c фильтрами и лимитом.
+/// @param metrics Список файловых метрик.
+/// @param rules Правила фильтрации.
+/// @return Набор имен для колонки `ФайловыеМетрики`.
 std::vector<std::string> buildMetricValuesForCsv(
     const std::vector<FileMetric>& metrics, const MetricFilterRules& rules) {
   std::vector<std::string> metric_values;
@@ -239,6 +291,9 @@ std::vector<std::string> buildMetricValuesForCsv(
   return metric_values;
 }
 
+/// @brief Нормализует путь/командную строку до пути исполняемого файла.
+/// @param path Исходная строка.
+/// @return Нормализованный путь или пустая строка.
 std::string normalizePath(const std::string& path) {
   if (path.empty()) return "";
 
@@ -276,7 +331,9 @@ std::string normalizePath(const std::string& path) {
   return result.substr(start, end - start + 1);
 }
 
-// Функция для извлечения имени файла из пути
+/// @brief Извлекает имя файла из полного пути.
+/// @param path Полный или относительный путь.
+/// @return Имя файла.
 std::string getFilenameFromPath(const std::string& path) {
   if (path.empty()) return {};
   std::string normalized = path;
@@ -286,6 +343,9 @@ std::string getFilenameFromPath(const std::string& path) {
   return normalized.substr(sep_pos + 1);
 }
 
+/// @brief Преобразует тип тома в строковое представление.
+/// @param type Числовой `VolumeType`.
+/// @return Человеко-читаемое обозначение типа тома.
 std::string volumeTypeToString(uint32_t type) {
   switch (static_cast<VolumeType>(type)) {
     case VolumeType::FIXED:
@@ -307,6 +367,167 @@ std::string volumeTypeToString(uint32_t type) {
     default:
       return "UNKNOWN";
   }
+}
+
+/// @brief Нормализует имя источника артефакта к каноническому виду.
+/// @param source Исходное имя источника.
+/// @return Каноническое имя источника.
+std::string normalizeEvidenceSource(std::string source) {
+  trim(source);
+  if (source.empty()) return {};
+
+  static const std::unordered_map<std::string, std::string_view>
+      kCanonicalEvidenceSources = {
+          {"prefetch", "Prefetch"},
+          {"eventlog", "EventLog"},
+          {"event log", "EventLog"},
+          {"amcache", "Amcache"},
+          {"autorun", "Autorun"},
+          {"networkevent", "NetworkEvent"},
+          {"network event", "NetworkEvent"},
+          {"userassist", "UserAssist"},
+          {"runmru", "RunMRU"},
+          {"featureusage", "FeatureUsage"},
+          {"feature usage", "FeatureUsage"},
+          {"bam", "BAM"},
+          {"dam", "DAM"},
+          {"shimcache", "ShimCache"},
+          {"recentapps", "RecentApps"},
+          {"recent apps", "RecentApps"},
+          {"taskscheduler", "TaskScheduler"},
+          {"task scheduler", "TaskScheduler"},
+          {"ifeo", "IFEO"},
+          {"wer", "WER"},
+          {"timeline", "Timeline"},
+          {"bits", "BITS"},
+          {"wmirepository", "WMIRepository"},
+          {"wmi repository", "WMIRepository"},
+          {"windowssearch", "WindowsSearch"},
+          {"windows search", "WindowsSearch"},
+          {"jumplist", "JumpList"},
+          {"jump list", "JumpList"},
+          {"lnkrecent", "LNKRecent"},
+          {"lnk recent", "LNKRecent"},
+          {"srum", "SRUM"},
+          {"usn", "USN"},
+          {"$logfile", "$LogFile"},
+          {"logfile", "$LogFile"},
+          {"vss", "VSS"},
+          {"pagefile", "Pagefile"},
+          {"memory", "Memory"},
+          {"unallocated", "Unallocated"},
+      };
+
+  const std::string lowered = toLowerAscii(source);
+  const auto it = kCanonicalEvidenceSources.find(lowered);
+  if (it != kCanonicalEvidenceSources.end()) {
+    return std::string(it->second);
+  }
+  return source;
+}
+
+/// @brief Добавляет источник артефактов с нормализацией имени.
+/// @param data Агрегированные данные строки.
+/// @param source Источник для добавления.
+void addEvidenceSource(AggregatedData& data, std::string source) {
+  source = normalizeEvidenceSource(std::move(source));
+  if (!source.empty()) {
+    data.evidence_sources.insert(std::move(source));
+  }
+}
+
+/// @brief Добавляет tamper-флаг, если он не пуст.
+/// @param data Агрегированные данные строки.
+/// @param flag Имя флага.
+void addTamperFlag(AggregatedData& data, std::string flag) {
+  trim(flag);
+  if (!flag.empty()) {
+    data.tamper_flags.insert(std::move(flag));
+  }
+}
+
+/// @brief Проверяет наличие конкретного источника в строке.
+/// @param data Агрегированные данные строки.
+/// @param source Искомый источник.
+/// @return `true`, если источник найден.
+bool hasEvidenceSource(const AggregatedData& data, const std::string& source) {
+  return data.evidence_sources.contains(normalizeEvidenceSource(source));
+}
+
+/// @brief Проверяет наличие любого источника из заданного списка.
+/// @param data Агрегированные данные строки.
+/// @param sources Набор источников для проверки.
+/// @return `true`, если найден хотя бы один источник.
+bool hasAnyEvidenceSource(const AggregatedData& data,
+                          const std::vector<std::string>& sources) {
+  for (const auto& source : sources) {
+    if (hasEvidenceSource(data, source)) return true;
+  }
+  return false;
+}
+
+/// @brief Проверяет, похоже ли имя на образ процесса (`*.exe/...`).
+/// @param executable_name Имя процесса.
+/// @return `true`, если имя соответствует исполняемому образу.
+bool isLikelyProcessImageName(const std::string& executable_name) {
+  const std::string lowered = toLowerAscii(executable_name);
+  for (const std::string_view ext :
+       {".exe", ".com", ".bat", ".cmd", ".ps1", ".msi"}) {
+    if (lowered.size() >= ext.size() &&
+        lowered.rfind(ext) == lowered.size() - ext.size()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/// @brief Выводит дополнительные tamper-флаги по правилам корреляции.
+/// @param data Агрегированные данные строки.
+/// @param options Параметры правил tamper.
+void deriveTamperFlags(
+    AggregatedData& data, const WindowsDiskAnalysis::CSVExportOptions& options) {
+  if (options.tamper_rule_prefetch_missing_enabled) {
+    const bool has_prefetch = hasEvidenceSource(data, "Prefetch");
+    const bool has_runtime_sources = hasAnyEvidenceSource(
+        data, options.tamper_prefetch_missing_runtime_sources);
+    const bool image_condition =
+        !options.tamper_rule_prefetch_missing_require_process_image ||
+        isLikelyProcessImageName(data.executable_name);
+
+    if (!has_prefetch && has_runtime_sources && image_condition) {
+      addTamperFlag(data, "prefetch_missing_but_other_artifacts_present");
+    }
+  }
+
+  if (options.tamper_rule_amcache_deleted_trace_enabled && data.has_deleted_trace) {
+    addTamperFlag(data, "amcache_deleted_trace");
+  }
+
+  if (options.tamper_rule_registry_inconsistency_enabled) {
+    const bool has_registry_only_sources =
+        hasAnyEvidenceSource(data, options.tamper_registry_only_sources);
+    const bool has_strong_correlated_sources =
+        hasAnyEvidenceSource(data, options.tamper_registry_strong_sources);
+    if (has_registry_only_sources && !has_strong_correlated_sources) {
+      addTamperFlag(data, "registry_inconsistency");
+    }
+  }
+}
+
+/// @brief Обновляет минимальное время первого наблюдения.
+/// @param data Агрегированные данные строки.
+/// @param timestamp Временная метка-кандидат.
+void updateRowFirstSeen(AggregatedData& data, const std::string& timestamp) {
+  WindowsDiskAnalysis::EvidenceUtils::updateTimestampMin(data.first_seen_utc,
+                                                         timestamp);
+}
+
+/// @brief Обновляет максимальное время последнего наблюдения.
+/// @param data Агрегированные данные строки.
+/// @param timestamp Временная метка-кандидат.
+void updateRowLastSeen(AggregatedData& data, const std::string& timestamp) {
+  WindowsDiskAnalysis::EvidenceUtils::updateTimestampMax(data.last_seen_utc,
+                                                         timestamp);
 }
 
 }  // namespace
@@ -370,12 +591,17 @@ void CSVExporter::exportToCSV(
     file << "ИсполняемыйФайл" << kCsvDelimiter << "Пути" << kCsvDelimiter
          << "Версии" << kCsvDelimiter << "Хэши" << kCsvDelimiter
          << "РазмерФайла" << kCsvDelimiter << "ВременаЗапуска" << kCsvDelimiter
-         << "Автозагрузка" << kCsvDelimiter << "СледыУдаления"
+         << "FirstSeenUTC" << kCsvDelimiter << "LastSeenUTC" << kCsvDelimiter
+         << "TimelineArtifacts" << kCsvDelimiter << "RecoveredFrom"
+         << kCsvDelimiter << "Автозагрузка" << kCsvDelimiter << "СледыУдаления"
          << kCsvDelimiter << "КоличествоЗапусков" << kCsvDelimiter
          << "Тома(серийный:тип)" << kCsvDelimiter << "СетевыеПодключения"
-         << kCsvDelimiter << "ФайловыеМетрики\n";
+         << kCsvDelimiter << "ФайловыеМетрики" << kCsvDelimiter
+         << "EvidenceSources" << kCsvDelimiter << "TamperFlags\n";
 
-    // Основная карта для агрегации данных по имени файла
+    // Основная карта для агрегации данных по нормализованному идентификатору
+    // процесса.
+    // Приоритет: полный путь (если есть), иначе имя файла.
     std::map<std::string, AggregatedData> aggregated_data;
 
     // Обработка всех типов данных с объединением по имени файла
@@ -386,10 +612,19 @@ void CSVExporter::exportToCSV(
       // Получаем имя файла - основной ключ для агрегации
       std::string filename = getFilenameFromPath(norm_path);
       if (filename.empty()) return;
-      const std::string filename_key = toLowerAscii(filename);
+
+      const bool has_explicit_path =
+          norm_path.find('\\') != std::string::npos ||
+          norm_path.find('/') != std::string::npos ||
+          (norm_path.size() >= 3 &&
+           std::isalpha(static_cast<unsigned char>(norm_path[0])) != 0 &&
+           norm_path[1] == ':' &&
+           (norm_path[2] == '\\' || norm_path[2] == '/'));
+      const std::string aggregation_key =
+          toLowerAscii(has_explicit_path ? norm_path : filename);
 
       // Обрабатываем данные
-      auto& bucket = aggregated_data[filename_key];
+      auto& bucket = aggregated_data[aggregation_key];
       if (bucket.executable_name.empty()) {
         bucket.executable_name = filename;
       }
@@ -403,6 +638,8 @@ void CSVExporter::exportToCSV(
                    [&](AggregatedData& data, const std::string& path) {
                      data.paths.insert(path);
                      data.autorun_locations.insert(entry.location);
+                     addEvidenceSource(data, "Autorun");
+                     data.timeline_artifacts.insert("[Autorun] " + entry.location);
                    });
     }
 
@@ -418,6 +655,41 @@ void CSVExporter::exportToCSV(
                                 info.volumes.end());
             data.metrics.insert(data.metrics.end(), info.metrics.begin(),
                                 info.metrics.end());
+
+            for (const auto& source : info.evidence_sources) {
+              addEvidenceSource(data, source);
+            }
+            for (const auto& flag : info.tamper_flags) {
+              addTamperFlag(data, flag);
+            }
+            for (const auto& timeline : info.timeline_artifacts) {
+              if (!timeline.empty()) {
+                data.timeline_artifacts.insert(timeline);
+              }
+            }
+            for (const auto& recovered_from : info.recovered_from) {
+              if (!recovered_from.empty()) {
+                data.recovered_from.insert(recovered_from);
+              }
+            }
+
+            updateRowFirstSeen(data, info.first_seen_utc);
+            updateRowLastSeen(data, info.last_seen_utc);
+            for (const auto& timestamp : info.run_times) {
+              updateRowFirstSeen(data, timestamp);
+              updateRowLastSeen(data, timestamp);
+            }
+
+            // Fallback для старых источников, где evidence_sources еще не
+            // заполнены на этапе сбора.
+            if (info.evidence_sources.empty()) {
+              if (!info.metrics.empty() || !info.volumes.empty()) {
+                addEvidenceSource(data, "Prefetch");
+              } else if (info.run_count > 0 || !info.run_times.empty()) {
+                addEvidenceSource(data, "EventLog");
+              }
+            }
+
           });
     }
 
@@ -427,6 +699,11 @@ void CSVExporter::exportToCSV(
                    [&](AggregatedData& data, const std::string& path) {
                      data.paths.insert(path);
                      data.network_connections.push_back(conn);
+                     addEvidenceSource(data, "NetworkEvent");
+                     data.timeline_artifacts.insert(
+                         "[NetworkEvent] " + conn.protocol + ":" +
+                         conn.local_address + "->" + conn.remote_address + ":" +
+                         std::to_string(conn.port));
                    });
     }
 
@@ -443,6 +720,7 @@ void CSVExporter::exportToCSV(
       processEntry(path,
                    [&](AggregatedData& data, const std::string& norm_path) {
                      data.paths.insert(norm_path);
+                     addEvidenceSource(data, "Amcache");
 
                      // Добавляем версии и хэши
                      if (!entry.version.empty()) {
@@ -459,6 +737,10 @@ void CSVExporter::exportToCSV(
 
                      if (!entry.modification_time_str.empty()) {
                        data.run_times.push_back(entry.modification_time_str);
+                       updateRowFirstSeen(data, entry.modification_time_str);
+                       updateRowLastSeen(data, entry.modification_time_str);
+                       data.timeline_artifacts.insert(
+                           "[Amcache] " + entry.modification_time_str);
                      }
 
                      if (entry.is_deleted) {
@@ -468,32 +750,35 @@ void CSVExporter::exportToCSV(
     }
 
     // 5. Генерируем выходные данные
-    for (const auto& [filename_key, data] : aggregated_data) {
-      const std::string& filename =
-          data.executable_name.empty() ? filename_key : data.executable_name;
+    for (const auto& [aggregation_key, data] : aggregated_data) {
+      AggregatedData row = data;
+      deriveTamperFlags(row, options);
 
-      std::string paths_str = joinStrings(data.paths);
-      std::string versions_str = joinStrings(data.versions);
-      std::string hashes_str = joinStrings(data.hashes);
+      const std::string& filename =
+          row.executable_name.empty() ? aggregation_key : row.executable_name;
+
+      std::string paths_str = joinStrings(row.paths);
+      std::string versions_str = joinStrings(row.versions);
+      std::string hashes_str = joinStrings(row.hashes);
 
       std::vector<std::string> file_sizes;
-      file_sizes.reserve(data.file_sizes.size());
-      for (const auto size : data.file_sizes) {
+      file_sizes.reserve(row.file_sizes.size());
+      for (const auto size : row.file_sizes) {
         file_sizes.push_back(std::to_string(size));
       }
       std::string file_sizes_str = joinStrings(file_sizes);
 
       // Форматирование времени запуска (включая время изменения)
-      std::vector<std::string> unique_run_times = data.run_times;
+      std::vector<std::string> unique_run_times = row.run_times;
       sortAndUnique(unique_run_times);
       std::string run_times_str = joinStrings(unique_run_times);
 
       // Форматирование автозагрузки
       std::string autorun_str;
-      if (!data.autorun_locations.empty()) {
+      if (!row.autorun_locations.empty()) {
         autorun_str = "Да(";
         bool first_location = true;
-        for (const auto& location : data.autorun_locations) {
+        for (const auto& location : row.autorun_locations) {
           if (!first_location) autorun_str += ", ";
           autorun_str += location;
           first_location = false;
@@ -504,12 +789,12 @@ void CSVExporter::exportToCSV(
       }
 
       // Следы удалённых файлов
-      std::string deleted_str = data.has_deleted_trace ? "Да" : "Нет";
+      std::string deleted_str = row.has_deleted_trace ? "Да" : "Нет";
 
       // Форматирование сетевых подключений
       std::vector<std::string> network_values;
-      network_values.reserve(data.network_connections.size());
-      for (const auto& conn : data.network_connections) {
+      network_values.reserve(row.network_connections.size());
+      for (const auto& conn : row.network_connections) {
         network_values.push_back(conn.protocol + ":" + conn.local_address +
                                  "->" + conn.remote_address + ":" +
                                  std::to_string(conn.port));
@@ -519,8 +804,8 @@ void CSVExporter::exportToCSV(
 
       // Форматирование томов
       std::vector<std::string> volume_values;
-      volume_values.reserve(data.volumes.size());
-      for (const auto& vol : data.volumes) {
+      volume_values.reserve(row.volumes.size());
+      for (const auto& vol : row.volumes) {
         volume_values.push_back(std::to_string(vol.getSerialNumber()) + ":" +
                                 volumeTypeToString(vol.getVolumeType()));
       }
@@ -529,18 +814,29 @@ void CSVExporter::exportToCSV(
 
       // Форматирование файловых метрик
       std::vector<std::string> metric_values =
-          buildMetricValuesForCsv(data.metrics, metric_rules);
+          buildMetricValuesForCsv(row.metrics, metric_rules);
       std::string metrics_str = joinStrings(metric_values);
+
+      std::string timeline_artifacts_str = joinStrings(row.timeline_artifacts);
+      std::string recovered_from_str = joinStrings(row.recovered_from);
+      std::string evidence_sources_str = joinStrings(row.evidence_sources);
+      std::string tamper_flags_str = joinStrings(row.tamper_flags);
 
       // Запись данных в строго фиксированном порядке колонок
       file << escape(filename) << kCsvDelimiter << escape(paths_str)
            << kCsvDelimiter << escape(versions_str) << kCsvDelimiter
            << escape(hashes_str) << kCsvDelimiter << escape(file_sizes_str)
            << kCsvDelimiter << escape(run_times_str) << kCsvDelimiter
-           << escape(autorun_str) << kCsvDelimiter << escape(deleted_str)
-           << kCsvDelimiter << data.run_count << kCsvDelimiter
+           << escape(row.first_seen_utc) << kCsvDelimiter
+           << escape(row.last_seen_utc) << kCsvDelimiter
+           << escape(timeline_artifacts_str) << kCsvDelimiter
+           << escape(recovered_from_str) << kCsvDelimiter << escape(autorun_str)
+           << kCsvDelimiter << escape(deleted_str)
+           << kCsvDelimiter << row.run_count << kCsvDelimiter
            << escape(volumes_str) << kCsvDelimiter << escape(network_str)
-           << kCsvDelimiter << escape(metrics_str) << "\n";
+           << kCsvDelimiter << escape(metrics_str) << kCsvDelimiter
+           << escape(evidence_sources_str) << kCsvDelimiter
+           << escape(tamper_flags_str) << "\n";
     }
   } catch (const std::exception& e) {
     throw CsvExportException(std::string("Ошибка при экспорте данных: ") +

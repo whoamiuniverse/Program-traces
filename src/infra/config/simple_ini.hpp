@@ -1,3 +1,6 @@
+/// @file simple_ini.hpp
+/// @brief Вендорный заголовок библиотеки SimpleIni.
+
 /** @mainpage
 
     <table>

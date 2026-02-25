@@ -8,7 +8,7 @@
 #include <filesystem>
 #include <iostream>
 
-#include "logger_exception.hpp"
+#include "errors/logger_exception.hpp"
 
 namespace fs = std::filesystem;
 

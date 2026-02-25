@@ -49,6 +49,18 @@ std::vector<uint32_t> parseEventIds(const std::string& raw_ids,
   return ids;
 }
 
+std::string formatEventTimestamp(const uint64_t raw_timestamp) {
+  constexpr uint64_t kFiletimeUnixEpoch = 116444736000000000ULL;
+  constexpr uint64_t kMaxReasonableFiletime = 210000000000000000ULL;
+
+  if (raw_timestamp >= kFiletimeUnixEpoch &&
+      raw_timestamp <= kMaxReasonableFiletime) {
+    return filetimeToString(raw_timestamp);
+  }
+
+  return convert_run_times(raw_timestamp);
+}
+
 }  // namespace
 
 EventLogAnalyzer::EventLogAnalyzer(
@@ -181,8 +193,7 @@ void EventLogAnalyzer::collect(
               ProcessInfo& info = process_data[name];
               info.filename = name;
               try {
-                info.run_times.push_back(
-                    convert_run_times(event->getTimestamp()));
+                info.run_times.push_back(formatEventTimestamp(event->getTimestamp()));
               } catch (const std::exception& e) {
                 logger->debug("{}", e.what());
               }

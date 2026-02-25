@@ -56,6 +56,9 @@ target_include_directories(program_traces PRIVATE
     ${PROGRAM_TRACES_SRC_ROOT}
     ${LIBS_BASE_PATH}/libregf/include
     ${LIBS_BASE_PATH}/libscca/include
+    ${LIBS_BASE_PATH}/libesedb/include
+    ${LIBS_BASE_PATH}/libfusn/include
+    ${LIBS_BASE_PATH}/libvshadow/include
     ${LIBS_BASE_PATH}/libevtx/include
     ${LIBS_BASE_PATH}/libevt/include
     ${LIBS_BASE_PATH}/libspdlog/include
@@ -69,6 +72,30 @@ set(THIRD_PARTY_STATIC_LIBS
     ${LIBS_BASE_PATH}/libevt/libevt.a
     ${LIBS_BASE_PATH}/libspdlog/libspdlog.a
     ${LIBS_BASE_PATH}/libfmt/libfmt.a
+)
+
+set(PROGRAM_TRACES_HAVE_LIBESEDB 0)
+if (EXISTS "${LIBS_BASE_PATH}/libesedb/libesedb.a")
+    list(APPEND THIRD_PARTY_STATIC_LIBS ${LIBS_BASE_PATH}/libesedb/libesedb.a)
+    set(PROGRAM_TRACES_HAVE_LIBESEDB 1)
+endif()
+
+set(PROGRAM_TRACES_HAVE_LIBFUSN 0)
+if (EXISTS "${LIBS_BASE_PATH}/libfusn/libfusn.a")
+    list(APPEND THIRD_PARTY_STATIC_LIBS ${LIBS_BASE_PATH}/libfusn/libfusn.a)
+    set(PROGRAM_TRACES_HAVE_LIBFUSN 1)
+endif()
+
+set(PROGRAM_TRACES_HAVE_LIBVSHADOW 0)
+if (EXISTS "${LIBS_BASE_PATH}/libvshadow/libvshadow.a")
+    list(APPEND THIRD_PARTY_STATIC_LIBS ${LIBS_BASE_PATH}/libvshadow/libvshadow.a)
+    set(PROGRAM_TRACES_HAVE_LIBVSHADOW 1)
+endif()
+
+target_compile_definitions(program_traces PRIVATE
+    PROGRAM_TRACES_HAVE_LIBESEDB=${PROGRAM_TRACES_HAVE_LIBESEDB}
+    PROGRAM_TRACES_HAVE_LIBFUSN=${PROGRAM_TRACES_HAVE_LIBFUSN}
+    PROGRAM_TRACES_HAVE_LIBVSHADOW=${PROGRAM_TRACES_HAVE_LIBVSHADOW}
 )
 
 foreach(LIB_FILE IN LISTS THIRD_PARTY_STATIC_LIBS)
