@@ -1,7 +1,11 @@
 #include "os_detection.hpp"
 
 #include <algorithm>
+#include <filesystem>
+#include <iomanip>
+#include <limits>
 #include <map>
+#include <optional>
 #include <sstream>
 #include <string_view>
 #include <utility>
@@ -13,6 +17,7 @@
 
 namespace WindowsVersion {
 namespace {
+namespace fs = std::filesystem;
 
 constexpr std::string_view kDefaultKey = "Default";
 
@@ -34,6 +39,70 @@ std::string getConfigValueWithFallback(const Config& config,
   }
 
   return {};
+}
+
+std::optional<std::string> findMappedNameByBuildThreshold(
+    const std::map<uint32_t, std::string>& build_mappings,
+    uint32_t build_number) {
+  if (build_mappings.empty()) return std::nullopt;
+
+  const auto upper_it = build_mappings.upper_bound(build_number);
+  if (upper_it == build_mappings.begin()) return std::nullopt;
+
+  const auto it = std::prev(upper_it);
+  return it->second;
+}
+
+std::string resolveIniVersionFromMappedName(std::string mapped_name) {
+  const std::string normalized = to_lower(std::move(mapped_name));
+  if (normalized.find("server") != std::string::npos) return "WindowsServer";
+  if (normalized.find("windows 11") != std::string::npos) return "Windows11";
+  if (normalized.find("windows 10") != std::string::npos) return "Windows10";
+  if (normalized.find("windows 8") != std::string::npos) return "Windows8";
+  if (normalized.find("windows 7") != std::string::npos) return "Windows7";
+  if (normalized.find("vista") != std::string::npos) return "WindowsVista";
+  if (normalized.find("xp") != std::string::npos) return "WindowsXP";
+  return {};
+}
+
+bool mappedNameMatchesServerClass(const std::string& mapped_name,
+                                  bool is_server) {
+  const std::string mapped_ini = resolveIniVersionFromMappedName(mapped_name);
+  if (mapped_ini.empty()) return true;
+  if (is_server) return mapped_ini == "WindowsServer";
+  return mapped_ini != "WindowsServer";
+}
+
+std::string normalizePathSeparators(std::string path) {
+  std::ranges::replace(path, '\\', '/');
+  return path;
+}
+
+std::string deriveSystemHivePathFromSoftwarePath(std::string software_hive_path) {
+  software_hive_path = normalizePathSeparators(std::move(software_hive_path));
+  if (software_hive_path.empty()) return {};
+
+  fs::path hive_path(software_hive_path);
+  const std::string filename = to_lower(hive_path.filename().string());
+  if (filename == "system") {
+    return hive_path.generic_string();
+  }
+  if (filename != "software") {
+    return {};
+  }
+
+  hive_path.replace_filename("SYSTEM");
+  return hive_path.generic_string();
+}
+
+bool isServerProductType(std::string product_type) {
+  const std::string lowered = to_lower(std::move(product_type));
+  return lowered == "servernt" || lowered == "lanmannt";
+}
+
+bool isClientProductType(std::string product_type) {
+  const std::string lowered = to_lower(std::move(product_type));
+  return lowered == "winnt";
 }
 
 }  // namespace
@@ -141,6 +210,11 @@ OSInfo OSDetection::detect() {
               parser_->getKeyValues(full_path, cfg.registry_key);
           !values.empty()) {
         extractOSInfo(values, info, version_name);
+        const std::string system_hive_relative =
+            resolveSystemHiveRelativePath(version_name, cfg);
+        if (!system_hive_relative.empty()) {
+          enrichFromSystemHive(device_root_path_ + system_hive_relative, info);
+        }
         detected = true;
         break;
       }
@@ -203,6 +277,8 @@ void OSDetection::extractOSInfo(
       has_essential = true;
     } else if (key == "EditionID") {
       info.edition_id = value;
+    } else if (key == "InstallationType") {
+      info.installation_type = value;
     } else if (key == "ReleaseId") {
       info.release_id = value;
     } else if (key == "DisplayVersion") {
@@ -220,15 +296,25 @@ void OSDetection::extractOSInfo(
 }
 
 void OSDetection::determineFullOSName(OSInfo& info) const {
-  std::string name = info.product_name;
+  std::string name = info.product_name.empty() ? "Windows" : info.product_name;
   const bool is_server = isServerSystem(info);
 
   if (!info.current_build.empty()) {
     uint32_t build_number = 0;
     if (tryParseUInt32(info.current_build, build_number)) {
-      const auto& build_map = is_server ? server_builds : client_builds;
-      if (const auto it = build_map.find(build_number); it != build_map.end()) {
-        name = it->second;
+      const auto& primary_map = is_server ? server_builds : client_builds;
+      const auto& secondary_map = is_server ? client_builds : server_builds;
+
+      if (const auto mapped_primary =
+              findMappedNameByBuildThreshold(primary_map, build_number);
+          mapped_primary.has_value()) {
+        name = *mapped_primary;
+      } else if (const auto mapped_secondary =
+                     findMappedNameByBuildThreshold(secondary_map,
+                                                    build_number);
+                 mapped_secondary.has_value() &&
+                 mappedNameMatchesServerClass(*mapped_secondary, is_server)) {
+        name = *mapped_secondary;
       }
     }
   }
@@ -250,20 +336,34 @@ std::string OSDetection::resolveIniVersion(const OSInfo& info) const {
   };
 
   const bool is_server = isServerSystem(info);
-  if (is_server && has_version("WindowsServer")) {
-    return "WindowsServer";
-  }
 
   uint32_t build_number = 0;
   if (tryParseUInt32(info.current_build, build_number)) {
-    if (build_number >= 22000 && has_version("Windows11")) return "Windows11";
-    if (build_number >= 10240 && has_version("Windows10")) return "Windows10";
-    if (build_number >= 9200 && has_version("Windows8")) return "Windows8";
-    if (build_number >= 7600 && has_version("Windows7")) return "Windows7";
-    if (build_number >= 6000 && has_version("WindowsVista")) {
-      return "WindowsVista";
+    const auto& primary_map = is_server ? server_builds : client_builds;
+    const auto& secondary_map = is_server ? client_builds : server_builds;
+
+    if (const auto mapped =
+            findMappedNameByBuildThreshold(primary_map, build_number);
+        mapped.has_value()) {
+      const std::string mapped_ini = resolveIniVersionFromMappedName(*mapped);
+      if (!mapped_ini.empty() && has_version(mapped_ini)) {
+        return mapped_ini;
+      }
     }
-    if (has_version("WindowsXP")) return "WindowsXP";
+
+    if (const auto mapped =
+            findMappedNameByBuildThreshold(secondary_map, build_number);
+        mapped.has_value() &&
+        mappedNameMatchesServerClass(*mapped, is_server)) {
+      const std::string mapped_ini = resolveIniVersionFromMappedName(*mapped);
+      if (!mapped_ini.empty() && has_version(mapped_ini)) {
+        return mapped_ini;
+      }
+    }
+  }
+
+  if (is_server && has_version("WindowsServer")) {
+    return "WindowsServer";
   }
 
   const std::string product_name = to_lower(info.product_name);
@@ -304,7 +404,109 @@ std::string OSDetection::resolveIniVersion(const OSInfo& info) const {
       "Не удалось сопоставить ОС с секцией конфигурации");
 }
 
+std::string OSDetection::resolveSystemHiveRelativePath(
+    const std::string& version_name, const VersionConfig& cfg) const {
+  std::string configured_path = getConfigValueWithFallback(
+      config_, "OSInfoSystemRegistryPaths", version_name, "OSInfoSystemDefaults",
+      "RegistryPath");
+  trim(configured_path);
+  if (!configured_path.empty()) {
+    return normalizePathSeparators(std::move(configured_path));
+  }
+
+  return deriveSystemHivePathFromSoftwarePath(cfg.registry_file);
+}
+
+std::optional<uint32_t> OSDetection::readCurrentControlSetIndex(
+    const std::string& system_hive_path) const {
+  try {
+    const auto current_value =
+        parser_->getSpecificValue(system_hive_path, "Select/Current");
+    if (!current_value) return std::nullopt;
+
+    switch (current_value->getType()) {
+      case RegistryAnalysis::RegistryValueType::REG_DWORD:
+      case RegistryAnalysis::RegistryValueType::REG_DWORD_BIG_ENDIAN:
+        return current_value->getAsDword();
+      case RegistryAnalysis::RegistryValueType::REG_QWORD: {
+        const uint64_t value = current_value->getAsQword();
+        if (value <= std::numeric_limits<uint32_t>::max()) {
+          return static_cast<uint32_t>(value);
+        }
+        break;
+      }
+      default:
+        break;
+    }
+
+    std::string text_value = current_value->getDataAsString();
+    trim(text_value);
+    uint32_t parsed = 0;
+    if (tryParseUInt32(text_value, parsed)) {
+      return parsed;
+    }
+  } catch (...) {
+  }
+
+  return std::nullopt;
+}
+
+void OSDetection::enrichFromSystemHive(const std::string& system_hive_path,
+                                       OSInfo& info) const {
+  const auto logger = GlobalLogger::get();
+
+  auto read_product_type =
+      [&](const std::string& value_path) -> std::optional<std::string> {
+    const auto value = parser_->getSpecificValue(system_hive_path, value_path);
+    if (!value) return std::nullopt;
+    std::string product_type = value->getDataAsString();
+    trim(product_type);
+    if (product_type.empty()) return std::nullopt;
+    return product_type;
+  };
+
+  try {
+    if (const auto product_type = read_product_type(
+            "CurrentControlSet/Control/ProductOptions/ProductType");
+        product_type.has_value()) {
+      info.system_product_type = *product_type;
+      logger->debug("ProductType из SYSTEM hive: {}", info.system_product_type);
+      return;
+    }
+
+    const auto current_control_set = readCurrentControlSetIndex(system_hive_path);
+    if (!current_control_set.has_value()) {
+      logger->debug(
+          "Не удалось определить Select/Current в SYSTEM hive: \"{}\"",
+          system_hive_path);
+      return;
+    }
+
+    std::ostringstream control_set_path;
+    control_set_path << "ControlSet" << std::setw(3) << std::setfill('0')
+                     << *current_control_set
+                     << "/Control/ProductOptions/ProductType";
+    if (const auto product_type = read_product_type(control_set_path.str());
+        product_type.has_value()) {
+      info.system_product_type = *product_type;
+      logger->debug("ProductType из SYSTEM hive: {}", info.system_product_type);
+    }
+  } catch (const std::exception& e) {
+    logger->debug("Не удалось прочитать ProductType из SYSTEM hive \"{}\": {}",
+                  system_hive_path, e.what());
+  }
+}
+
 bool OSDetection::isServerSystem(const OSInfo& info) const {
+  if (!info.system_product_type.empty()) {
+    if (isServerProductType(info.system_product_type)) return true;
+    if (isClientProductType(info.system_product_type)) return false;
+  }
+
+  const std::string installation_type = to_lower(info.installation_type);
+  if (installation_type.find("server") != std::string::npos) return true;
+  if (installation_type.find("client") != std::string::npos) return false;
+
   uint32_t build_number = 0;
   if (tryParseUInt32(info.current_build, build_number)) {
     const bool known_server = server_builds.contains(build_number);

@@ -2,7 +2,7 @@
 
 Инструмент для анализа артефактов запуска программ на подключенном Windows-диске.
 
-Архитектура и настройка `config.ini`: [SETUP_AND_CONFIGURATION.md](SETUP_AND_CONFIGURATION.md).
+Архитектура и настройка `config.ini`: [CONFIGURATION.md](CONFIGURATION.md).
 
 ## Зависимости
 

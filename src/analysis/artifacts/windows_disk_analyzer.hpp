@@ -60,10 +60,12 @@ class WindowsDiskAnalyzer {
   /// @param config Загруженная конфигурация
   /// @param disk_root Корень диска для проверки
   /// @param checked_paths Опциональный вывод проверенных путей
+  /// @param checked_errors Опциональный вывод ошибок проверки путей
   /// @return true если найден хотя бы один hive-файл
   bool hasRegistryHivePresence(
       const Config& config, const std::string& disk_root,
-      std::vector<std::string>* checked_paths = nullptr) const;
+      std::vector<std::string>* checked_paths = nullptr,
+      std::vector<std::string>* checked_errors = nullptr) const;
 
   /// @brief Пытается автоматически выбрать корректный Windows-том
   /// @param config Загруженная конфигурация
