@@ -67,4 +67,4 @@ class KeyHandle {
   libregf_key_t* ptr_ = nullptr;  ///< Указатель на ключ реестра
 };
 
-}
+}  // namespace RegistryAnalysis

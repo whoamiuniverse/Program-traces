@@ -66,4 +66,4 @@ class IEventData {
   [[nodiscard]] virtual const std::string& getXmlRepresentation() const = 0;
 };
 
-}
+}  // namespace EventLogAnalysis

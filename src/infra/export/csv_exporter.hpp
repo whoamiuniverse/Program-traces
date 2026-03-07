@@ -4,8 +4,8 @@
 #pragma once
 
 #include <cstddef>
-#include <map>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "analysis/artifacts/data/analysis_data.hpp"
@@ -97,6 +97,9 @@ class CSVExporter {
   ///    - Сетевые подключения + поля сетевого контекста
   ///      (NetworkEventIDs/NetworkTimestamps/NetworkProcessIDs/
   ///       NetworkApplications/NetworkDirections/NetworkActions)
+  ///    - Отдельный network timeline/context блок
+  ///      (NetworkTimelineArtifacts/NetworkContextSources/
+  ///       NetworkProfiles/FirewallRules)
   ///    - Количество запусков
   ///    - Источники доказательств (EvidenceSources)
   ///    - Флаги подозрительности (TamperFlags)
@@ -106,7 +109,7 @@ class CSVExporter {
   static void exportToCSV(
       const std::string& output_path,
       const std::vector<AutorunEntry>& autorun_entries,
-      const std::map<std::string, ProcessInfo>& process_data,
+      const std::unordered_map<std::string, ProcessInfo>& process_data,
       const std::vector<NetworkConnection>& network_connections,
       const std::vector<AmcacheEntry>& amcache_entries,
       const CSVExportOptions& options = CSVExportOptions{});

@@ -56,4 +56,4 @@ class IRegistryParser {
   /// @}
 };
 
-}
+}  // namespace RegistryAnalysis

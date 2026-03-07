@@ -46,6 +46,106 @@ struct NativeVssParseResult {
   std::vector<RecoveryEvidence> evidence;
 };
 
+/// @brief Ищет snapshot-root директории в `System Volume Information`.
+/// @param svi_root Корень `System Volume Information`.
+/// @return Список найденных директорий snapshot.
+std::vector<fs::path> findSnapshotRoots(const fs::path& svi_root) {
+  std::vector<fs::path> roots;
+  std::unordered_set<std::string> dedup;
+  std::error_code ec;
+
+  for (const auto& entry :
+       fs::recursive_directory_iterator(
+           svi_root, fs::directory_options::skip_permission_denied, ec)) {
+    if (ec) break;
+    if (!entry.is_directory()) continue;
+
+    const std::string name_lower =
+        toLowerAscii(entry.path().filename().string());
+    if (name_lower.find("harddiskvolumeshadowcopy") == std::string::npos) {
+      continue;
+    }
+
+    const std::string root = entry.path().string();
+    if (!dedup.insert(root).second) continue;
+    roots.push_back(entry.path());
+  }
+  return roots;
+}
+
+/// @brief Выполняет replay ключевых артефактов по найденным snapshot-root.
+/// @param disk_root Корневой путь диска.
+/// @param max_bytes Лимит чтения bytes.
+/// @param max_candidates Лимит кандидатов.
+/// @param max_files Лимит обрабатываемых snapshot-файлов.
+/// @return Набор evidence из snapshot replay.
+std::vector<RecoveryEvidence> collectSnapshotReplayEvidence(
+    const std::string& disk_root, const std::size_t max_bytes,
+    const std::size_t max_candidates, const std::size_t max_files) {
+  std::vector<RecoveryEvidence> results;
+  std::unordered_set<std::string> dedup;
+  std::size_t processed_files = 0;
+
+  const fs::path svi_dir = fs::path(disk_root) / "System Volume Information";
+  const auto resolved_svi = findPathCaseInsensitive(svi_dir);
+  if (!resolved_svi.has_value()) return results;
+
+  const auto snapshot_roots = findSnapshotRoots(*resolved_svi);
+  for (const fs::path& snapshot_root : snapshot_roots) {
+    if (processed_files >= max_files) break;
+
+    const std::vector<fs::path> key_paths = {
+        snapshot_root / "Windows" / "appcompat" / "Programs" / "Amcache.hve",
+        snapshot_root / "Windows" / "System32" / "winevt" / "Logs" /
+            "Security.evtx",
+        snapshot_root / "Windows" / "System32" / "Tasks"};
+
+    for (const fs::path& path : key_paths) {
+      if (processed_files >= max_files) break;
+      const auto resolved = findPathCaseInsensitive(path);
+      if (!resolved.has_value()) continue;
+      if (!fs::is_regular_file(*resolved)) continue;
+
+      auto evidence = scanRecoveryFileBinary(
+          *resolved, "VSS", "VSS(snapshot_replay)", max_bytes,
+          max_candidates);
+      for (auto& item : evidence) {
+        item.details += ", snapshot_root=" + snapshot_root.string();
+      }
+      appendUniqueEvidence(results, evidence, dedup);
+      processed_files++;
+    }
+
+    const fs::path prefetch_dir = snapshot_root / "Windows" / "Prefetch";
+    const auto resolved_prefetch = findPathCaseInsensitive(prefetch_dir);
+    if (!resolved_prefetch.has_value()) continue;
+    std::error_code ec;
+    if (!fs::exists(*resolved_prefetch, ec) || ec ||
+        !fs::is_directory(*resolved_prefetch, ec)) {
+      continue;
+    }
+
+    for (const auto& entry :
+         fs::directory_iterator(*resolved_prefetch,
+                                fs::directory_options::skip_permission_denied, ec)) {
+      if (processed_files >= max_files || ec) break;
+      if (!entry.is_regular_file()) continue;
+      if (toLowerAscii(entry.path().extension().string()) != ".pf") continue;
+
+      auto evidence = scanRecoveryFileBinary(entry.path(), "VSS",
+                                             "VSS(snapshot_prefetch)",
+                                             max_bytes, max_candidates);
+      for (auto& item : evidence) {
+        item.details += ", snapshot_root=" + snapshot_root.string();
+      }
+      appendUniqueEvidence(results, evidence, dedup);
+      processed_files++;
+    }
+  }
+
+  return results;
+}
+
 /// @brief Форматирует валидный FILETIME в UTC-строку.
 /// @param filetime FILETIME.
 /// @return Время в формате `YYYY-MM-DD HH:MM:SS` либо пустая строка.
@@ -302,6 +402,12 @@ void VSSAnalyzer::loadConfiguration() {
       vss_volume_path_ = config.getString("Recovery", "VSSVolumePath", "");
       unallocated_image_path_ =
           config.getString("Recovery", "UnallocatedImagePath", "");
+      enable_snapshot_artifact_replay_ = config.getBool(
+          "Recovery", "EnableVSSSnapshotReplay",
+          enable_snapshot_artifact_replay_);
+      vss_snapshot_replay_max_files_ = static_cast<std::size_t>(std::max(
+          1, config.getInt("Recovery", "VSSSnapshotReplayMaxFiles",
+                           static_cast<int>(vss_snapshot_replay_max_files_))));
     }
   } catch (const std::exception& e) {
     logger->warn("Не удалось загрузить настройки VSS");
@@ -422,7 +528,6 @@ std::vector<RecoveryEvidence> VSSAnalyzer::collect(
 
   if (enable_memory_) {
     const std::vector<fs::path> memory_candidates = {
-        fs::path(disk_root) / "hiberfil.sys",
         fs::path(disk_root) / "Windows" / "MEMORY.DMP",
         fs::path(disk_root) / "MEMORY.DMP"};
     for (const auto& candidate : memory_candidates) {
@@ -448,6 +553,14 @@ std::vector<RecoveryEvidence> VSSAnalyzer::collect(
       binary_count += evidence.size();
       appendUniqueEvidence(results, evidence, dedup);
     }
+  }
+
+  if (enable_snapshot_artifact_replay_) {
+    auto snapshot_evidence = collectSnapshotReplayEvidence(
+        disk_root, max_bytes, max_candidates_per_source_,
+        vss_snapshot_replay_max_files_);
+    binary_count += snapshot_evidence.size();
+    appendUniqueEvidence(results, snapshot_evidence, dedup);
   }
 
   logger->info("Recovery(VSS/Pagefile/Memory/Unallocated): native={} binary={} "

@@ -481,26 +481,43 @@ std::optional<std::string> findProcessKeyByPid(
   return best_key;
 }
 
-std::string findCanonicalProcessKey(
-    const std::map<std::string, ProcessInfo>& process_data,
-    const std::string& candidate_key) {
-  if (candidate_key.empty()) return {};
+/// @brief Предварительно вычисленный индекс для O(1)-поиска канонического ключа.
+/// Строится один раз перед основным циклом корреляции — вместо O(n) скана на каждый запрос.
+struct ProcessKeyIndex {
+  /// lowercase(full_path) → оригинальный ключ
+  std::unordered_map<std::string, std::string> by_path;
+  /// lowercase(filename) → оригинальный ключ (первое вхождение побеждает)
+  std::unordered_map<std::string, std::string> by_filename;
+};
 
-  const std::string lowered_candidate = to_lower(candidate_key);
-  for (const auto& [existing_key, _] : process_data) {
-    if (to_lower(existing_key) == lowered_candidate) {
-      return existing_key;
+ProcessKeyIndex buildProcessKeyIndex(
+    const std::unordered_map<std::string, ProcessInfo>& process_data) {
+  ProcessKeyIndex idx;
+  idx.by_path.reserve(process_data.size());
+  idx.by_filename.reserve(process_data.size());
+  for (const auto& [key, _] : process_data) {
+    idx.by_path.try_emplace(to_lower(key), key);
+    const std::string fname = to_lower(fs::path(key).filename().string());
+    if (!fname.empty()) {
+      idx.by_filename.try_emplace(fname, key);
     }
   }
+  return idx;
+}
 
-  const std::string candidate_filename =
-      to_lower(fs::path(candidate_key).filename().string());
-  if (!candidate_filename.empty()) {
-    for (const auto& [existing_key, _] : process_data) {
-      if (to_lower(fs::path(existing_key).filename().string()) ==
-          candidate_filename) {
-        return existing_key;
-      }
+std::string findCanonicalProcessKey(const ProcessKeyIndex& index,
+                                    const std::string& candidate_key) {
+  if (candidate_key.empty()) return {};
+
+  const std::string lowered = to_lower(candidate_key);
+  if (const auto it = index.by_path.find(lowered); it != index.by_path.end()) {
+    return it->second;
+  }
+
+  const std::string fname = to_lower(fs::path(candidate_key).filename().string());
+  if (!fname.empty()) {
+    if (const auto it = index.by_filename.find(fname); it != index.by_filename.end()) {
+      return it->second;
     }
   }
 
@@ -711,8 +728,9 @@ EventLogAnalysis::IEventLogParser* SecurityContextAnalyzer::getParserForFile(
 }
 
 void SecurityContextAnalyzer::collect(
-    const std::string& disk_root, std::map<std::string, ProcessInfo>& process_data,
-    const std::vector<NetworkConnection>& network_connections) {
+    const std::string& disk_root,
+    std::unordered_map<std::string, ProcessInfo>& process_data,
+    std::vector<NetworkConnection>& network_connections) {
   const auto logger = GlobalLogger::get();
 
   if (!config_.enabled) {
@@ -829,6 +847,10 @@ void SecurityContextAnalyzer::collect(
     sort_by_timestamp(records);
   }
 
+  // Строим индекс один раз — O(m), после чего каждый вызов findCanonicalProcessKey O(1)
+  // вместо O(m) на каждый из n process_records → итого O(n+m) вместо O(n*m).
+  const ProcessKeyIndex key_index = buildProcessKeyIndex(process_data);
+
   std::size_t correlated_processes = 0;
   std::size_t pid_resolved_processes = 0;
 
@@ -855,7 +877,7 @@ void SecurityContextAnalyzer::collect(
 
     if (process_key.empty()) continue;
 
-    process_key = findCanonicalProcessKey(process_data, process_key);
+    process_key = findCanonicalProcessKey(key_index, process_key);
     ProcessInfo& info = process_data[process_key];
     if (info.filename.empty()) {
       info.filename = process_key;

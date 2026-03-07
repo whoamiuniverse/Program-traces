@@ -81,4 +81,4 @@ class EvtxParser final : public IEventLogParser {
   bool file_opened_ = false;  ///< Флаг состояния файла (true - файл открыт)
 };
 
-}
+}  // namespace EventLogAnalysis

@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -37,6 +38,27 @@ namespace WindowsDiskAnalysis::RecoveryUtils {
     const std::string& recovered_from, std::size_t max_bytes,
     std::size_t max_candidates);
 
+/// @brief Выполняет сигнатурный/строковый recovery-скан уже загруженного буфера.
+/// @param buffer Содержимое сканируемого блока.
+/// @param source Логический источник (`USN`, `VSS`, `Memory`, ...).
+/// @param recovered_from Маркер вида восстановления (`Hiber(native)` и т.д.).
+/// @param container_label Метка контейнера (например имя файла).
+/// @param timestamp Временная метка источника.
+/// @param max_candidates Ограничение числа возвращаемых кандидатов.
+/// @param base_offset Смещение буфера относительно начала контейнера.
+/// @param chunk_source Источник чанка (`file_head`, `mft_record`, ...).
+/// @param container_size Полный размер анализируемого контейнера для корректной
+/// маркировки чанка как `head`/`middle`/`tail`. Если `0`, используется размер
+/// текущего буфера.
+/// @return Набор `RecoveryEvidence`, извлеченный из буфера.
+[[nodiscard]] std::vector<RecoveryEvidence> scanRecoveryBufferBinary(
+    const std::vector<uint8_t>& buffer, const std::string& source,
+    const std::string& recovered_from, const std::string& container_label,
+    const std::string& timestamp, std::size_t max_candidates,
+    std::uint64_t base_offset = 0,
+    const std::string& chunk_source = "buffer",
+    std::size_t container_size = 0);
+
 /// @brief Собирает ключ дедупликации для записи recovery evidence.
 /// @param evidence Запись evidence.
 /// @return Нормализованный строковый ключ.
@@ -52,4 +74,3 @@ void appendUniqueEvidence(std::vector<RecoveryEvidence>& target,
                           std::unordered_set<std::string>& dedup_keys);
 
 }  // namespace WindowsDiskAnalysis::RecoveryUtils
-

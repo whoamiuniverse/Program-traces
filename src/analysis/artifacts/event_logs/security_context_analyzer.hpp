@@ -4,12 +4,13 @@
 #pragma once
 
 #include <cstdint>
-#include <map>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "analysis/artifacts/data/analysis_data.hpp"
+#include "analysis/artifacts/event_logs/ieventlog_collector.hpp"
 #include "parsers/event_log/interfaces/iparser.hpp"
 
 namespace WindowsDiskAnalysis {
@@ -36,7 +37,7 @@ struct SecurityContextConfig {
 ///
 /// @details Анализатор читает Security.evtx (или Security.evt), выделяет события
 /// `4688`, `4624`, `4672` и коррелирует их по `LogonId`, времени и PID.
-class SecurityContextAnalyzer {
+class SecurityContextAnalyzer final : public IEventLogCollector {
  public:
   /// @brief Создаёт анализатор контекста безопасности.
   /// @param evt_parser Парсер событий формата `.evt`.
@@ -53,8 +54,8 @@ class SecurityContextAnalyzer {
   /// @param process_data Агрегированная карта процессов (обновляется на месте).
   /// @param network_connections Сетевые события для PID-восстановления процесса.
   void collect(const std::string& disk_root,
-               std::map<std::string, ProcessInfo>& process_data,
-               const std::vector<NetworkConnection>& network_connections);
+               std::unordered_map<std::string, ProcessInfo>& process_data,
+               std::vector<NetworkConnection>& network_connections) override;
 
  private:
   /// @brief Загружает конфигурацию SecurityContext из INI.

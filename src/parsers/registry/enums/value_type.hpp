@@ -25,4 +25,4 @@ enum class RegistryValueType : uint32_t {
   REG_QWORD = 11             ///< 64-битное целое число (11)
 };
 
-}
+}  // namespace RegistryAnalysis

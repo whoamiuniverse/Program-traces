@@ -1,10 +1,14 @@
 #include "prefetch_analyzer.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
+#include <future>
 #include <optional>
 #include <string_view>
+#include <vector>
 
+#include "common/utils.hpp"
 #include "infra/config/config.hpp"
 #include "infra/logging/logger.hpp"
 #include "analysis/os/os_detection.hpp"
@@ -29,68 +33,33 @@ std::string getConfigValueWithFallback(const Config& config,
   return {};
 }
 
-std::string toLowerAscii(std::string text) {
-  std::ranges::transform(text, text.begin(), [](unsigned char ch) {
-    return static_cast<char>(std::tolower(ch));
-  });
-  return text;
-}
-
 std::optional<std::filesystem::path> findPathCaseInsensitive(
     const std::filesystem::path& input_path) {
-  namespace fs = std::filesystem;
-  std::error_code ec;
-  if (fs::exists(input_path, ec) && !ec) {
-    return input_path;
+  return PathUtils::findPathCaseInsensitive(input_path);
+}
+
+/// @brief Преобразует распарсенный Prefetch-объект в `ProcessInfo`.
+/// @param prefetch_data Данные Prefetch из парсера.
+/// @param fallback_path Путь к `.pf` для fallback имени процесса.
+/// @return Нормализованная структура `ProcessInfo`.
+ProcessInfo buildProcessInfoFromPrefetch(
+    const std::unique_ptr<PrefetchAnalysis::IPrefetchData>& prefetch_data,
+    const std::filesystem::path& fallback_path) {
+  ProcessInfo info;
+
+  for (const auto& run_time : prefetch_data->getRunTimes()) {
+    auto time = convert_run_times(run_time);
+    info.run_times.emplace_back(time);
   }
 
-  fs::path current = input_path.is_absolute() ? input_path.root_path()
-                                              : fs::current_path(ec);
-  if (ec) return std::nullopt;
-
-  const fs::path relative =
-      input_path.is_absolute() ? input_path.relative_path() : input_path;
-
-  for (const fs::path& component_path : relative) {
-    const std::string component = component_path.string();
-    if (component.empty() || component == ".") continue;
-    if (component == "..") {
-      current = current.parent_path();
-      continue;
-    }
-
-    const fs::path direct_candidate = current / component_path;
-    ec.clear();
-    if (fs::exists(direct_candidate, ec) && !ec) {
-      current = direct_candidate;
-      continue;
-    }
-
-    ec.clear();
-    if (!fs::exists(current, ec) || ec || !fs::is_directory(current, ec)) {
-      return std::nullopt;
-    }
-
-    const std::string component_lower = toLowerAscii(component);
-    bool matched = false;
-    for (const auto& entry : fs::directory_iterator(current, ec)) {
-      if (ec) break;
-
-      if (toLowerAscii(entry.path().filename().string()) == component_lower) {
-        current = entry.path();
-        matched = true;
-        break;
-      }
-    }
-
-    if (ec || !matched) return std::nullopt;
+  info.run_count = prefetch_data->getRunCount();
+  info.filename = prefetch_data->getExecutableName();
+  if (info.filename.empty()) {
+    info.filename = fallback_path.stem().string();
   }
-
-  ec.clear();
-  if (fs::exists(current, ec) && !ec) {
-    return current;
-  }
-  return std::nullopt;
+  info.volumes = prefetch_data->getVolumes();
+  info.metrics = prefetch_data->getMetrics();
+  return info;
 }
 
 }  // namespace
@@ -128,6 +97,16 @@ void PrefetchAnalyzer::loadConfigurations(const std::string& ini_path) {
     logger->debug(
         "Загружена конфигурация Prefetch для \"{}\": путь = \"{}\"", version,
         cfg.prefetch_path.empty() ? "по умолчанию" : cfg.prefetch_path);
+  }
+
+  if (config.hasSection("Performance")) {
+    enable_parallel_prefetch_ = config.getBool(
+        "Performance", "EnableParallelPrefetch",
+        config.getBool("Performance", "EnableParallelStages",
+                       enable_parallel_prefetch_));
+    worker_threads_ = static_cast<std::size_t>(std::max(
+        1, config.getInt("Performance", "WorkerThreads",
+                         static_cast<int>(worker_threads_))));
   }
 }
 
@@ -168,45 +147,73 @@ std::vector<ProcessInfo> PrefetchAnalyzer::collect(
     }
   }
 
-  // Обрабатываем все .pf файлы
-  size_t processed_count = 0;
+  std::vector<std::filesystem::path> prefetch_files;
+  prefetch_files.reserve(512);
   for (const auto& entry :
        std::filesystem::directory_iterator(effective_prefetch_path)) {
-    const std::string ext_lower =
-        toLowerAscii(entry.path().extension().string());
+    const std::string ext_lower = to_lower(entry.path().extension().string());
     if (ext_lower != ".pf") continue;
+    prefetch_files.push_back(entry.path());
+  }
 
-    try {
-      auto prefetch_data = parser_->parse(entry.path().string());
+  std::size_t processed_count = 0;
+  if (enable_parallel_prefetch_ && worker_threads_ > 1 &&
+      prefetch_files.size() > 1) {
+    const std::size_t workers =
+        std::min<std::size_t>(worker_threads_, prefetch_files.size());
+    std::atomic<std::size_t> next_index{0};
+    std::vector<std::future<std::vector<ProcessInfo>>> futures;
+    futures.reserve(workers);
 
-      ProcessInfo info;
+    for (std::size_t worker = 0; worker < workers; ++worker) {
+      futures.push_back(std::async(std::launch::async, [&]() {
+        PrefetchAnalysis::PrefetchParser local_parser;
+        std::vector<ProcessInfo> worker_results;
+        worker_results.reserve(64);
 
-      for (const auto& run_time : prefetch_data->getRunTimes()) {
-        auto time = convert_run_times(run_time);
-        info.run_times.emplace_back(time);
+        while (true) {
+          const std::size_t index = next_index.fetch_add(1);
+          if (index >= prefetch_files.size()) break;
+          const std::filesystem::path& file_path = prefetch_files[index];
+
+          try {
+            auto prefetch_data = local_parser.parse(file_path.string());
+            worker_results.push_back(
+                buildProcessInfoFromPrefetch(prefetch_data, file_path));
+          } catch (const std::exception& e) {
+            logger->warn("Файл Prefetch пропущен из-за ошибки");
+            logger->debug("Ошибка анализа Prefetch \"{}\": {}", file_path.string(),
+                          e.what());
+          }
+        }
+        return worker_results;
+      }));
+    }
+
+    for (auto& future : futures) {
+      auto worker_results = future.get();
+      processed_count += worker_results.size();
+      results.insert(results.end(),
+                     std::make_move_iterator(worker_results.begin()),
+                     std::make_move_iterator(worker_results.end()));
+    }
+  } else {
+    // Последовательный режим: один parser object.
+    for (const auto& file_path : prefetch_files) {
+      try {
+        auto prefetch_data = parser_->parse(file_path.string());
+        results.push_back(buildProcessInfoFromPrefetch(prefetch_data, file_path));
+        processed_count++;
+      } catch (const std::exception& e) {
+        logger->warn("Файл Prefetch пропущен из-за ошибки");
+        logger->debug("Ошибка анализа Prefetch \"{}\": {}", file_path.string(),
+                      e.what());
       }
-
-      info.run_count = prefetch_data->getRunCount();
-      info.filename = prefetch_data->getExecutableName();
-      if (info.filename.empty()) {
-        info.filename = entry.path().stem().string();
-      }
-      info.volumes = prefetch_data->getVolumes();
-      info.metrics = prefetch_data->getMetrics();
-
-      // Сохраняем в результаты
-      results.emplace_back(info);
-      processed_count++;
-    } catch (const std::exception& e) {
-      logger->warn("Файл Prefetch пропущен из-за ошибки");
-      logger->debug("Ошибка анализа Prefetch \"{}\": {}", entry.path().string(),
-                    e.what());
     }
   }
 
-  logger->info(
-      "Проанализировано \"{}\" Prefetch-файлов, найдено \"{}\" процессов",
-      processed_count, results.size());
+  logger->info("Проанализировано \"{}\" Prefetch-файлов, найдено \"{}\" процессов",
+               processed_count, results.size());
   return results;
 }
 

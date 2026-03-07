@@ -133,4 +133,4 @@ class RegistryParser : public IRegistryParser {
   std::unordered_map<std::string, std::string> resolved_registry_paths_cache_;
 };
 
-}
+}  // namespace RegistryAnalysis

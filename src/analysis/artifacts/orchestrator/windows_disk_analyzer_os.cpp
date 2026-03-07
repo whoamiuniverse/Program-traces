@@ -27,6 +27,7 @@ using namespace Orchestrator::Detail;
 void WindowsDiskAnalyzer::detectOSVersion() {
   Config config(config_path_);
   loadLoggingOptions(config);
+  loadPerformanceOptions(config);
   std::string initial_validation_error;
 
   if (disk_root_.empty()) {

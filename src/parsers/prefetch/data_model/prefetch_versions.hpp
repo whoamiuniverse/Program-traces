@@ -54,6 +54,6 @@ enum class PrefetchFormatVersion : uint8_t {
     default:
       return PrefetchFormatVersion::UNKNOWN;
   }
-}
+}  // namespace PrefetchAnalysis
 
-}
+}  // namespace PrefetchAnalysis

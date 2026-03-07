@@ -109,4 +109,4 @@ class PrefetchParser : public IPrefetchParser {
   /// @}
 };
 
-}
+}  // namespace PrefetchAnalysis

@@ -110,4 +110,4 @@ class RegistryData final : public IRegistryData {
   RegistryValueType type_ = RegistryValueType::REG_NONE;  ///< Тип значения
 };
 
-}
+}  // namespace RegistryAnalysis

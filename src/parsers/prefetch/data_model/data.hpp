@@ -84,4 +84,4 @@ class PrefetchData : public IPrefetchData {
                                  ///< сырые распарсенные данные
 };
 
-}
+}  // namespace PrefetchAnalysis

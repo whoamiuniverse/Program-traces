@@ -59,4 +59,4 @@ class DataToStringVisitor {
   /// @}
 };
 
-}
+}  // namespace RegistryAnalysis

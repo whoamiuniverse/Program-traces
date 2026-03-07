@@ -10,6 +10,7 @@
 #include <system_error>
 #include <vector>
 
+#include "common/path_utils.hpp"
 #include "errors/parsing_exception.hpp"
 #include "errors/registry_exception.hpp"
 #include "infra/logging/logger.hpp"
@@ -30,76 +31,6 @@ std::string toLibregfErrorMessage(libregf_error_t* error) {
     return std::string(buffer.data());
   }
   return "не удалось получить текст ошибки libregf";
-}
-
-std::string toLowerAscii(std::string text) {
-  std::ranges::transform(text, text.begin(), [](unsigned char ch) {
-    return static_cast<char>(std::tolower(ch));
-  });
-  return text;
-}
-
-std::string normalizePathSeparators(std::string path) {
-  std::ranges::replace(path, '\\', '/');
-  return path;
-}
-
-std::optional<fs::path> findPathCaseInsensitive(const fs::path& input_path) {
-  std::error_code ec;
-  if (fs::exists(input_path, ec) && !ec) {
-    return input_path;
-  }
-
-  fs::path current = input_path.is_absolute() ? input_path.root_path()
-                                              : fs::current_path(ec);
-  if (ec) return std::nullopt;
-
-  const fs::path relative = input_path.is_absolute()
-                                ? input_path.relative_path()
-                                : input_path;
-
-  for (const fs::path& component_path : relative) {
-    const std::string component = component_path.string();
-    if (component.empty() || component == ".") continue;
-    if (component == "..") {
-      current = current.parent_path();
-      continue;
-    }
-
-    const fs::path direct_candidate = current / component_path;
-    ec.clear();
-    if (fs::exists(direct_candidate, ec) && !ec) {
-      current = direct_candidate;
-      continue;
-    }
-
-    ec.clear();
-    if (!fs::exists(current, ec) || ec || !fs::is_directory(current, ec)) {
-      return std::nullopt;
-    }
-
-    const std::string component_lower = toLowerAscii(component);
-    bool matched = false;
-    for (const auto& entry : fs::directory_iterator(current, ec)) {
-      if (ec) break;
-
-      if (toLowerAscii(entry.path().filename().string()) == component_lower) {
-        current = entry.path();
-        matched = true;
-        break;
-      }
-    }
-
-    if (ec || !matched) {
-      return std::nullopt;
-    }
-  }
-
-  ec.clear();
-  if (fs::exists(current, ec) && !ec) {
-    return current;
-  }
-  return std::nullopt;
 }
 
 }  // namespace
@@ -299,7 +230,8 @@ void RegistryParser::freeRegistryFile() {
 std::string RegistryParser::resolveRegistryFilePath(
     const std::string& registry_file_path) {
   const auto logger = GlobalLogger::get();
-  const std::string normalized_path = normalizePathSeparators(registry_file_path);
+  const std::string normalized_path =
+      PathUtils::normalizePathSeparators(registry_file_path);
 
   if (const auto cache_it =
           resolved_registry_paths_cache_.find(normalized_path);
@@ -314,7 +246,7 @@ std::string RegistryParser::resolveRegistryFilePath(
   }
 
   if (const std::optional<fs::path> resolved =
-          findPathCaseInsensitive(fs::path(normalized_path));
+          PathUtils::findPathCaseInsensitive(fs::path(normalized_path));
       resolved.has_value()) {
     const std::string resolved_path = resolved->string();
     logger->debug("Путь к hive разрешён case-insensitive: \"{}\" -> \"{}\"",

@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cstdint>
+#include <unordered_map>
 #include <filesystem>
 #include <map>
 #include <memory>
@@ -170,7 +171,7 @@ collectRegistryHiveCandidates(const Config& config);
 /// @brief Мержит recovery evidence в общую таблицу процессов.
 void mergeRecoveryEvidenceToProcessData(
     const std::vector<RecoveryEvidence>& recovery_entries,
-    std::map<std::string, ProcessInfo>& process_data);
+    std::unordered_map<std::string, ProcessInfo>& process_data);
 
 /// @brief Проверяет наличие интерактивного stdin.
 [[nodiscard]] bool hasInteractiveStdin();

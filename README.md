@@ -12,8 +12,7 @@
 - `libevtx`
 - `libevt`
 - `libspdlog`
-- `libfmt`
-- опционально: `libesedb`, `libfusn`, `libvshadow`
+- опционально: `libesedb`, `libfusn`, `libvshadow`, `libhibr`, `libfsntfs`
 
 Если prebuilt отсутствуют, соберите зависимости вручную (по шаблону libyal):
 
@@ -57,8 +56,10 @@ cmake --build build -j
 3. Prefetch
 4. EventLog
 5. Execution artifacts (ShimCache/UserAssist/RunMRU/BAM/DAM/JumpLists/SRUM/…)
-6. Recovery (USN/VSS/Pagefile/Memory/Unallocated)
+6. Recovery (USN/VSS/Hiber/NTFS metadata/Registry logs/Pagefile/Memory/Unallocated)
 7. CSV export
+
+Параллельный режим recovery, Prefetch, EventLog и user-hive этапов Execution настраивается в `[Performance]`.
 
 ## Логирование и исключения
 

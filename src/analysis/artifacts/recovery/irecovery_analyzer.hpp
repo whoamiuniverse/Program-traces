@@ -14,6 +14,7 @@ namespace WindowsDiskAnalysis {
 /// @brief Интерфейс анализатора, извлекающего восстановимые доказательства
 class IRecoveryAnalyzer {
  public:
+  /// @brief Виртуальный деструктор базового интерфейса.
   virtual ~IRecoveryAnalyzer() noexcept = default;
 
   /// @brief Собирает восстановимые доказательства по подключенному диску

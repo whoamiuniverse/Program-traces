@@ -5,9 +5,17 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <future>
 #include <unordered_map>
 
 #include "analysis/artifacts/common/evidence_utils.hpp"
+#include "analysis/artifacts/event_logs/eventlog_analyzer.hpp"
+#include "analysis/artifacts/event_logs/security_context_analyzer.hpp"
+#include "analysis/artifacts/recovery/fs_metadata/ntfs_metadata_analyzer.hpp"
+#include "analysis/artifacts/recovery/hiber/hibernation_analyzer.hpp"
+#include "analysis/artifacts/recovery/registry/registry_log_analyzer.hpp"
+#include "analysis/artifacts/recovery/usn/usn_analyzer.hpp"
+#include "analysis/artifacts/recovery/vss/vss_analyzer.hpp"
 #include "common/utils.hpp"
 #include "infra/logging/logger.hpp"
 #include "parsers/event_log/evt/parser/parser.hpp"
@@ -55,17 +63,17 @@ void WindowsDiskAnalyzer::initializeComponents() {
 
   {
     ScopedDebugLevelOverride scoped_debug(debug_options_.eventlog);
-    auto evt_parser = std::make_unique<EventLogAnalysis::EvtParser>();
-    auto evtx_parser = std::make_unique<EventLogAnalysis::EvtxParser>();
-    eventlog_analyzer_ = std::make_unique<EventLogAnalyzer>(
-        std::move(evt_parser), std::move(evtx_parser), os_info_.ini_version,
-        config_path_);
+    // Все collectors регистрируются через IEventLogCollector (OCP).
+    // Для добавления нового — одна строка push_back без изменения заголовка.
+    eventlog_collectors_.push_back(std::make_unique<EventLogAnalyzer>(
+        std::make_unique<EventLogAnalysis::EvtParser>(),
+        std::make_unique<EventLogAnalysis::EvtxParser>(),
+        os_info_.ini_version, config_path_));
 
-    auto security_evt_parser = std::make_unique<EventLogAnalysis::EvtParser>();
-    auto security_evtx_parser = std::make_unique<EventLogAnalysis::EvtxParser>();
-    security_context_analyzer_ = std::make_unique<SecurityContextAnalyzer>(
-        std::move(security_evt_parser), std::move(security_evtx_parser),
-        os_info_.ini_version, config_path_);
+    eventlog_collectors_.push_back(std::make_unique<SecurityContextAnalyzer>(
+        std::make_unique<EventLogAnalysis::EvtParser>(),
+        std::make_unique<EventLogAnalysis::EvtxParser>(),
+        os_info_.ini_version, config_path_));
   }
 
   {
@@ -78,16 +86,20 @@ void WindowsDiskAnalyzer::initializeComponents() {
 
   {
     ScopedDebugLevelOverride scoped_debug(debug_options_.execution);
-    auto execution_registry_parser =
-        std::make_unique<RegistryAnalysis::RegistryParser>();
     execution_evidence_analyzer_ = std::make_unique<ExecutionEvidenceAnalyzer>(
-        std::move(execution_registry_parser), os_info_.ini_version, config_path_);
+        os_info_.ini_version, config_path_);
   }
 
   {
     ScopedDebugLevelOverride scoped_debug(debug_options_.recovery);
-    usn_analyzer_ = std::make_unique<USNAnalyzer>(config_path_);
-    vss_analyzer_ = std::make_unique<VSSAnalyzer>(config_path_);
+    // Все recovery-анализаторы регистрируются через NamedRecoveryAnalyzer (OCP).
+    // Добавление нового — одна строка push_back без изменения заголовка,
+    // resetAnalysisState() или runRecoveryStage().
+    recovery_analyzers_.push_back({"USN",      std::make_unique<USNAnalyzer>(config_path_)});
+    recovery_analyzers_.push_back({"VSS",      std::make_unique<VSSAnalyzer>(config_path_)});
+    recovery_analyzers_.push_back({"Hiber",    std::make_unique<HibernationAnalyzer>(config_path_)});
+    recovery_analyzers_.push_back({"NTFS",     std::make_unique<NTFSMetadataAnalyzer>(config_path_)});
+    recovery_analyzers_.push_back({"Registry", std::make_unique<RegistryLogAnalyzer>(config_path_)});
   }
 }
 
@@ -114,8 +126,7 @@ void WindowsDiskAnalyzer::resetAnalysisState() {
   network_connections_.clear();
   amcache_entries_.clear();
   global_tamper_flags_.clear();
-  usn_recovery_evidence_.clear();
-  vss_recovery_evidence_.clear();
+  recovery_evidence_.clear();
 }
 
 void WindowsDiskAnalyzer::runAutorunStage() {
@@ -234,12 +245,8 @@ void WindowsDiskAnalyzer::runEventLogStage() {
 
   {
     ScopedDebugLevelOverride scoped_debug(debug_options_.eventlog);
-    eventlog_analyzer_->collect(disk_root_, process_data_, network_connections_);
-    if (security_context_analyzer_ != nullptr) {
-      security_context_analyzer_->collect(disk_root_, process_data_,
-                                          network_connections_);
-    } else {
-      logger->warn("SecurityContext: анализатор не инициализирован");
+    for (const auto& collector : eventlog_collectors_) {
+      collector->collect(disk_root_, process_data_, network_connections_);
     }
   }
 
@@ -315,19 +322,79 @@ void WindowsDiskAnalyzer::runExecutionStage() {
 
 void WindowsDiskAnalyzer::runRecoveryStage() {
   const auto logger = GlobalLogger::get();
-  logger->info("Этап 6/7: recovery-источники (USN/VSS)");
+  logger->info("Этап 6/7: recovery-источники (USN/VSS/Hiber/NTFS/Registry)");
 
-  {
-    ScopedDebugLevelOverride scoped_debug(debug_options_.recovery);
-    usn_recovery_evidence_ = usn_analyzer_->collect(disk_root_);
-    vss_recovery_evidence_ = vss_analyzer_->collect(disk_root_);
+  const bool run_parallel = performance_options_.enable_parallel_stages &&
+                            performance_options_.max_io_workers > 1;
+
+  // Резервируем память заранее: 5 анализаторов × max_candidates каждый.
+  // Избегаем многократных реаллокаций при последовательном push_back/insert.
+  constexpr std::size_t kDefaultCandidatesPerSource = 2000;
+  recovery_evidence_.reserve(recovery_analyzers_.size() * kDefaultCandidatesPerSource);
+
+  // Результаты по каждому анализатору: {label, evidence}.
+  // Индекс совпадает с recovery_analyzers_, что позволяет безопасно
+  // обращаться к метке при обработке исключений из future.
+  std::vector<std::pair<std::string, std::vector<RecoveryEvidence>>>
+      per_analyzer(recovery_analyzers_.size());
+  for (std::size_t i = 0; i < recovery_analyzers_.size(); ++i) {
+    per_analyzer[i].first = recovery_analyzers_[i].label;
   }
 
-  mergeRecoveryEvidenceToProcessData(usn_recovery_evidence_, process_data_);
-  mergeRecoveryEvidenceToProcessData(vss_recovery_evidence_, process_data_);
+  if (run_parallel) {
+    logger->info("Recovery: параллельный режим включен (MaxIOWorkers={})",
+                 performance_options_.max_io_workers);
 
-  logger->info("Этап 6/7 завершен: USN={}, VSS={}", usn_recovery_evidence_.size(),
-               vss_recovery_evidence_.size());
+    struct Task {
+      std::size_t                              index;
+      std::future<std::vector<RecoveryEvidence>> future;
+    };
+
+    std::vector<Task> tasks;
+    tasks.reserve(recovery_analyzers_.size());
+
+    for (std::size_t i = 0; i < recovery_analyzers_.size(); ++i) {
+      // Захватываем raw-указатель — вектор не изменяется во время async.
+      IRecoveryAnalyzer* ptr = recovery_analyzers_[i].analyzer.get();
+      tasks.push_back(
+          {i, std::async(std::launch::async,
+                         [ptr, this] { return ptr->collect(disk_root_); })});
+    }
+
+    for (auto& task : tasks) {
+      try {
+        per_analyzer[task.index].second = task.future.get();
+      } catch (const std::exception& e) {
+        logger->error("Recovery({}): ошибка этапа",
+                      recovery_analyzers_[task.index].label);
+        logger->debug("Recovery({}) exception: {}",
+                      recovery_analyzers_[task.index].label, e.what());
+      } catch (...) {
+        logger->error("Recovery({}): неизвестная ошибка этапа",
+                      recovery_analyzers_[task.index].label);
+      }
+    }
+  } else {
+    ScopedDebugLevelOverride scoped_debug(debug_options_.recovery);
+    for (std::size_t i = 0; i < recovery_analyzers_.size(); ++i) {
+      per_analyzer[i].second =
+          recovery_analyzers_[i].analyzer->collect(disk_root_);
+    }
+  }
+
+  // Мерж в общую таблицу процессов и формирование строки итогового лога.
+  std::string summary;
+  for (auto& [label, evidence] : per_analyzer) {
+    if (!summary.empty()) summary += ", ";
+    summary += label + "=" + std::to_string(evidence.size());
+
+    mergeRecoveryEvidenceToProcessData(evidence, process_data_);
+    recovery_evidence_.insert(recovery_evidence_.end(),
+                              std::make_move_iterator(evidence.begin()),
+                              std::make_move_iterator(evidence.end()));
+  }
+
+  logger->info("Этап 6/7 завершен: {}", summary);
 }
 
 void WindowsDiskAnalyzer::applyGlobalTamperFlags() {

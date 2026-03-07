@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <map>
 #include <memory>
+#include <cstddef>
 
 #include "parsers/prefetch/parser/parser.hpp"
 #include "analysis/artifacts/data/analysis_data.hpp"
@@ -45,6 +46,9 @@ class PrefetchAnalyzer {
   std::map<std::string, PrefetchConfig>
       configs_;             ///< Конфигурации для версий ОС
   std::string os_version_;  ///< Целевая версия ОС
+  bool enable_parallel_prefetch_ =
+      false;  ///< Включать ли параллельный разбор Prefetch.
+  std::size_t worker_threads_ = 1;  ///< Число worker-потоков для Prefetch.
 };
 
-}
+}  // namespace WindowsDiskAnalysis

@@ -10,6 +10,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "analysis/artifacts/data/analysis_data.hpp"
@@ -22,6 +23,21 @@
 #endif
 
 namespace WindowsDiskAnalysis::ExecutionEvidenceDetail {
+
+// Constants used across collectors
+extern const uint64_t kFiletimeUnixEpoch;
+extern const uint64_t kMaxReasonableFiletime;
+
+/// @brief Сливает карту процессов `source` в `target`.
+void mergeProcessDataMaps(std::unordered_map<std::string, ProcessInfo>& target,
+                          const std::unordered_map<std::string, ProcessInfo>& source);
+
+/// @brief Сливает `source`-процесс в `target` с уникализацией ключевых полей.
+void mergeProcessInfo(ProcessInfo& target, const ProcessInfo& source);
+
+/// @brief Обогащает запись процесса identity/privilege-контекстом из details.
+void enrichProcessIdentityFromDetails(ProcessInfo& info,
+                                      const std::string& details);
 
 /// @brief Структурный кандидат записи ShimCache.
 struct ShimCacheStructuredCandidate {
@@ -69,10 +85,10 @@ std::string makeTimelineLabel(const std::string& source,
                               const std::string& timestamp,
                               const std::string& details);
 /// @brief Гарантирует наличие bucket записи процесса в map.
-ProcessInfo& ensureProcessInfo(std::map<std::string, ProcessInfo>& process_data,
+ProcessInfo& ensureProcessInfo(std::unordered_map<std::string, ProcessInfo>& process_data,
                                const std::string& executable_path);
 /// @brief Добавляет единицу execution evidence в `process_data`.
-void addExecutionEvidence(std::map<std::string, ProcessInfo>& process_data,
+void addExecutionEvidence(std::unordered_map<std::string, ProcessInfo>& process_data,
                           const std::string& executable_path,
                           const std::string& source,
                           const std::string& timestamp,
@@ -122,8 +138,26 @@ bool isLikelyExecutionPath(std::string candidate,
                            bool allow_com_extension = false);
 /// @brief Проверяет похожесть строки на SID.
 bool looksLikeSid(std::string value);
+/// @brief Извлекает SID-кандидаты из текстовой строки.
+std::vector<std::string> extractSidCandidatesFromLine(const std::string& line);
 /// @brief Форматирует FILETIME в UTC в разумном диапазоне дат.
 std::string formatReasonableFiletime(uint64_t filetime);
+/// @brief Нормализует направление firewall-правила.
+std::string normalizeFirewallDirection(std::string raw_direction);
+/// @brief Нормализует действие firewall-правила.
+std::string normalizeFirewallAction(std::string raw_action);
+/// @brief Нормализует протокол firewall-правила.
+std::string normalizeFirewallProtocol(std::string raw_protocol);
+/// @brief Парсит структуру SYSTEMTIME из registry binary.
+std::optional<std::string> parseRegistrySystemTime(
+    const std::vector<uint8_t>& binary);
+/// @brief Нормализует категорию NetworkList profile.
+std::string normalizeNetworkProfileCategory(std::string raw_category);
+/// @brief Парсит строку firewall-правила (`k=v|...`) в map-представление.
+std::unordered_map<std::string, std::string> parseFirewallRuleData(
+    std::string raw_rule);
+/// @brief Возвращает synthetic-key процесса для глобального network-контекста.
+std::string networkContextProcessKey();
 /// @brief Читает LE `uint16_t` из бинарного буфера.
 uint16_t readLeUInt16Raw(const std::vector<uint8_t>& bytes, std::size_t offset);
 /// @brief Декодирует UTF-16LE путь-кандидат из бинарного блока.

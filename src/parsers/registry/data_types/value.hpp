@@ -67,4 +67,4 @@ class ValueHandle {
   libregf_value_t* ptr_ = nullptr;  ///< Указатель на значение реестра
 };
 
-}
+}  // namespace RegistryAnalysis

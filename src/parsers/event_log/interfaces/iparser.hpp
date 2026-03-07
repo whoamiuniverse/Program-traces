@@ -37,4 +37,4 @@ class IEventLogParser {
       const std::string& file_path, uint32_t event_id) = 0;
 };
 
-}
+}  // namespace EventLogAnalysis

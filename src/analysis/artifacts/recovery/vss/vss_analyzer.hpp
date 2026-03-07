@@ -44,6 +44,10 @@ class VSSAnalyzer final : public IRecoveryAnalyzer {
       32;  ///< Лимит snapshot stores для native VSS
   std::string vss_volume_path_;  ///< Явный raw/device источник для native VSS
   std::string unallocated_image_path_;  ///< Путь к файлу с нераспределенным пространством
+  bool enable_snapshot_artifact_replay_ =
+      true;  ///< Повторный scan ключевых артефактов по VSS snapshot roots.
+  std::size_t vss_snapshot_replay_max_files_ =
+      200;  ///< Лимит файлов для VSS snapshot replay.
 };
 
 }  // namespace WindowsDiskAnalysis

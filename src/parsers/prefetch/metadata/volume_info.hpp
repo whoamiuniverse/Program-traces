@@ -89,4 +89,4 @@ class VolumeInfo final {
   uint32_t volume_type_;     ///< Битовая маска типа тома
 };
 
-}
+}  // namespace PrefetchAnalysis

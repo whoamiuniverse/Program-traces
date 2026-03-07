@@ -13,10 +13,12 @@
 namespace WindowsDiskAnalysis {
 
 /// @struct AmcacheConfig
-/// @brief Параметры чтения Amcache для конкретной версии Windows
+/// @brief Конфигурация для дополнительных ключей Amcache
 struct AmcacheConfig {
-  std::string amcache_path;               ///< Путь к Amcache.hve
-  std::vector<std::string> amcache_keys;  ///< Ключи для анализа в Amcache
+  std::string inventory_application_key = "Root/InventoryApplication";
+  std::string inventory_shortcut_key    = "Root/InventoryApplicationShortcut";
+  bool enable_inventory_application     = true;
+  bool enable_inventory_shortcut        = true;
 };
 
 /// @class AmcacheAnalyzer
@@ -50,6 +52,14 @@ class AmcacheAnalyzer {
       const std::vector<std::unique_ptr<RegistryAnalysis::IRegistryData>>&
           values);
 
+  /// @brief Парсит Root/InventoryApplication (установленные приложения).
+  std::vector<AmcacheEntry> collectInventoryApplication(
+      const std::string& hive_path) const;
+
+  /// @brief Парсит Root/InventoryApplicationShortcut (ярлыки приложений).
+  std::vector<AmcacheEntry> collectInventoryShortcut(
+      const std::string& hive_path) const;
+
   std::unique_ptr<RegistryAnalysis::IRegistryParser>
       parser_;  ///< Парсер для доступа к значениям реестра
   std::string os_version_;   ///< Версия ОС для выбора конфигурационного профиля
@@ -57,6 +67,7 @@ class AmcacheAnalyzer {
   std::string amcache_path_;  ///< Путь к файлу Amcache.hve относительно диска
   std::vector<std::string>
       amcache_keys_;  ///< Список ключей реестра, подлежащих разбору
+  AmcacheConfig config_;  ///< Расширенная конфигурация дополнительных ключей
 };
 
-}
+}  // namespace WindowsDiskAnalysis

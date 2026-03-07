@@ -29,4 +29,4 @@ struct PrefetchDataStorage {
   uint64_t last_run_time = 0;  ///< Время последнего запуска в формате FILETIME
 };
 
-}
+}  // namespace PrefetchAnalysis

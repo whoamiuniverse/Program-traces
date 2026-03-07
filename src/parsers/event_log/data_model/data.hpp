@@ -121,4 +121,4 @@ class EventData final : public IEventData {
       data_;  ///< Произвольные пары ключ-значение из тела события
 };
 
-}
+}  // namespace EventLogAnalysis

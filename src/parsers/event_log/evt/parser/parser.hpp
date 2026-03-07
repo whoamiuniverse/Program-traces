@@ -73,4 +73,4 @@ class EvtParser final : public IEventLogParser {
       false;  ///< Флаг, указывающий открыт ли файл в данный момент
 };
 
-}
+}  // namespace EventLogAnalysis

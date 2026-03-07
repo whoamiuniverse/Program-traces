@@ -2,18 +2,23 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <filesystem>
+#include <future>
 #include <limits>
 #include <optional>
 #include <sstream>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "analysis/artifacts/common/evidence_utils.hpp"
 #include "infra/config/config.hpp"
 #include "infra/logging/logger.hpp"
 #include "common/utils.hpp"
+#include "parsers/event_log/evt/parser/parser.hpp"
 
 namespace fs = std::filesystem;
 
@@ -321,6 +326,236 @@ void enrichProcessContextFromEvent(const std::unordered_map<std::string, std::st
   }
 }
 
+struct EventLogFileParseResult {
+  std::unordered_map<std::string, ProcessInfo> process_data;
+  std::vector<NetworkConnection> network_connections;
+};
+
+void mergeProcessInfo(ProcessInfo& target, const ProcessInfo& source) {
+  if (target.filename.empty()) {
+    target.filename = source.filename;
+  }
+  if (target.command.empty()) {
+    target.command = source.command;
+  }
+
+  target.run_count += source.run_count;
+  target.run_times.insert(target.run_times.end(), source.run_times.begin(),
+                          source.run_times.end());
+  target.volumes.insert(target.volumes.end(), source.volumes.begin(),
+                        source.volumes.end());
+  target.metrics.insert(target.metrics.end(), source.metrics.begin(),
+                        source.metrics.end());
+
+  for (const auto& user : source.users) {
+    EvidenceUtils::appendUniqueToken(target.users, user);
+  }
+  for (const auto& sid : source.user_sids) {
+    EvidenceUtils::appendUniqueToken(target.user_sids, sid);
+  }
+  for (const auto& logon_id : source.logon_ids) {
+    EvidenceUtils::appendUniqueToken(target.logon_ids, logon_id);
+  }
+  for (const auto& logon_type : source.logon_types) {
+    EvidenceUtils::appendUniqueToken(target.logon_types, logon_type);
+  }
+  for (const auto& privilege : source.privileges) {
+    EvidenceUtils::appendUniqueToken(target.privileges, privilege);
+  }
+  for (const auto& source_name : source.evidence_sources) {
+    EvidenceUtils::appendUniqueToken(target.evidence_sources, source_name);
+  }
+  for (const auto& flag : source.tamper_flags) {
+    EvidenceUtils::appendUniqueToken(target.tamper_flags, flag);
+  }
+  for (const auto& timeline : source.timeline_artifacts) {
+    EvidenceUtils::appendUniqueToken(target.timeline_artifacts, timeline);
+  }
+  for (const auto& recovered : source.recovered_from) {
+    EvidenceUtils::appendUniqueToken(target.recovered_from, recovered);
+  }
+
+  if (target.elevation_type.empty()) {
+    target.elevation_type = source.elevation_type;
+  }
+  if (target.elevated_token.empty()) {
+    target.elevated_token = source.elevated_token;
+  }
+  if (target.integrity_level.empty()) {
+    target.integrity_level = source.integrity_level;
+  }
+
+  EvidenceUtils::updateTimestampMin(target.first_seen_utc, source.first_seen_utc);
+  EvidenceUtils::updateTimestampMax(target.last_seen_utc, source.last_seen_utc);
+}
+
+void mergeProcessMaps(std::unordered_map<std::string, ProcessInfo>& target,
+                      const std::unordered_map<std::string, ProcessInfo>& source) {
+  for (const auto& [process_name, process_info] : source) {
+    auto& target_info = target[process_name];
+    mergeProcessInfo(target_info, process_info);
+  }
+}
+
+EventLogFileParseResult parseLogFile(
+    const std::string& file_path, const EventLogConfig& cfg,
+    const std::shared_ptr<spdlog::logger>& logger) {
+  EventLogFileParseResult result;
+
+  EventLogAnalysis::IEventLogParser* parser = nullptr;
+  std::unique_ptr<EventLogAnalysis::EvtParser> local_evt_parser;
+  std::unique_ptr<EventLogAnalysis::EvtxParser> local_evtx_parser;
+
+  std::string extension = fs::path(file_path).extension().string();
+  std::ranges::transform(extension, extension.begin(),
+                         [](const unsigned char ch) {
+                           return static_cast<char>(std::tolower(ch));
+                         });
+  if (extension == ".evt") {
+    local_evt_parser = std::make_unique<EventLogAnalysis::EvtParser>();
+    parser = local_evt_parser.get();
+  } else if (extension == ".evtx") {
+    local_evtx_parser = std::make_unique<EventLogAnalysis::EvtxParser>();
+    parser = local_evtx_parser.get();
+  } else {
+    logger->debug("Неизвестный формат журнала: \"{}\"", file_path);
+    return result;
+  }
+
+  for (const uint32_t event_id : cfg.process_event_ids) {
+    try {
+      for (const auto& event : parser->getEventsByType(file_path, event_id)) {
+        const auto& data = event->getData();
+        const auto* process_name = findDataValue(
+            data, {"NewProcessName", "ProcessName", "Application", "Image"});
+        if (process_name == nullptr) continue;
+
+        std::string process_name_value = trim_copy(*process_name);
+        if (process_name_value.empty()) continue;
+
+        ProcessInfo& info = result.process_data[process_name_value];
+        info.filename = process_name_value;
+
+        if (const auto* command_line =
+                findDataValue(data, {"CommandLine", "ProcessCommandLine"});
+            command_line != nullptr && info.command.empty()) {
+          info.command = *command_line;
+        }
+
+        info.run_times.push_back(formatEventTimestamp(event->getTimestamp()));
+        info.run_count++;
+        enrichProcessContextFromEvent(data, info);
+      }
+    } catch (const std::exception& e) {
+      logger->error("Ошибка парсинга событий процессов");
+      logger->debug(
+          "Ошибка парсинга process events: файл=\"{}\", event_id={}, {}",
+          file_path, event_id, e.what());
+    }
+  }
+
+  for (const uint32_t event_id : cfg.network_event_ids) {
+    try {
+      for (const auto& event : parser->getEventsByType(file_path, event_id)) {
+        const auto& data = event->getData();
+        NetworkConnection conn;
+
+        conn.event_id = event_id;
+        conn.timestamp = formatEventTimestamp(event->getTimestamp());
+
+        if (const auto* process_name =
+                findDataValue(data, {"ProcessName", "NewProcessName",
+                                     "ProcessImageName", "Image"});
+            process_name != nullptr) {
+          conn.process_name = *process_name;
+        }
+
+        if (const auto* application = findDataValue(
+                data, {"Application", "ApplicationName", "ApplicationPath",
+                       "AppPath"});
+            application != nullptr) {
+          conn.application = *application;
+          if (conn.process_name.empty()) {
+            conn.process_name = fs::path(*application).filename().string();
+          }
+        }
+
+        if (conn.process_name.empty() && conn.application.empty()) {
+          continue;
+        }
+
+        if (const auto* process_id = findDataValue(
+                data, {"ProcessID", "ProcessId", "ExecutionProcessID", "PID"});
+            process_id != nullptr) {
+          if (const auto parsed_pid = parseUInt32Flexible(*process_id);
+              parsed_pid.has_value()) {
+            conn.process_id = *parsed_pid;
+          }
+        }
+
+        if (const auto* source_ip =
+                findDataValue(data, {"SourceAddress", "LocalAddress",
+                                     "SourceIP", "SrcAddress"});
+            source_ip != nullptr) {
+          conn.source_ip = *source_ip;
+        }
+
+        if (const auto* dest_ip = findDataValue(
+                data, {"DestAddress", "DestinationAddress", "RemoteAddress",
+                       "DestIP", "DestinationIP"});
+            dest_ip != nullptr) {
+          conn.dest_ip = *dest_ip;
+        }
+
+        if (const auto* source_port =
+                findDataValue(data, {"SourcePort", "LocalPort", "SrcPort"});
+            source_port != nullptr) {
+          if (const auto parsed_source_port = parseUInt16Flexible(*source_port);
+              parsed_source_port.has_value()) {
+            conn.source_port = *parsed_source_port;
+          }
+        }
+
+        if (const auto* dest_port = findDataValue(
+                data, {"DestPort", "DestinationPort", "RemotePort", "Port",
+                       "DstPort"});
+            dest_port != nullptr) {
+          if (const auto parsed_dest_port = parseUInt16Flexible(*dest_port);
+              parsed_dest_port.has_value()) {
+            conn.dest_port = *parsed_dest_port;
+          }
+        }
+
+        if (const auto* protocol = findDataValue(data, {"Protocol"});
+            protocol != nullptr) {
+          conn.protocol = normalizeProtocol(*protocol);
+        }
+
+        if (const auto* direction = findDataValue(data, {"Direction"});
+            direction != nullptr) {
+          conn.direction = normalizeDirection(*direction);
+        }
+
+        if (const auto* action = findDataValue(data, {"Action"});
+            action != nullptr) {
+          conn.action = normalizeAction(*action, event_id);
+        } else {
+          conn.action = normalizeAction("", event_id);
+        }
+
+        result.network_connections.push_back(std::move(conn));
+      }
+    } catch (const std::exception& e) {
+      logger->error("Ошибка парсинга сетевых событий");
+      logger->debug(
+          "Ошибка парсинга network events: файл=\"{}\", event_id={}, {}",
+          file_path, event_id, e.what());
+    }
+  }
+
+  return result;
+}
+
 }  // namespace
 
 EventLogAnalyzer::EventLogAnalyzer(
@@ -368,6 +603,37 @@ void EventLogAnalyzer::loadConfigurations(const std::string& ini_path) {
     configs_[version] = cfg;
     logger->debug("Загружена конфигурация журналов для \"{}\"", version);
   }
+
+  loadPerformanceOptions(config);
+}
+
+void EventLogAnalyzer::loadPerformanceOptions(const Config& config) {
+  const auto logger = GlobalLogger::get();
+  if (!config.hasSection("Performance")) return;
+
+  try {
+    enable_parallel_eventlog_ =
+        config.getBool("Performance", "EnableParallelEventLog",
+                       config.getBool("Performance", "EnableParallelStages",
+                                      enable_parallel_eventlog_));
+  } catch (const std::exception& e) {
+    logger->warn("Некорректный параметр [Performance]/EnableParallelEventLog");
+    logger->debug("Ошибка чтения [Performance]/EnableParallelEventLog: {}",
+                  e.what());
+  }
+
+  try {
+    const int configured_threads = config.getInt(
+        "Performance", "WorkerThreads", static_cast<int>(worker_threads_));
+    if (configured_threads > 0) {
+      worker_threads_ = static_cast<std::size_t>(configured_threads);
+    }
+  } catch (const std::exception& e) {
+    logger->warn("Некорректный параметр [Performance]/WorkerThreads");
+    logger->debug("Ошибка чтения [Performance]/WorkerThreads: {}", e.what());
+  }
+
+  worker_threads_ = std::max<std::size_t>(1, worker_threads_);
 }
 
 EventLogAnalysis::IEventLogParser* EventLogAnalyzer::getParserForFile(
@@ -391,7 +657,7 @@ EventLogAnalysis::IEventLogParser* EventLogAnalyzer::getParserForFile(
 
 void EventLogAnalyzer::collect(
     const std::string& disk_root,
-    std::map<std::string, ProcessInfo>& process_data,
+    std::unordered_map<std::string, ProcessInfo>& process_data,
     std::vector<NetworkConnection>& network_connections) {
   const auto logger = GlobalLogger::get();
 
@@ -402,181 +668,92 @@ void EventLogAnalyzer::collect(
     return;
   }
 
-  for (const auto& cfg = configs_[os_version_];
-       const auto& log_path : cfg.log_paths) {
-    std::string full_dir_path = disk_root + log_path;
+  const auto& cfg = configs_[os_version_];
+  std::vector<std::string> files_to_parse;
+  files_to_parse.reserve(64);
 
-    // Проверяем существование и тип пути (директория/файл)
-    if (!fs::exists(full_dir_path)) {
-      logger->debug("Путь не существует: \"{}\"", full_dir_path);
+  for (const auto& log_path : cfg.log_paths) {
+    const std::string full_path = disk_root + log_path;
+    if (!fs::exists(full_path)) {
+      logger->debug("Путь не существует: \"{}\"", full_path);
       continue;
     }
 
-    std::vector<std::string> files_to_parse;
-
-    // Собираем файлы для обработки
-    if (fs::is_directory(full_dir_path)) {
-      for (const auto& entry : fs::directory_iterator(full_dir_path)) {
+    if (fs::is_directory(full_path)) {
+      for (const auto& entry : fs::directory_iterator(full_path)) {
         if (entry.is_regular_file()) {
           files_to_parse.push_back(entry.path().string());
         }
       }
-    } else if (fs::is_regular_file(full_dir_path)) {
-      files_to_parse.push_back(full_dir_path);
+    } else if (fs::is_regular_file(full_path)) {
+      files_to_parse.push_back(full_path);
     } else {
       logger->debug("Путь не является ни файлом, ни директорией: \"{}\"",
-                   full_dir_path);
-      continue;
+                    full_path);
     }
+  }
 
-    // Обрабатываем собранные файлы
+  std::sort(files_to_parse.begin(), files_to_parse.end());
+  files_to_parse.erase(std::unique(files_to_parse.begin(), files_to_parse.end()),
+                       files_to_parse.end());
+  if (files_to_parse.empty()) return;
+
+  const bool use_parallel =
+      enable_parallel_eventlog_ && worker_threads_ > 1 &&
+      files_to_parse.size() > 1;
+  if (use_parallel) {
+    logger->debug("EventLog: параллельный режим включен (workers={})",
+                  std::min<std::size_t>(worker_threads_, files_to_parse.size()));
+  }
+  if (!use_parallel) {
     for (const auto& file_path : files_to_parse) {
       if (!fs::exists(file_path)) {
         logger->debug("Файл был удалён: \"{}\"", file_path);
         continue;
       }
-
-      auto* parser = getParserForFile(file_path);
-      if (!parser) {
-        logger->debug("Неизвестный формат журнала: \"{}\"", file_path);
-        continue;
-      }
-
-      // Обработка событий о процессах
-      for (const uint32_t event_id : cfg.process_event_ids) {
-        try {
-          for (const auto& event :
-               parser->getEventsByType(file_path, event_id)) {
-            const auto& data = event->getData();
-            const auto* process_name = findDataValue(
-                data, {"NewProcessName", "ProcessName", "Application", "Image"});
-            if (process_name != nullptr) {
-              std::string name = trim_copy(*process_name);
-              if (name.empty()) continue;
-
-              ProcessInfo& info = process_data[name];
-              info.filename = name;
-
-              if (const auto* command_line = findDataValue(
-                      data, {"CommandLine", "ProcessCommandLine"});
-                  command_line != nullptr) {
-                if (info.command.empty()) {
-                  info.command = *command_line;
-                }
-              }
-              try {
-                info.run_times.push_back(formatEventTimestamp(event->getTimestamp()));
-              } catch (const std::exception& e) {
-                logger->debug("{}", e.what());
-              }
-              info.run_count++;
-              enrichProcessContextFromEvent(data, info);
-            }
-          }
-        } catch (const std::exception& e) {
-          logger->error("Ошибка парсинга событий процессов");
-          logger->debug(
-              "Ошибка парсинга process events: файл=\"{}\", event_id={}, {}",
-              file_path, event_id, e.what());
-        }
-      }
-
-      // Обработка сетевых событий
-      for (const uint32_t event_id : cfg.network_event_ids) {
-        try {
-          for (const auto& event :
-               parser->getEventsByType(file_path, event_id)) {
-            const auto& data = event->getData();
-            NetworkConnection conn;
-
-            conn.event_id = event_id;
-            conn.timestamp = formatEventTimestamp(event->getTimestamp());
-
-            if (const auto* process_name =
-                    findDataValue(data, {"ProcessName", "NewProcessName", "Image"});
-                process_name != nullptr) {
-              conn.process_name = *process_name;
-            }
-
-            if (const auto* application = findDataValue(
-                    data, {"Application", "ApplicationPath", "AppPath"});
-                application != nullptr) {
-              conn.application = *application;
-              if (conn.process_name.empty()) {
-                conn.process_name = fs::path(*application).filename().string();
-              }
-            }
-
-            if (conn.process_name.empty() && conn.application.empty()) {
-              continue;
-            }
-
-            if (const auto* process_id = findDataValue(
-                    data, {"ProcessID", "ProcessId", "ExecutionProcessID", "PID"});
-                process_id != nullptr) {
-              if (const auto parsed_pid = parseUInt32Flexible(*process_id);
-                  parsed_pid.has_value()) {
-                conn.process_id = *parsed_pid;
-              }
-            }
-
-            if (const auto* source_ip =
-                    findDataValue(data, {"SourceAddress", "LocalAddress", "SourceIP"});
-                source_ip != nullptr) {
-              conn.source_ip = *source_ip;
-            }
-
-            if (const auto* dest_ip =
-                    findDataValue(data, {"DestAddress", "RemoteAddress", "DestIP"});
-                dest_ip != nullptr) {
-              conn.dest_ip = *dest_ip;
-            }
-
-            if (const auto* source_port =
-                    findDataValue(data, {"SourcePort", "LocalPort"});
-                source_port != nullptr) {
-              if (const auto parsed_source_port = parseUInt16Flexible(*source_port);
-                  parsed_source_port.has_value()) {
-                conn.source_port = *parsed_source_port;
-              }
-            }
-
-            if (const auto* dest_port =
-                    findDataValue(data, {"DestPort", "RemotePort", "Port"});
-                dest_port != nullptr) {
-              if (const auto parsed_dest_port = parseUInt16Flexible(*dest_port);
-                  parsed_dest_port.has_value()) {
-                conn.dest_port = *parsed_dest_port;
-              }
-            }
-
-            if (const auto* protocol = findDataValue(data, {"Protocol"});
-                protocol != nullptr) {
-              conn.protocol = normalizeProtocol(*protocol);
-            }
-
-            if (const auto* direction = findDataValue(data, {"Direction"});
-                direction != nullptr) {
-              conn.direction = normalizeDirection(*direction);
-            }
-
-            if (const auto* action = findDataValue(data, {"Action"});
-                action != nullptr) {
-              conn.action = normalizeAction(*action, event_id);
-            } else {
-              conn.action = normalizeAction("", event_id);
-            }
-
-            network_connections.push_back(conn);
-          }
-        } catch (const std::exception& e) {
-          logger->error("Ошибка парсинга сетевых событий");
-          logger->debug(
-              "Ошибка парсинга network events: файл=\"{}\", event_id={}, {}",
-              file_path, event_id, e.what());
-        }
-      }
+      auto parsed = parseLogFile(file_path, cfg, logger);
+      mergeProcessMaps(process_data, parsed.process_data);
+      network_connections.insert(
+          network_connections.end(),
+          std::make_move_iterator(parsed.network_connections.begin()),
+          std::make_move_iterator(parsed.network_connections.end()));
     }
+    return;
+  }
+
+  const std::size_t workers =
+      std::min<std::size_t>(worker_threads_, files_to_parse.size());
+  std::atomic<std::size_t> next_index{0};
+  std::vector<std::future<EventLogFileParseResult>> futures;
+  futures.reserve(workers);
+
+  for (std::size_t worker = 0; worker < workers; ++worker) {
+    futures.push_back(std::async(std::launch::async, [&]() {
+      EventLogFileParseResult worker_result;
+      while (true) {
+        const std::size_t index = next_index.fetch_add(1);
+        if (index >= files_to_parse.size()) break;
+        const std::string& file_path = files_to_parse[index];
+        if (!fs::exists(file_path)) continue;
+
+        auto parsed = parseLogFile(file_path, cfg, logger);
+        mergeProcessMaps(worker_result.process_data, parsed.process_data);
+        worker_result.network_connections.insert(
+            worker_result.network_connections.end(),
+            std::make_move_iterator(parsed.network_connections.begin()),
+            std::make_move_iterator(parsed.network_connections.end()));
+      }
+      return worker_result;
+    }));
+  }
+
+  for (auto& future : futures) {
+    auto worker_result = future.get();
+    mergeProcessMaps(process_data, worker_result.process_data);
+    network_connections.insert(
+        network_connections.end(),
+        std::make_move_iterator(worker_result.network_connections.begin()),
+        std::make_move_iterator(worker_result.network_connections.end()));
   }
 }
 

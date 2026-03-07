@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <string_view>
+#include <unordered_set>
 
 #include "infra/config/config.hpp"
 #include "infra/logging/logger.hpp"
@@ -60,6 +61,33 @@ void AmcacheAnalyzer::loadConfiguration() {
 
   logger->debug("Конфигурация Amcache для {}: путь={}, ключи={}", os_version_,
                 amcache_path_, keys_str);
+
+  // Загружаем расширенные параметры из [VersionDefaults]
+  constexpr auto kDefaults = std::string_view("VersionDefaults");
+  try {
+    config_.enable_inventory_application = config.getBool(
+        std::string(kDefaults), "EnableInventoryApplication",
+        config_.enable_inventory_application);
+  } catch (...) {}
+  try {
+    config_.enable_inventory_shortcut = config.getBool(
+        std::string(kDefaults), "EnableInventoryShortcut",
+        config_.enable_inventory_shortcut);
+  } catch (...) {}
+  {
+    const std::string app_key =
+        getConfigValueWithFallback(config, os_version_, "AmcacheInventoryApplicationKey");
+    if (!app_key.empty()) {
+      config_.inventory_application_key = app_key;
+    }
+  }
+  {
+    const std::string sc_key =
+        getConfigValueWithFallback(config, os_version_, "AmcacheInventoryShortcutKey");
+    if (!sc_key.empty()) {
+      config_.inventory_shortcut_key = sc_key;
+    }
+  }
 }
 
 std::vector<AmcacheEntry> AmcacheAnalyzer::collect(
@@ -107,6 +135,37 @@ std::vector<AmcacheEntry> AmcacheAnalyzer::collect(
       } catch (const std::exception& e) {
         logger->error("Ошибка доступа к ключу Amcache");
         logger->debug("Ошибка доступа к ключу \"{}\": {}", key, e.what());
+      }
+    }
+
+    // Собираем ключи file_path из InventoryApplicationFile для дедупликации
+    std::unordered_set<std::string> seen_paths;
+    seen_paths.reserve(results.size());
+    for (const auto& entry : results) {
+      if (!entry.file_path.empty()) {
+        seen_paths.insert(to_lower(entry.file_path));
+      }
+    }
+
+    // Добавляем записи из Root/InventoryApplication
+    if (config_.enable_inventory_application) {
+      auto app_entries = collectInventoryApplication(full_path);
+      for (auto& entry : app_entries) {
+        const std::string key = to_lower(entry.file_path);
+        if (seen_paths.insert(key).second) {
+          results.push_back(std::move(entry));
+        }
+      }
+    }
+
+    // Добавляем записи из Root/InventoryApplicationShortcut
+    if (config_.enable_inventory_shortcut) {
+      auto sc_entries = collectInventoryShortcut(full_path);
+      for (auto& entry : sc_entries) {
+        const std::string key = to_lower(entry.file_path);
+        if (seen_paths.insert(key).second) {
+          results.push_back(std::move(entry));
+        }
       }
     }
 
@@ -216,4 +275,103 @@ AmcacheEntry AmcacheAnalyzer::processInventoryApplicationEntry(
   }
 
   return entry;
+}
+
+std::vector<AmcacheEntry> AmcacheAnalyzer::collectInventoryApplication(
+    const std::string& hive_path) const {
+  std::vector<AmcacheEntry> results;
+  const auto logger = GlobalLogger::get();
+  try {
+    std::vector<std::string> app_subkeys =
+        parser_->listSubkeys(hive_path, config_.inventory_application_key);
+
+    for (const auto& subkey : app_subkeys) {
+      const std::string app_key =
+          config_.inventory_application_key + "/" + subkey;
+      std::vector<std::unique_ptr<RegistryAnalysis::IRegistryData>> values;
+      try {
+        values = parser_->getKeyValues(hive_path, app_key);
+      } catch (...) {
+        continue;
+      }
+
+      AmcacheEntry entry;
+      entry.name = subkey;  // ProgramId как запасное имя
+
+      for (const auto& value : values) {
+        const std::string val_name_lower =
+            to_lower(getLastPathComponent(value->getName(), '/'));
+        try {
+          if (val_name_lower == "name") {
+            const std::string name = trim_copy(value->getDataAsString());
+            if (!name.empty()) entry.name = name;
+          } else if (val_name_lower == "publisher") {
+            entry.publisher = trim_copy(value->getDataAsString());
+          } else if (val_name_lower == "version") {
+            entry.version = trim_copy(value->getDataAsString());
+          } else if (val_name_lower == "rootdirpath") {
+            entry.alternate_path = trim_copy(value->getDataAsString());
+          } else if (val_name_lower == "installdate") {
+            entry.install_time_str = trim_copy(value->getDataAsString());
+          }
+        } catch (...) {}
+      }
+
+      // RootDirPath используется как file_path (прямого пути к exe нет)
+      if (!entry.alternate_path.empty()) {
+        entry.file_path = entry.alternate_path;
+      } else if (!entry.name.empty()) {
+        entry.file_path = entry.name;
+      }
+
+      if (!entry.file_path.empty() && !entry.name.empty()) {
+        results.push_back(std::move(entry));
+      }
+    }
+  } catch (const std::exception& e) {
+    logger->debug("InventoryApplication пропущен: {}", e.what());
+  }
+  return results;
+}
+
+std::vector<AmcacheEntry> AmcacheAnalyzer::collectInventoryShortcut(
+    const std::string& hive_path) const {
+  std::vector<AmcacheEntry> results;
+  const auto logger = GlobalLogger::get();
+  try {
+    std::vector<std::string> shortcut_subkeys =
+        parser_->listSubkeys(hive_path, config_.inventory_shortcut_key);
+
+    for (const auto& subkey : shortcut_subkeys) {
+      const std::string shortcut_key =
+          config_.inventory_shortcut_key + "/" + subkey;
+      std::vector<std::unique_ptr<RegistryAnalysis::IRegistryData>> values;
+      try {
+        values = parser_->getKeyValues(hive_path, shortcut_key);
+      } catch (...) {
+        continue;
+      }
+
+      AmcacheEntry entry;
+      for (const auto& value : values) {
+        const std::string val_name_lower =
+            to_lower(getLastPathComponent(value->getName(), '/'));
+        try {
+          if (val_name_lower == "shortcutname") {
+            entry.name = trim_copy(value->getDataAsString());
+          } else if (val_name_lower == "target") {
+            entry.file_path = trim_copy(value->getDataAsString());
+          }
+        } catch (...) {}
+      }
+
+      if (!entry.file_path.empty()) {
+        if (entry.name.empty()) entry.name = entry.file_path;
+        results.push_back(std::move(entry));
+      }
+    }
+  } catch (const std::exception& e) {
+    logger->debug("InventoryApplicationShortcut пропущен: {}", e.what());
+  }
+  return results;
 }

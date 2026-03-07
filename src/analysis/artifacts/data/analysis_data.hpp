@@ -105,4 +105,4 @@ struct NetworkConnection {
   std::string action;           ///< Действие (allow/block)
 };
 
-}
+}  // namespace WindowsDiskAnalysis

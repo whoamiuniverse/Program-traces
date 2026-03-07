@@ -88,4 +88,4 @@ class FileMetric {
   uint64_t last_access_time_;  ///< Время последнего обращения
 };
 
-}
+}  // namespace PrefetchAnalysis

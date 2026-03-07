@@ -106,4 +106,4 @@ class IPrefetchData {
   /// @}
 };
 
-}
+}  // namespace PrefetchAnalysis

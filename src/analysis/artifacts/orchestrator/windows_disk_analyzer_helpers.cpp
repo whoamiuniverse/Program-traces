@@ -4,6 +4,7 @@
 #include "windows_disk_analyzer_helpers.hpp"
 
 #include <algorithm>
+#include <unordered_map>
 #include <cctype>
 #include <cstdio>
 #include <filesystem>
@@ -46,10 +47,7 @@ std::string ensureTrailingSlash(std::string path) {
 }
 
 std::string toLowerAscii(std::string text) {
-  std::ranges::transform(text, text.begin(), [](unsigned char ch) {
-    return static_cast<char>(std::tolower(ch));
-  });
-  return text;
+  return to_lower(std::move(text));
 }
 
 void appendUniqueToken(std::vector<std::string>& target, std::string token) {
@@ -123,8 +121,7 @@ bool isServerLikeValue(const std::string& value) {
 }
 
 std::string normalizePathSeparators(std::string path) {
-  std::ranges::replace(path, '\\', '/');
-  return path;
+  return PathUtils::normalizePathSeparators(std::move(path));
 }
 
 std::string deriveSystemHivePathFromSoftwarePath(std::string software_hive_path) {
@@ -459,107 +456,7 @@ ScopedDebugLevelOverride::~ScopedDebugLevelOverride() {
 
 std::optional<fs::path> findPathCaseInsensitive(const fs::path& input_path,
                                                 std::string* error_reason) {
-  const auto set_error = [&](const std::string& message) {
-    if (error_reason != nullptr) {
-      *error_reason = message;
-    }
-  };
-
-  std::error_code ec;
-  if (fs::exists(input_path, ec) && !ec) {
-    return input_path;
-  }
-  if (ec) {
-    set_error("не удалось проверить путь \"" + input_path.string() +
-              "\": " + formatFilesystemError(ec));
-  }
-
-  fs::path current = input_path.is_absolute() ? input_path.root_path()
-                                              : fs::current_path(ec);
-  if (ec) {
-    set_error("не удалось получить текущий каталог: " + formatFilesystemError(ec));
-    return std::nullopt;
-  }
-
-  const fs::path relative = input_path.is_absolute()
-                                ? input_path.relative_path()
-                                : input_path;
-
-  for (const fs::path& component_path : relative) {
-    const std::string component = component_path.string();
-    if (component.empty() || component == ".") continue;
-    if (component == "..") {
-      current = current.parent_path();
-      continue;
-    }
-
-    const fs::path direct_candidate = current / component_path;
-    ec.clear();
-    if (fs::exists(direct_candidate, ec) && !ec) {
-      current = direct_candidate;
-      continue;
-    }
-    if (ec) {
-      set_error("ошибка доступа к \"" + direct_candidate.string() +
-                "\": " + formatFilesystemError(ec));
-      return std::nullopt;
-    }
-
-    ec.clear();
-    if (!fs::exists(current, ec) || ec) {
-      if (ec) {
-        set_error("ошибка доступа к \"" + current.string() +
-                  "\": " + formatFilesystemError(ec));
-      } else {
-        set_error("каталог \"" + current.string() + "\" не существует");
-      }
-      return std::nullopt;
-    }
-    if (!fs::is_directory(current, ec) || ec) {
-      if (ec) {
-        set_error("не удалось открыть каталог \"" + current.string() +
-                  "\": " + formatFilesystemError(ec));
-      } else {
-        set_error("путь \"" + current.string() + "\" не является каталогом");
-      }
-      return std::nullopt;
-    }
-
-    const std::string component_lower = toLowerAscii(component);
-    bool matched = false;
-    for (const auto& entry : fs::directory_iterator(current, ec)) {
-      if (ec) break;
-
-      if (toLowerAscii(entry.path().filename().string()) == component_lower) {
-        current = entry.path();
-        matched = true;
-        break;
-      }
-    }
-
-    if (ec) {
-      set_error("не удалось прочитать каталог \"" + current.string() +
-                "\": " + formatFilesystemError(ec));
-      return std::nullopt;
-    }
-    if (!matched) {
-      set_error("компонент пути \"" + component +
-                "\" не найден (с учетом регистра)");
-      return std::nullopt;
-    }
-  }
-
-  ec.clear();
-  if (fs::exists(current, ec) && !ec) {
-    return current;
-  }
-  if (ec) {
-    set_error("ошибка проверки пути \"" + current.string() +
-              "\": " + formatFilesystemError(ec));
-  } else {
-    set_error("путь \"" + current.string() + "\" не найден");
-  }
-  return std::nullopt;
+  return PathUtils::findPathCaseInsensitive(input_path, error_reason);
 }
 
 std::optional<WindowsRootSummary> detectWindowsRootSummary(
@@ -645,7 +542,7 @@ std::string formatWindowsLabel(const WindowsRootSummary& summary) {
 
 void mergeRecoveryEvidenceToProcessData(
     const std::vector<RecoveryEvidence>& recovery_entries,
-    std::map<std::string, ProcessInfo>& process_data) {
+    std::unordered_map<std::string, ProcessInfo>& process_data) {
   for (const auto& evidence : recovery_entries) {
     std::string executable_path = evidence.executable_path;
     trim(executable_path);

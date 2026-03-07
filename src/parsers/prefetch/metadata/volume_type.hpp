@@ -23,4 +23,4 @@ enum class VolumeType : uint32_t {
   TEMPORARY = 0x0200,  ///< Временное хранилище
 };
 
-}
+}  // namespace PrefetchAnalysis
