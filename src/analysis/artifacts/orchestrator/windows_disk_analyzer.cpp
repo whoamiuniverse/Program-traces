@@ -88,6 +88,205 @@ std::string buildNetworkTimelineArtifact(const NetworkConnection& connection) {
   return artifact;
 }
 
+template <typename T>
+void appendMovedVector(std::vector<T>& destination, std::vector<T>& source) {
+  if (source.empty()) {
+    return;
+  }
+
+  destination.reserve(destination.size() + source.size());
+  destination.insert(destination.end(),
+                     std::make_move_iterator(source.begin()),
+                     std::make_move_iterator(source.end()));
+}
+
+ProcessInfo& ensureProcessEntry(std::unordered_map<std::string, ProcessInfo>& process_data,
+                                const std::string& process_key) {
+  auto& info = process_data[process_key];
+  if (info.filename.empty()) {
+    info.filename = process_key;
+  }
+  return info;
+}
+
+ProcessInfo& ensureProcessEntry(std::unordered_map<std::string, ProcessInfo>& process_data,
+                                std::string& process_key) {
+  auto& info = process_data[process_key];
+  if (info.filename.empty()) {
+    info.filename = std::move(process_key);
+  }
+  return info;
+}
+
+void appendPrefetchTimeline(ProcessInfo& merged, const ProcessInfo& prefetch_info) {
+  if (prefetch_info.run_times.empty()) {
+    appendTimelineArtifact(merged, "[Prefetch]");
+    return;
+  }
+
+  std::string artifact;
+  artifact.reserve(16 + prefetch_info.run_times.back().size());
+  artifact = "[Prefetch] last=";
+  artifact += prefetch_info.run_times.back();
+  appendTimelineArtifact(merged, artifact);
+}
+
+void mergePrefetchProcessInfo(ProcessInfo& merged, ProcessInfo& prefetch_info) {
+  merged.run_count += prefetch_info.run_count;
+  appendEvidenceSource(merged, "Prefetch");
+
+  for (const auto& timestamp : prefetch_info.run_times) {
+    updateProcessTimestampBounds(merged, timestamp);
+  }
+  appendPrefetchTimeline(merged, prefetch_info);
+
+  appendMovedVector(merged.run_times, prefetch_info.run_times);
+  appendMovedVector(merged.volumes, prefetch_info.volumes);
+  appendMovedVector(merged.metrics, prefetch_info.metrics);
+}
+
+std::string buildEventLogTimelineArtifact(const uint32_t run_count) {
+  std::string artifact;
+  artifact.reserve(32);
+  artifact = "[EventLog] run_count=";
+  artifact += std::to_string(run_count);
+  return artifact;
+}
+
+std::unordered_map<std::string, uint32_t> buildRunCountSnapshot(
+    const std::unordered_map<std::string, ProcessInfo>& process_data) {
+  std::unordered_map<std::string, uint32_t> snapshot;
+  snapshot.reserve(process_data.size());
+  for (const auto& [process_key, info] : process_data) {
+    snapshot.emplace(process_key, info.run_count);
+  }
+  return snapshot;
+}
+
+bool shouldAppendEventLogEvidence(
+    const std::unordered_map<std::string, uint32_t>& run_count_snapshot,
+    const std::string& process_key, const uint32_t run_count) {
+  const auto it_before = run_count_snapshot.find(process_key);
+  const bool is_new_process = it_before == run_count_snapshot.end();
+  const bool has_new_runs = !is_new_process && run_count > it_before->second;
+  return is_new_process || has_new_runs;
+}
+
+void appendEventLogEvidence(ProcessInfo& info) {
+  appendEvidenceSource(info, "EventLog");
+  appendTimelineArtifact(info, buildEventLogTimelineArtifact(info.run_count));
+}
+
+const std::string* resolveProcessKey(const NetworkConnection& connection) {
+  if (!connection.process_name.empty()) {
+    return &connection.process_name;
+  }
+  if (!connection.application.empty()) {
+    return &connection.application;
+  }
+  return nullptr;
+}
+
+void mergeNetworkConnectionToProcessData(
+    const NetworkConnection& connection,
+    std::unordered_map<std::string, ProcessInfo>& process_data) {
+  const std::string* process_key = resolveProcessKey(connection);
+  if (process_key == nullptr) {
+    return;
+  }
+
+  auto& info = ensureProcessEntry(process_data, *process_key);
+  appendEvidenceSource(info, "NetworkEvent");
+  appendTimelineArtifact(info, buildNetworkTimelineArtifact(connection));
+}
+
+struct RecoveryAnalyzerRef {
+  std::string_view      label;
+  const IRecoveryAnalyzer* analyzer = nullptr;
+};
+
+struct RecoveryStageSlot {
+  std::string_view             label;
+  std::vector<RecoveryEvidence> evidence;
+};
+
+std::vector<RecoveryStageSlot> createRecoveryStageSlots(
+    const std::vector<RecoveryAnalyzerRef>& analyzers) {
+  std::vector<RecoveryStageSlot> slots;
+  slots.reserve(analyzers.size());
+  for (const auto& analyzer : analyzers) {
+    slots.push_back({analyzer.label, {}});
+  }
+  return slots;
+}
+
+void runRecoveryStageCollectorsInParallel(
+    const std::vector<RecoveryAnalyzerRef>& analyzers, const std::string& disk_root,
+    const std::shared_ptr<spdlog::logger>& logger,
+    std::vector<RecoveryStageSlot>& per_analyzer) {
+  struct Task {
+    std::size_t index;
+    std::future<std::vector<RecoveryEvidence>> future;
+  };
+
+  std::vector<Task> tasks;
+  tasks.reserve(analyzers.size());
+
+  for (std::size_t i = 0; i < analyzers.size(); ++i) {
+    const IRecoveryAnalyzer* ptr = analyzers[i].analyzer;
+    tasks.push_back(
+        {i, std::async(std::launch::async,
+                       [ptr, &disk_root] { return ptr->collect(disk_root); })});
+  }
+
+  for (auto& task : tasks) {
+    try {
+      per_analyzer[task.index].evidence = task.future.get();
+    } catch (const std::exception& e) {
+      logger->error("Recovery({}): ошибка этапа", per_analyzer[task.index].label);
+      logger->debug("Recovery({}) exception: {}", per_analyzer[task.index].label,
+                    e.what());
+    } catch (...) {
+      logger->error("Recovery({}): неизвестная ошибка этапа",
+                    per_analyzer[task.index].label);
+    }
+  }
+}
+
+void runRecoveryStageCollectorsSequentially(
+    const std::vector<RecoveryAnalyzerRef>& analyzers, const std::string& disk_root,
+    std::vector<RecoveryStageSlot>& per_analyzer) {
+  for (std::size_t i = 0; i < analyzers.size(); ++i) {
+    per_analyzer[i].evidence = analyzers[i].analyzer->collect(disk_root);
+  }
+}
+
+void appendRecoverySummaryItem(std::string& summary, const std::string_view label,
+                               const std::size_t evidence_count) {
+  if (!summary.empty()) {
+    summary += ", ";
+  }
+  summary += label;
+  summary.push_back('=');
+  summary += std::to_string(evidence_count);
+}
+
+std::string mergeRecoveryEvidenceResults(
+    std::vector<RecoveryStageSlot>& per_analyzer,
+    std::unordered_map<std::string, ProcessInfo>& process_data,
+    std::vector<RecoveryEvidence>& recovery_evidence) {
+  std::string summary;
+  summary.reserve(per_analyzer.size() * 24);
+
+  for (auto& slot : per_analyzer) {
+    appendRecoverySummaryItem(summary, slot.label, slot.evidence.size());
+    mergeRecoveryEvidenceToProcessData(slot.evidence, process_data);
+    appendMovedVector(recovery_evidence, slot.evidence);
+  }
+
+  return summary;
+}
+
 }  // namespace
 
 WindowsDiskAnalyzer::WindowsDiskAnalyzer(std::string disk_root,
@@ -259,44 +458,8 @@ void WindowsDiskAnalyzer::runPrefetchStage() {
   }
 
   for (auto& info : prefetch_results) {
-    auto& merged = process_data_[info.filename];
-    if (merged.filename.empty()) {
-      merged.filename = std::move(info.filename);
-    }
-
-    merged.run_count += info.run_count;
-    appendEvidenceSource(merged, "Prefetch");
-
-    if (!info.run_times.empty()) {
-      for (const auto& timestamp : info.run_times) {
-        updateProcessTimestampBounds(merged, timestamp);
-      }
-      appendTimelineArtifact(merged, "[Prefetch] last=" + info.run_times.back());
-    } else {
-      appendTimelineArtifact(merged, "[Prefetch]");
-    }
-
-    if (!info.run_times.empty()) {
-      merged.run_times.reserve(merged.run_times.size() + info.run_times.size());
-      merged.run_times.insert(
-          merged.run_times.end(),
-          std::make_move_iterator(info.run_times.begin()),
-          std::make_move_iterator(info.run_times.end()));
-    }
-    if (!info.volumes.empty()) {
-      merged.volumes.reserve(merged.volumes.size() + info.volumes.size());
-      merged.volumes.insert(
-          merged.volumes.end(),
-          std::make_move_iterator(info.volumes.begin()),
-          std::make_move_iterator(info.volumes.end()));
-    }
-    if (!info.metrics.empty()) {
-      merged.metrics.reserve(merged.metrics.size() + info.metrics.size());
-      merged.metrics.insert(
-          merged.metrics.end(),
-          std::make_move_iterator(info.metrics.begin()),
-          std::make_move_iterator(info.metrics.end()));
-    }
+    auto& merged = ensureProcessEntry(process_data_, info.filename);
+    mergePrefetchProcessInfo(merged, info);
   }
 
   logger->info("Этап 3/7 завершен: prefetch-процессов={}",
@@ -307,11 +470,7 @@ void WindowsDiskAnalyzer::runEventLogStage() {
   const auto logger = GlobalLogger::get();
   logger->info("Этап 4/7: анализ EventLog");
 
-  std::unordered_map<std::string, uint32_t> run_count_before_eventlog;
-  run_count_before_eventlog.reserve(process_data_.size());
-  for (const auto& [process_key, info] : process_data_) {
-    run_count_before_eventlog.emplace(process_key, info.run_count);
-  }
+  const auto run_count_before_eventlog = buildRunCountSnapshot(process_data_);
 
   {
     ScopedDebugLevelOverride scoped_debug(debug_options_.eventlog);
@@ -321,14 +480,9 @@ void WindowsDiskAnalyzer::runEventLogStage() {
   }
 
   for (auto& [process_key, info] : process_data_) {
-    const auto it_before = run_count_before_eventlog.find(process_key);
-    const bool is_new_process = it_before == run_count_before_eventlog.end();
-    const bool has_new_runs = !is_new_process && info.run_count > it_before->second;
-
-    if (is_new_process || has_new_runs) {
-      appendEvidenceSource(info, "EventLog");
-      appendTimelineArtifact(
-          info, "[EventLog] run_count=" + std::to_string(info.run_count));
+    if (shouldAppendEventLogEvidence(run_count_before_eventlog, process_key,
+                                     info.run_count)) {
+      appendEventLogEvidence(info);
     }
 
     updateProcessTimestampBoundsFromRunTimes(info);
@@ -348,20 +502,7 @@ void WindowsDiskAnalyzer::runExecutionStage() {
   }
 
   for (const auto& connection : network_connections_) {
-    const std::string* process_key = nullptr;
-    if (!connection.process_name.empty()) {
-      process_key = &connection.process_name;
-    } else if (!connection.application.empty()) {
-      process_key = &connection.application;
-    }
-    if (process_key == nullptr) continue;
-
-    auto& info = process_data_[*process_key];
-    if (info.filename.empty()) {
-      info.filename = *process_key;
-    }
-    appendEvidenceSource(info, "NetworkEvent");
-    appendTimelineArtifact(info, buildNetworkTimelineArtifact(connection));
+    mergeNetworkConnectionToProcessData(connection, process_data_);
   }
 
   logger->info("Этап 5/7 завершен: {} процессов в агрегате", process_data_.size());
@@ -379,70 +520,26 @@ void WindowsDiskAnalyzer::runRecoveryStage() {
   constexpr std::size_t kDefaultCandidatesPerSource = 2000;
   recovery_evidence_.reserve(recovery_analyzers_.size() * kDefaultCandidatesPerSource);
 
-  // Результаты по каждому анализатору: {label, evidence}.
-  // Индекс совпадает с recovery_analyzers_, что позволяет безопасно
-  // обращаться к метке при обработке исключений из future.
-  std::vector<std::pair<std::string, std::vector<RecoveryEvidence>>>
-      per_analyzer(recovery_analyzers_.size());
-  for (std::size_t i = 0; i < recovery_analyzers_.size(); ++i) {
-    per_analyzer[i].first = recovery_analyzers_[i].label;
+  std::vector<RecoveryAnalyzerRef> analyzers;
+  analyzers.reserve(recovery_analyzers_.size());
+  for (const auto& analyzer : recovery_analyzers_) {
+    analyzers.push_back({analyzer.label, analyzer.analyzer.get()});
   }
+
+  auto per_analyzer = createRecoveryStageSlots(analyzers);
 
   if (run_parallel) {
     logger->info("Recovery: параллельный режим включен (MaxIOWorkers={})",
                  performance_options_.max_io_workers);
-
-    struct Task {
-      std::size_t                              index;
-      std::future<std::vector<RecoveryEvidence>> future;
-    };
-
-    std::vector<Task> tasks;
-    tasks.reserve(recovery_analyzers_.size());
-
-    for (std::size_t i = 0; i < recovery_analyzers_.size(); ++i) {
-      // Захватываем raw-указатель — вектор не изменяется во время async.
-      IRecoveryAnalyzer* ptr = recovery_analyzers_[i].analyzer.get();
-      tasks.push_back(
-          {i, std::async(std::launch::async,
-                         [ptr, this] { return ptr->collect(disk_root_); })});
-    }
-
-    for (auto& task : tasks) {
-      try {
-        per_analyzer[task.index].second = task.future.get();
-      } catch (const std::exception& e) {
-        logger->error("Recovery({}): ошибка этапа",
-                      recovery_analyzers_[task.index].label);
-        logger->debug("Recovery({}) exception: {}",
-                      recovery_analyzers_[task.index].label, e.what());
-      } catch (...) {
-        logger->error("Recovery({}): неизвестная ошибка этапа",
-                      recovery_analyzers_[task.index].label);
-      }
-    }
+    runRecoveryStageCollectorsInParallel(analyzers, disk_root_, logger,
+                                         per_analyzer);
   } else {
     ScopedDebugLevelOverride scoped_debug(debug_options_.recovery);
-    for (std::size_t i = 0; i < recovery_analyzers_.size(); ++i) {
-      per_analyzer[i].second =
-          recovery_analyzers_[i].analyzer->collect(disk_root_);
-    }
+    runRecoveryStageCollectorsSequentially(analyzers, disk_root_, per_analyzer);
   }
 
-  // Мерж в общую таблицу процессов и формирование строки итогового лога.
-  std::string summary;
-  summary.reserve(recovery_analyzers_.size() * 24);
-  for (auto& [label, evidence] : per_analyzer) {
-    if (!summary.empty()) summary += ", ";
-    summary += label;
-    summary.push_back('=');
-    summary += std::to_string(evidence.size());
-
-    mergeRecoveryEvidenceToProcessData(evidence, process_data_);
-    recovery_evidence_.insert(recovery_evidence_.end(),
-                              std::make_move_iterator(evidence.begin()),
-                              std::make_move_iterator(evidence.end()));
-  }
+  const std::string summary = mergeRecoveryEvidenceResults(
+      per_analyzer, process_data_, recovery_evidence_);
 
   logger->info("Этап 6/7 завершен: {}", summary);
 }
