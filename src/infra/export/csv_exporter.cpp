@@ -36,16 +36,13 @@ void CSVExporter::exportToCSV(
     const std::vector<AutorunEntry>& autorun_entries,
     const std::unordered_map<std::string, ProcessInfo>& process_data,
     const std::vector<NetworkConnection>& network_connections,
-    const std::vector<AmcacheEntry>& amcache_entries,
-    const CSVExportOptions& options) {
+    const std::vector<AmcacheEntry>& amcache_entries) {
   std::ofstream file(output_path, std::ios::binary);
   if (!file.is_open()) {
     throw FileOpenException(output_path);
   }
 
   try {
-    const MetricFilterRules metric_rules = buildMetricFilterRules(options);
-
     auto escape = [](const std::string& s) {
       if (s.empty()) return std::string();
 
@@ -368,8 +365,7 @@ void CSVExporter::exportToCSV(
 
     // 5. Генерируем выходные данные
     for (const auto& [aggregation_key, data] : aggregated_data) {
-      AggregatedData row = data;
-      deriveTamperFlags(row, options);
+      const AggregatedData& row = data;
 
       const std::string& filename =
           row.executable_name.empty() ? aggregation_key : row.executable_name;
@@ -471,8 +467,7 @@ void CSVExporter::exportToCSV(
       std::string volumes_str = joinStrings(volume_values);
 
       // Форматирование файловых метрик
-      std::vector<std::string> metric_values =
-          buildMetricValuesForCsv(row.metrics, metric_rules);
+      std::vector<std::string> metric_values = buildMetricValuesForCsv(row.metrics);
       std::string metrics_str = joinStrings(metric_values);
 
       std::string timeline_artifacts_str = joinStrings(row.timeline_artifacts);
