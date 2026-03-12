@@ -4,10 +4,9 @@
 #include "csv_exporter.hpp"
 
 #include <algorithm>
-#include <filesystem>
+#include <cctype>
 #include <fstream>
 #include <set>
-#include <sstream>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
@@ -17,7 +16,6 @@
 #include "csv_exporter_utils.hpp"
 #include "errors/csv_export_exception.hpp"
 
-namespace fs = std::filesystem;
 using namespace PrefetchAnalysis;
 using namespace WindowsDiskAnalysis::CsvExporterUtils;
 using namespace WindowsDiskAnalysis::CsvExporterFiltering;
@@ -26,6 +24,347 @@ namespace {
 
 constexpr char kCsvDelimiter = ';';
 constexpr std::string_view kListSeparator = " | ";
+constexpr std::string_view kNotAvailable = "N/A";
+constexpr std::string_view kMissingPort = "-";
+constexpr std::string_view kNetworkEventPrefix = "[NetworkEvent] ";
+
+constexpr std::string_view kCsvHeader =
+    "ИсполняемыйФайл;Пути;Версии;Хэши;РазмерФайла;ВременаЗапуска;FirstSeenUTC;"
+    "LastSeenUTC;TimelineArtifacts;RecoveredFrom;Users;UserSIDs;LogonIDs;"
+    "LogonTypes;ElevationType;ElevatedToken;IntegrityLevel;Privileges;"
+    "Автозагрузка;СледыУдаления;КоличествоЗапусков;Тома(серийный:тип);"
+    "СетевыеПодключения;NetworkEventIDs;NetworkTimestamps;"
+    "NetworkProcessNames;NetworkProcessIDs;NetworkApplications;"
+    "NetworkProtocols;NetworkSourceIPs;NetworkSourcePorts;NetworkDestIPs;"
+    "NetworkDestPorts;NetworkDirections;NetworkActions;"
+    "NetworkTimelineArtifacts;NetworkContextSources;NetworkProfiles;"
+    "FirewallRules;ФайловыеМетрики;EvidenceSources;TamperFlags\n";
+
+std::string escapeCsvField(std::string_view value) {
+  if (value.empty()) {
+    return {};
+  }
+
+  std::string result;
+  result.reserve(value.size() + 2);
+  result.push_back('"');
+
+  for (const char c : value) {
+    if (c == '\n' || c == '\r') {
+      result.push_back(' ');
+      continue;
+    }
+
+    if (c == '"') {
+      result.append("\"\"");
+    } else {
+      result.push_back(c);
+    }
+  }
+
+  result.push_back('"');
+  return result;
+}
+
+void writeCsvHeader(std::ofstream& file) { file << kCsvHeader; }
+
+template <typename Container>
+std::string joinStrings(const Container& container) {
+  size_t count = 0;
+  size_t total_size = 0;
+  for (const auto& value : container) {
+    if (value.empty()) {
+      continue;
+    }
+    total_size += value.size();
+    ++count;
+  }
+
+  if (count == 0) {
+    return {};
+  }
+
+  total_size += (count - 1) * kListSeparator.size();
+  std::string out;
+  out.reserve(total_size);
+
+  bool first = true;
+  for (const auto& value : container) {
+    if (value.empty()) {
+      continue;
+    }
+    if (!first) {
+      out.append(kListSeparator);
+    }
+    out.append(value);
+    first = false;
+  }
+
+  return out;
+}
+
+std::string joinUint64Values(const std::set<uint64_t>& values) {
+  if (values.empty()) {
+    return {};
+  }
+
+  std::string out;
+  out.reserve(values.size() * 20 + (values.size() - 1) * kListSeparator.size());
+
+  bool first = true;
+  for (const uint64_t value : values) {
+    if (!first) {
+      out.append(kListSeparator);
+    }
+    out.append(std::to_string(value));
+    first = false;
+  }
+
+  return out;
+}
+
+std::string serializeAutorunValue(const std::set<std::string>& locations) {
+  if (locations.empty()) {
+    return "Нет";
+  }
+
+  size_t total_size = 4;  // "Да()"
+  bool first = true;
+  for (const auto& location : locations) {
+    total_size += location.size();
+    if (!first) {
+      total_size += 2;  // ", "
+    }
+    first = false;
+  }
+
+  std::string out;
+  out.reserve(total_size);
+  out.append("Да(");
+
+  first = true;
+  for (const auto& location : locations) {
+    if (!first) {
+      out.append(", ");
+    }
+    out.append(location);
+    first = false;
+  }
+
+  out.push_back(')');
+  return out;
+}
+
+std::string formatNetworkPort(const uint16_t value) {
+  return value == 0 ? std::string(kMissingPort) : std::to_string(value);
+}
+
+std::string_view valueOrNotAvailable(const std::string& value) noexcept {
+  return value.empty() ? kNotAvailable : std::string_view(value);
+}
+
+std::string serializeNetworkValue(
+    const WindowsDiskAnalysis::NetworkConnection& conn,
+    const bool include_timestamp, const bool include_application,
+    const bool include_prefix) {
+  const std::string source_port = formatNetworkPort(conn.source_port);
+  const std::string dest_port = formatNetworkPort(conn.dest_port);
+  const std::string event_id = std::to_string(conn.event_id);
+  const std::string process_id = std::to_string(conn.process_id);
+
+  const std::string_view protocol = valueOrNotAvailable(conn.protocol);
+  const std::string_view source_ip = valueOrNotAvailable(conn.source_ip);
+  const std::string_view dest_ip = valueOrNotAvailable(conn.dest_ip);
+  const std::string_view direction = valueOrNotAvailable(conn.direction);
+  const std::string_view action = valueOrNotAvailable(conn.action);
+  const std::string_view application = valueOrNotAvailable(conn.application);
+
+  size_t reserve_size = event_id.size() + process_id.size() + source_port.size() +
+                        dest_port.size() + protocol.size() + source_ip.size() +
+                        dest_ip.size() + direction.size() + action.size() + 48;
+  if (include_timestamp) {
+    reserve_size += conn.timestamp.size() + 4;  // " ts="
+  }
+  if (include_application) {
+    reserve_size += application.size() + 5;  // " app="
+  }
+  if (include_prefix) {
+    reserve_size += kNetworkEventPrefix.size();
+  }
+
+  std::string out;
+  out.reserve(reserve_size);
+  if (include_prefix) {
+    out.append(kNetworkEventPrefix);
+  }
+  out.append("id=");
+  out.append(event_id);
+  if (include_timestamp) {
+    out.append(" ts=");
+    out.append(conn.timestamp);
+  }
+  out.push_back(' ');
+  out.append(protocol);
+  out.push_back(' ');
+  out.append(source_ip);
+  out.push_back(':');
+  out.append(source_port);
+  out.append("->");
+  out.append(dest_ip);
+  out.push_back(':');
+  out.append(dest_port);
+  out.append(" pid=");
+  out.append(process_id);
+  if (include_application) {
+    out.append(" app=");
+    out.append(application);
+  }
+  out.append(" dir=");
+  out.append(direction);
+  out.append(" action=");
+  out.append(action);
+
+  return out;
+}
+
+std::string serializeNetworkTimeline(
+    const WindowsDiskAnalysis::NetworkConnection& conn) {
+  return serializeNetworkValue(
+      conn, /*include_timestamp=*/false, /*include_application=*/false,
+      /*include_prefix=*/true);
+}
+
+std::string serializeNetworkSummary(
+    const WindowsDiskAnalysis::NetworkConnection& conn) {
+  return serializeNetworkValue(
+      conn, /*include_timestamp=*/true, /*include_application=*/true,
+      /*include_prefix=*/false);
+}
+
+void writeAggregatedRow(std::ofstream& file, const std::string& aggregation_key,
+                        const WindowsDiskAnalysis::AggregatedData& row) {
+  const std::string_view filename =
+      row.executable_name.empty() ? std::string_view(aggregation_key)
+                                  : std::string_view(row.executable_name);
+
+  const std::string paths_str = joinStrings(row.paths);
+  const std::string versions_str = joinStrings(row.versions);
+  const std::string hashes_str = joinStrings(row.hashes);
+  const std::string file_sizes_str = joinUint64Values(row.file_sizes);
+
+  std::vector<std::string> unique_run_times = row.run_times;
+  sortAndUnique(unique_run_times);
+  const std::string run_times_str = joinStrings(unique_run_times);
+
+  const std::string users_str = joinStrings(row.users);
+  const std::string user_sids_str = joinStrings(row.user_sids);
+  const std::string logon_ids_str = joinStrings(row.logon_ids);
+  const std::string logon_types_str = joinStrings(row.logon_types);
+  const std::string elevation_types_str = joinStrings(row.elevation_types);
+  const std::string elevated_tokens_str = joinStrings(row.elevated_tokens);
+  const std::string integrity_levels_str = joinStrings(row.integrity_levels);
+  const std::string privileges_str = joinStrings(row.privileges);
+
+  const std::string autorun_str = serializeAutorunValue(row.autorun_locations);
+  const std::string_view deleted_str = row.has_deleted_trace ? "Да" : "Нет";
+
+  std::vector<std::string> network_values;
+  network_values.reserve(row.network_connections.size());
+  for (const auto& conn : row.network_connections) {
+    network_values.push_back(serializeNetworkSummary(conn));
+  }
+  sortAndUnique(network_values);
+
+  const std::string network_str = joinStrings(network_values);
+  const std::string network_event_ids_str = joinStrings(row.network_event_ids);
+  const std::string network_timestamps_str = joinStrings(row.network_timestamps);
+  const std::string network_process_names_str =
+      joinStrings(row.network_process_names);
+  const std::string network_process_ids_str = joinStrings(row.network_process_ids);
+  const std::string network_applications_str =
+      joinStrings(row.network_applications);
+  const std::string network_protocols_str = joinStrings(row.network_protocols);
+  const std::string network_source_ips_str = joinStrings(row.network_source_ips);
+  const std::string network_source_ports_str =
+      joinStrings(row.network_source_ports);
+  const std::string network_dest_ips_str = joinStrings(row.network_dest_ips);
+  const std::string network_dest_ports_str = joinStrings(row.network_dest_ports);
+  const std::string network_directions_str = joinStrings(row.network_directions);
+  const std::string network_actions_str = joinStrings(row.network_actions);
+  const std::string network_timeline_artifacts_str =
+      joinStrings(row.network_timeline_artifacts);
+  const std::string network_context_sources_str =
+      joinStrings(row.network_context_sources);
+  const std::string network_profiles_str =
+      joinStrings(row.network_profile_artifacts);
+  const std::string firewall_rules_str = joinStrings(row.firewall_rule_artifacts);
+
+  std::vector<std::string> volume_values;
+  volume_values.reserve(row.volumes.size());
+  for (const auto& vol : row.volumes) {
+    volume_values.push_back(std::to_string(vol.getSerialNumber()) + ":" +
+                            volumeTypeToString(vol.getVolumeType()));
+  }
+  sortAndUnique(volume_values);
+  const std::string volumes_str = joinStrings(volume_values);
+
+  std::vector<std::string> metric_values = buildMetricValuesForCsv(row.metrics);
+  const std::string metrics_str = joinStrings(metric_values);
+
+  const std::string timeline_artifacts_str = joinStrings(row.timeline_artifacts);
+  const std::string recovered_from_str = joinStrings(row.recovered_from);
+  const std::string evidence_sources_str = joinStrings(row.evidence_sources);
+  const std::string tamper_flags_str = joinStrings(row.tamper_flags);
+
+  const auto writeEscapedField = [&](const std::string_view value) {
+    file << escapeCsvField(value) << kCsvDelimiter;
+  };
+
+  writeEscapedField(filename);
+  writeEscapedField(paths_str);
+  writeEscapedField(versions_str);
+  writeEscapedField(hashes_str);
+  writeEscapedField(file_sizes_str);
+  writeEscapedField(run_times_str);
+  writeEscapedField(row.first_seen_utc);
+  writeEscapedField(row.last_seen_utc);
+  writeEscapedField(timeline_artifacts_str);
+  writeEscapedField(recovered_from_str);
+  writeEscapedField(users_str);
+  writeEscapedField(user_sids_str);
+  writeEscapedField(logon_ids_str);
+  writeEscapedField(logon_types_str);
+  writeEscapedField(elevation_types_str);
+  writeEscapedField(elevated_tokens_str);
+  writeEscapedField(integrity_levels_str);
+  writeEscapedField(privileges_str);
+  writeEscapedField(autorun_str);
+  writeEscapedField(deleted_str);
+
+  file << row.run_count << kCsvDelimiter;
+
+  writeEscapedField(volumes_str);
+  writeEscapedField(network_str);
+  writeEscapedField(network_event_ids_str);
+  writeEscapedField(network_timestamps_str);
+  writeEscapedField(network_process_names_str);
+  writeEscapedField(network_process_ids_str);
+  writeEscapedField(network_applications_str);
+  writeEscapedField(network_protocols_str);
+  writeEscapedField(network_source_ips_str);
+  writeEscapedField(network_source_ports_str);
+  writeEscapedField(network_dest_ips_str);
+  writeEscapedField(network_dest_ports_str);
+  writeEscapedField(network_directions_str);
+  writeEscapedField(network_actions_str);
+  writeEscapedField(network_timeline_artifacts_str);
+  writeEscapedField(network_context_sources_str);
+  writeEscapedField(network_profiles_str);
+  writeEscapedField(firewall_rules_str);
+  writeEscapedField(metrics_str);
+  writeEscapedField(evidence_sources_str);
+  file << escapeCsvField(tamper_flags_str) << '\n';
+}
 
 }  // namespace
 
@@ -43,71 +382,9 @@ void CSVExporter::exportToCSV(
   }
 
   try {
-    auto escape = [](const std::string& s) {
-      if (s.empty()) return std::string();
-
-      std::string result;
-      result.reserve(s.size() + 2);
-      result += '"';
-
-      for (char c : s) {
-        if (c == '\n' || c == '\r') {
-          result += ' ';
-          continue;
-        }
-
-        if (c == '"')
-          result += "\"\"";
-        else
-          result += c;
-      }
-
-      result += '"';
-      return result;
-    };
-
-    auto joinStrings = [](const auto& container) {
-      std::string out;
-      bool first = true;
-      for (const auto& value : container) {
-        if (value.empty()) continue;
-        if (!first) out += kListSeparator;
-        out += value;
-        first = false;
-      }
-      return out;
-    };
-
     // BOM нужен для корректного чтения UTF-8 заголовков в Excel/Windows
     file.write("\xEF\xBB\xBF", 3);
-
-    // Заголовок CSV
-    file << "ИсполняемыйФайл" << kCsvDelimiter << "Пути" << kCsvDelimiter
-         << "Версии" << kCsvDelimiter << "Хэши" << kCsvDelimiter
-         << "РазмерФайла" << kCsvDelimiter << "ВременаЗапуска" << kCsvDelimiter
-         << "FirstSeenUTC" << kCsvDelimiter << "LastSeenUTC" << kCsvDelimiter
-         << "TimelineArtifacts" << kCsvDelimiter << "RecoveredFrom"
-         << kCsvDelimiter << "Users" << kCsvDelimiter << "UserSIDs"
-         << kCsvDelimiter << "LogonIDs" << kCsvDelimiter << "LogonTypes"
-         << kCsvDelimiter << "ElevationType" << kCsvDelimiter
-         << "ElevatedToken" << kCsvDelimiter << "IntegrityLevel"
-         << kCsvDelimiter << "Privileges" << kCsvDelimiter << "Автозагрузка"
-         << kCsvDelimiter << "СледыУдаления" << kCsvDelimiter
-         << "КоличествоЗапусков" << kCsvDelimiter << "Тома(серийный:тип)"
-         << kCsvDelimiter << "СетевыеПодключения" << kCsvDelimiter
-         << "NetworkEventIDs" << kCsvDelimiter << "NetworkTimestamps"
-         << kCsvDelimiter << "NetworkProcessNames" << kCsvDelimiter
-         << "NetworkProcessIDs" << kCsvDelimiter << "NetworkApplications"
-         << kCsvDelimiter << "NetworkProtocols" << kCsvDelimiter
-         << "NetworkSourceIPs" << kCsvDelimiter << "NetworkSourcePorts"
-         << kCsvDelimiter << "NetworkDestIPs" << kCsvDelimiter
-         << "NetworkDestPorts" << kCsvDelimiter << "NetworkDirections"
-         << kCsvDelimiter << "NetworkActions" << kCsvDelimiter
-         << "NetworkTimelineArtifacts" << kCsvDelimiter
-         << "NetworkContextSources" << kCsvDelimiter << "NetworkProfiles"
-         << kCsvDelimiter << "FirewallRules" << kCsvDelimiter
-         << "ФайловыеМетрики" << kCsvDelimiter
-         << "EvidenceSources" << kCsvDelimiter << "TamperFlags\n";
+    writeCsvHeader(file);
 
     // Основная карта для агрегации данных по нормализованному идентификатору
     // процесса.
@@ -293,29 +570,8 @@ void CSVExporter::exportToCSV(
                        data.network_actions.insert(conn.action);
                      }
 
-                     const auto port_to_string = [](const uint16_t value) {
-                       return value == 0 ? std::string("-")
-                                         : std::to_string(value);
-                     };
-
-                     const std::string protocol =
-                         conn.protocol.empty() ? "N/A" : conn.protocol;
-                     const std::string source_ip =
-                         conn.source_ip.empty() ? "N/A" : conn.source_ip;
-                     const std::string dest_ip =
-                         conn.dest_ip.empty() ? "N/A" : conn.dest_ip;
-                     const std::string direction =
-                         conn.direction.empty() ? "N/A" : conn.direction;
-                     const std::string action =
-                         conn.action.empty() ? "N/A" : conn.action;
-
                      const std::string timeline_value =
-                         "[NetworkEvent] id=" + std::to_string(conn.event_id) + " " +
-                         protocol + " " + source_ip + ":" +
-                         port_to_string(conn.source_port) + "->" + dest_ip +
-                         ":" + port_to_string(conn.dest_port) + " pid=" +
-                         std::to_string(conn.process_id) + " dir=" + direction +
-                         " action=" + action;
+                         serializeNetworkTimeline(conn);
                      data.timeline_artifacts.insert(timeline_value);
                      data.network_timeline_artifacts.insert(timeline_value);
                    });
@@ -365,153 +621,7 @@ void CSVExporter::exportToCSV(
 
     // 5. Генерируем выходные данные
     for (const auto& [aggregation_key, data] : aggregated_data) {
-      const AggregatedData& row = data;
-
-      const std::string& filename =
-          row.executable_name.empty() ? aggregation_key : row.executable_name;
-
-      std::string paths_str = joinStrings(row.paths);
-      std::string versions_str = joinStrings(row.versions);
-      std::string hashes_str = joinStrings(row.hashes);
-
-      std::vector<std::string> file_sizes;
-      file_sizes.reserve(row.file_sizes.size());
-      for (const auto size : row.file_sizes) {
-        file_sizes.push_back(std::to_string(size));
-      }
-      std::string file_sizes_str = joinStrings(file_sizes);
-
-      // Форматирование времени запуска (включая время изменения)
-      std::vector<std::string> unique_run_times = row.run_times;
-      sortAndUnique(unique_run_times);
-      std::string run_times_str = joinStrings(unique_run_times);
-      std::string users_str = joinStrings(row.users);
-      std::string user_sids_str = joinStrings(row.user_sids);
-      std::string logon_ids_str = joinStrings(row.logon_ids);
-      std::string logon_types_str = joinStrings(row.logon_types);
-      std::string elevation_types_str = joinStrings(row.elevation_types);
-      std::string elevated_tokens_str = joinStrings(row.elevated_tokens);
-      std::string integrity_levels_str = joinStrings(row.integrity_levels);
-      std::string privileges_str = joinStrings(row.privileges);
-
-      // Форматирование автозагрузки
-      std::string autorun_str;
-      if (!row.autorun_locations.empty()) {
-        autorun_str = "Да(";
-        bool first_location = true;
-        for (const auto& location : row.autorun_locations) {
-          if (!first_location) autorun_str += ", ";
-          autorun_str += location;
-          first_location = false;
-        }
-        autorun_str += ")";
-      } else {
-        autorun_str = "Нет";
-      }
-
-      // Следы удалённых файлов
-      std::string deleted_str = row.has_deleted_trace ? "Да" : "Нет";
-
-      // Форматирование сетевых подключений
-      std::vector<std::string> network_values;
-      network_values.reserve(row.network_connections.size());
-      const auto port_to_string = [](const uint16_t value) {
-        return value == 0 ? std::string("-") : std::to_string(value);
-      };
-      for (const auto& conn : row.network_connections) {
-        const std::string protocol = conn.protocol.empty() ? "N/A" : conn.protocol;
-        const std::string source_ip =
-            conn.source_ip.empty() ? "N/A" : conn.source_ip;
-        const std::string dest_ip = conn.dest_ip.empty() ? "N/A" : conn.dest_ip;
-        const std::string direction =
-            conn.direction.empty() ? "N/A" : conn.direction;
-        const std::string action = conn.action.empty() ? "N/A" : conn.action;
-        const std::string application =
-            conn.application.empty() ? "N/A" : conn.application;
-        network_values.push_back(
-            "id=" + std::to_string(conn.event_id) + " ts=" + conn.timestamp + " " +
-            protocol + " " + source_ip + ":" + port_to_string(conn.source_port) +
-            "->" + dest_ip + ":" + port_to_string(conn.dest_port) + " pid=" +
-            std::to_string(conn.process_id) + " app=" + application +
-            " dir=" + direction + " action=" + action);
-      }
-      sortAndUnique(network_values);
-      std::string network_str = joinStrings(network_values);
-      std::string network_event_ids_str = joinStrings(row.network_event_ids);
-      std::string network_timestamps_str = joinStrings(row.network_timestamps);
-      std::string network_process_names_str = joinStrings(row.network_process_names);
-      std::string network_process_ids_str = joinStrings(row.network_process_ids);
-      std::string network_applications_str = joinStrings(row.network_applications);
-      std::string network_protocols_str = joinStrings(row.network_protocols);
-      std::string network_source_ips_str = joinStrings(row.network_source_ips);
-      std::string network_source_ports_str = joinStrings(row.network_source_ports);
-      std::string network_dest_ips_str = joinStrings(row.network_dest_ips);
-      std::string network_dest_ports_str = joinStrings(row.network_dest_ports);
-      std::string network_directions_str = joinStrings(row.network_directions);
-      std::string network_actions_str = joinStrings(row.network_actions);
-      std::string network_timeline_artifacts_str =
-          joinStrings(row.network_timeline_artifacts);
-      std::string network_context_sources_str =
-          joinStrings(row.network_context_sources);
-      std::string network_profiles_str = joinStrings(row.network_profile_artifacts);
-      std::string firewall_rules_str = joinStrings(row.firewall_rule_artifacts);
-
-      // Форматирование томов
-      std::vector<std::string> volume_values;
-      volume_values.reserve(row.volumes.size());
-      for (const auto& vol : row.volumes) {
-        volume_values.push_back(std::to_string(vol.getSerialNumber()) + ":" +
-                                volumeTypeToString(vol.getVolumeType()));
-      }
-      sortAndUnique(volume_values);
-      std::string volumes_str = joinStrings(volume_values);
-
-      // Форматирование файловых метрик
-      std::vector<std::string> metric_values = buildMetricValuesForCsv(row.metrics);
-      std::string metrics_str = joinStrings(metric_values);
-
-      std::string timeline_artifacts_str = joinStrings(row.timeline_artifacts);
-      std::string recovered_from_str = joinStrings(row.recovered_from);
-      std::string evidence_sources_str = joinStrings(row.evidence_sources);
-      std::string tamper_flags_str = joinStrings(row.tamper_flags);
-
-      // Запись данных в строго фиксированном порядке колонок
-      file << escape(filename) << kCsvDelimiter << escape(paths_str)
-           << kCsvDelimiter << escape(versions_str) << kCsvDelimiter
-           << escape(hashes_str) << kCsvDelimiter << escape(file_sizes_str)
-           << kCsvDelimiter << escape(run_times_str) << kCsvDelimiter
-           << escape(row.first_seen_utc) << kCsvDelimiter
-           << escape(row.last_seen_utc) << kCsvDelimiter
-           << escape(timeline_artifacts_str) << kCsvDelimiter
-           << escape(recovered_from_str) << kCsvDelimiter << escape(users_str)
-           << kCsvDelimiter << escape(user_sids_str) << kCsvDelimiter
-           << escape(logon_ids_str) << kCsvDelimiter << escape(logon_types_str)
-           << kCsvDelimiter << escape(elevation_types_str) << kCsvDelimiter
-           << escape(elevated_tokens_str) << kCsvDelimiter
-           << escape(integrity_levels_str) << kCsvDelimiter
-           << escape(privileges_str) << kCsvDelimiter << escape(autorun_str)
-           << kCsvDelimiter << escape(deleted_str)
-           << kCsvDelimiter << row.run_count << kCsvDelimiter
-           << escape(volumes_str) << kCsvDelimiter << escape(network_str)
-           << kCsvDelimiter << escape(network_event_ids_str)
-           << kCsvDelimiter << escape(network_timestamps_str)
-           << kCsvDelimiter << escape(network_process_names_str)
-           << kCsvDelimiter << escape(network_process_ids_str)
-           << kCsvDelimiter << escape(network_applications_str)
-           << kCsvDelimiter << escape(network_protocols_str)
-           << kCsvDelimiter << escape(network_source_ips_str)
-           << kCsvDelimiter << escape(network_source_ports_str)
-           << kCsvDelimiter << escape(network_dest_ips_str)
-           << kCsvDelimiter << escape(network_dest_ports_str)
-           << kCsvDelimiter << escape(network_directions_str)
-           << kCsvDelimiter << escape(network_actions_str)
-           << kCsvDelimiter << escape(network_timeline_artifacts_str)
-           << kCsvDelimiter << escape(network_context_sources_str)
-           << kCsvDelimiter << escape(network_profiles_str)
-           << kCsvDelimiter << escape(firewall_rules_str)
-           << kCsvDelimiter << escape(metrics_str) << kCsvDelimiter
-           << escape(evidence_sources_str) << kCsvDelimiter
-           << escape(tamper_flags_str) << "\n";
+      writeAggregatedRow(file, aggregation_key, data);
     }
   } catch (const std::exception& e) {
     throw CsvExportException(std::string("Ошибка при экспорте данных: ") +
