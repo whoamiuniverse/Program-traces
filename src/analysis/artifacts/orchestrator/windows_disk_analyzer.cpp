@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <filesystem>
 #include <future>
+#include <iterator>
+#include <string_view>
 #include <unordered_map>
 
 #include "analysis/artifacts/common/evidence_utils.hpp"
@@ -28,6 +30,65 @@ namespace fs = std::filesystem;
 namespace WindowsDiskAnalysis {
 
 using namespace Orchestrator::Detail;
+
+namespace {
+
+void updateProcessTimestampBounds(ProcessInfo& info,
+                                  const std::string& timestamp) {
+  if (!EvidenceUtils::isTimestampLike(timestamp)) {
+    return;
+  }
+
+  if (info.first_seen_utc.empty() || timestamp < info.first_seen_utc) {
+    info.first_seen_utc = timestamp;
+  }
+  if (info.last_seen_utc.empty() || timestamp > info.last_seen_utc) {
+    info.last_seen_utc = timestamp;
+  }
+}
+
+void updateProcessTimestampBoundsFromRunTimes(ProcessInfo& info) {
+  for (const auto& timestamp : info.run_times) {
+    updateProcessTimestampBounds(info, timestamp);
+  }
+}
+
+std::string formatPort(const uint16_t port) {
+  return port == 0 ? std::string("-") : std::to_string(port);
+}
+
+std::string_view valueOrNA(const std::string& value) {
+  return value.empty() ? std::string_view("N/A") : std::string_view(value);
+}
+
+std::string buildNetworkTimelineArtifact(const NetworkConnection& connection) {
+  std::string artifact;
+  artifact.reserve(96 + connection.protocol.size() + connection.source_ip.size() +
+                   connection.dest_ip.size() + connection.direction.size() +
+                   connection.action.size());
+
+  artifact += "[NetworkEvent] id=";
+  artifact += std::to_string(connection.event_id);
+  artifact.push_back(' ');
+  artifact += valueOrNA(connection.protocol);
+  artifact.push_back(' ');
+  artifact += valueOrNA(connection.source_ip);
+  artifact.push_back(':');
+  artifact += formatPort(connection.source_port);
+  artifact += "->";
+  artifact += valueOrNA(connection.dest_ip);
+  artifact.push_back(':');
+  artifact += formatPort(connection.dest_port);
+  artifact += " pid=";
+  artifact += std::to_string(connection.process_id);
+  artifact += " dir=";
+  artifact += valueOrNA(connection.direction);
+  artifact += " action=";
+  artifact += valueOrNA(connection.action);
+  return artifact;
+}
+
+}  // namespace
 
 WindowsDiskAnalyzer::WindowsDiskAnalyzer(std::string disk_root,
                                          const std::string& config_path)
@@ -172,14 +233,10 @@ void WindowsDiskAnalyzer::runAmcacheStage() {
     }
 
     appendEvidenceSource(info, "Amcache");
-    if (!entry.modification_time_str.empty() && entry.modification_time_str != "N/A") {
+    if (!entry.modification_time_str.empty() &&
+        entry.modification_time_str != "N/A") {
       info.run_times.push_back(entry.modification_time_str);
-      if (EvidenceUtils::isTimestampLike(entry.modification_time_str)) {
-        EvidenceUtils::updateTimestampMin(info.first_seen_utc,
-                                          entry.modification_time_str);
-        EvidenceUtils::updateTimestampMax(info.last_seen_utc,
-                                          entry.modification_time_str);
-      }
+      updateProcessTimestampBounds(info, entry.modification_time_str);
     }
 
     if (entry.is_deleted) {
@@ -204,28 +261,41 @@ void WindowsDiskAnalyzer::runPrefetchStage() {
   for (auto& info : prefetch_results) {
     auto& merged = process_data_[info.filename];
     if (merged.filename.empty()) {
-      merged.filename = info.filename;
+      merged.filename = std::move(info.filename);
     }
 
     merged.run_count += info.run_count;
-    merged.run_times.insert(merged.run_times.end(), info.run_times.begin(),
-                            info.run_times.end());
-    merged.volumes.insert(merged.volumes.end(), info.volumes.begin(),
-                          info.volumes.end());
-    merged.metrics.insert(merged.metrics.end(), info.metrics.begin(),
-                          info.metrics.end());
     appendEvidenceSource(merged, "Prefetch");
 
     if (!info.run_times.empty()) {
       for (const auto& timestamp : info.run_times) {
-        if (EvidenceUtils::isTimestampLike(timestamp)) {
-          EvidenceUtils::updateTimestampMin(merged.first_seen_utc, timestamp);
-          EvidenceUtils::updateTimestampMax(merged.last_seen_utc, timestamp);
-        }
+        updateProcessTimestampBounds(merged, timestamp);
       }
       appendTimelineArtifact(merged, "[Prefetch] last=" + info.run_times.back());
     } else {
       appendTimelineArtifact(merged, "[Prefetch]");
+    }
+
+    if (!info.run_times.empty()) {
+      merged.run_times.reserve(merged.run_times.size() + info.run_times.size());
+      merged.run_times.insert(
+          merged.run_times.end(),
+          std::make_move_iterator(info.run_times.begin()),
+          std::make_move_iterator(info.run_times.end()));
+    }
+    if (!info.volumes.empty()) {
+      merged.volumes.reserve(merged.volumes.size() + info.volumes.size());
+      merged.volumes.insert(
+          merged.volumes.end(),
+          std::make_move_iterator(info.volumes.begin()),
+          std::make_move_iterator(info.volumes.end()));
+    }
+    if (!info.metrics.empty()) {
+      merged.metrics.reserve(merged.metrics.size() + info.metrics.size());
+      merged.metrics.insert(
+          merged.metrics.end(),
+          std::make_move_iterator(info.metrics.begin()),
+          std::make_move_iterator(info.metrics.end()));
     }
   }
 
@@ -240,7 +310,7 @@ void WindowsDiskAnalyzer::runEventLogStage() {
   std::unordered_map<std::string, uint32_t> run_count_before_eventlog;
   run_count_before_eventlog.reserve(process_data_.size());
   for (const auto& [process_key, info] : process_data_) {
-    run_count_before_eventlog[process_key] = info.run_count;
+    run_count_before_eventlog.emplace(process_key, info.run_count);
   }
 
   {
@@ -261,12 +331,7 @@ void WindowsDiskAnalyzer::runEventLogStage() {
           info, "[EventLog] run_count=" + std::to_string(info.run_count));
     }
 
-    for (const auto& timestamp : info.run_times) {
-      if (EvidenceUtils::isTimestampLike(timestamp)) {
-        EvidenceUtils::updateTimestampMin(info.first_seen_utc, timestamp);
-        EvidenceUtils::updateTimestampMax(info.last_seen_utc, timestamp);
-      }
-    }
+    updateProcessTimestampBoundsFromRunTimes(info);
   }
 
   logger->info("Этап 4/7 завершен: {} сетевых событий", network_connections_.size());
@@ -283,38 +348,20 @@ void WindowsDiskAnalyzer::runExecutionStage() {
   }
 
   for (const auto& connection : network_connections_) {
-    std::string process_key = connection.process_name;
-    if (process_key.empty()) {
-      process_key = connection.application;
+    const std::string* process_key = nullptr;
+    if (!connection.process_name.empty()) {
+      process_key = &connection.process_name;
+    } else if (!connection.application.empty()) {
+      process_key = &connection.application;
     }
-    if (process_key.empty()) continue;
+    if (process_key == nullptr) continue;
 
-    auto& info = process_data_[process_key];
+    auto& info = process_data_[*process_key];
     if (info.filename.empty()) {
-      info.filename = process_key;
+      info.filename = *process_key;
     }
     appendEvidenceSource(info, "NetworkEvent");
-    const auto format_port = [](const uint16_t port) {
-      return port == 0 ? std::string("-") : std::to_string(port);
-    };
-    const std::string protocol =
-        connection.protocol.empty() ? "N/A" : connection.protocol;
-    const std::string source_ip =
-        connection.source_ip.empty() ? "N/A" : connection.source_ip;
-    const std::string dest_ip =
-        connection.dest_ip.empty() ? "N/A" : connection.dest_ip;
-    const std::string direction =
-        connection.direction.empty() ? "N/A" : connection.direction;
-    const std::string action =
-        connection.action.empty() ? "N/A" : connection.action;
-
-    appendTimelineArtifact(
-        info,
-        "[NetworkEvent] id=" + std::to_string(connection.event_id) + " " +
-            protocol + " " + source_ip + ":" + format_port(connection.source_port) +
-            "->" + dest_ip + ":" + format_port(connection.dest_port) + " " +
-            "pid=" + std::to_string(connection.process_id) + " dir=" + direction +
-            " action=" + action);
+    appendTimelineArtifact(info, buildNetworkTimelineArtifact(connection));
   }
 
   logger->info("Этап 5/7 завершен: {} процессов в агрегате", process_data_.size());
@@ -384,9 +431,12 @@ void WindowsDiskAnalyzer::runRecoveryStage() {
 
   // Мерж в общую таблицу процессов и формирование строки итогового лога.
   std::string summary;
+  summary.reserve(recovery_analyzers_.size() * 24);
   for (auto& [label, evidence] : per_analyzer) {
     if (!summary.empty()) summary += ", ";
-    summary += label + "=" + std::to_string(evidence.size());
+    summary += label;
+    summary.push_back('=');
+    summary += std::to_string(evidence.size());
 
     mergeRecoveryEvidenceToProcessData(evidence, process_data_);
     recovery_evidence_.insert(recovery_evidence_.end(),
@@ -409,11 +459,9 @@ void WindowsDiskAnalyzer::exportCsv(const std::string& output_path) {
   const auto logger = GlobalLogger::get();
   logger->info("Этап 7/7: экспорт CSV");
 
-  const CSVExportOptions csv_export_options = loadCSVExportOptions();
   ensureDirectoryExists(output_path);
   CSVExporter::exportToCSV(output_path, autorun_entries_, process_data_,
-                           network_connections_, amcache_entries_,
-                           csv_export_options);
+                           network_connections_, amcache_entries_);
   logger->info("Этап 7/7 завершен: экспорт в \"{}\"", output_path);
 }
 

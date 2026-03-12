@@ -99,9 +99,6 @@ class WindowsDiskAnalyzer {
   /// @brief Гарантирует наличие каталога для выхода
   static void ensureDirectoryExists(const std::string& path);
 
-  /// @brief Загружает настройки CSV-экспорта из секции [CSVExport]
-  [[nodiscard]] CSVExportOptions loadCSVExportOptions() const;
-
   /// @brief Загружает настройки [Logging] для debug-логов по артефактам
   void loadLoggingOptions(const Config& config);
 

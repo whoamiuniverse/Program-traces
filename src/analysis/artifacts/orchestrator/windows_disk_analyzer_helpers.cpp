@@ -377,12 +377,6 @@ std::string normalizeDiskRoot(std::string disk_root) {
       "ожидался путь к каталогу (точке монтирования) или блочному устройству");
 }
 
-std::vector<std::string> parseListSetting(std::string value) {
-  trim(value);
-  if (value.empty()) return {};
-  return split(value, ',');
-}
-
 std::string getConfigValueWithSectionDefault(const Config& config,
                                              const std::string& section,
                                              const std::string& key) {
