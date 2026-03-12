@@ -30,18 +30,6 @@ struct AggregatedData {
   std::set<std::string> privileges;
   std::set<std::string> autorun_locations;
   std::vector<NetworkConnection> network_connections;
-  std::set<std::string> network_event_ids;
-  std::set<std::string> network_timestamps;
-  std::set<std::string> network_process_names;
-  std::set<std::string> network_process_ids;
-  std::set<std::string> network_applications;
-  std::set<std::string> network_protocols;
-  std::set<std::string> network_source_ips;
-  std::set<std::string> network_source_ports;
-  std::set<std::string> network_dest_ips;
-  std::set<std::string> network_dest_ports;
-  std::set<std::string> network_directions;
-  std::set<std::string> network_actions;
   std::set<std::string> network_timeline_artifacts;
   std::set<std::string> network_context_sources;
   std::set<std::string> network_profile_artifacts;
@@ -78,9 +66,6 @@ void sortAndUnique(std::vector<T>& values) {
 
 /// @brief Нормализует путь/командную строку до пути исполняемого файла.
 std::string normalizePath(const std::string& path);
-
-/// @brief Проверяет, является ли ключ служебным контейнером network-контекста.
-bool isSyntheticNetworkContextKey(const std::string& path);
 
 /// @brief Извлекает имя файла из полного пути.
 std::string getFilenameFromPath(const std::string& path);

@@ -42,10 +42,8 @@ class CSVExporter {
   ///    - Статус автозагрузки (Да/Нет)
   ///    - Следы удаления файла в Amcache (Да/Нет)
   ///    - Версия ПО
-  ///    - Сетевые подключения + поля сетевого контекста
-  ///      (NetworkEventIDs/NetworkTimestamps/NetworkProcessIDs/
-  ///       NetworkApplications/NetworkDirections/NetworkActions)
-  ///    - Отдельный network timeline/context блок
+  ///    - Сводка сетевых подключений процесса
+  ///    - Отдельный network context блок
   ///      (NetworkTimelineArtifacts/NetworkContextSources/
   ///       NetworkProfiles/FirewallRules)
   ///    - Количество запусков

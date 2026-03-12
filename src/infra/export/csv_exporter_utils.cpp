@@ -61,12 +61,6 @@ std::string normalizePath(const std::string& path) {
   return result.substr(start, end - start + 1);
 }
 
-bool isSyntheticNetworkContextKey(const std::string& path) {
-  std::string lowered = toLowerAscii(path);
-  trim(lowered);
-  return lowered == "__network_context__";
-}
-
 std::string getFilenameFromPath(const std::string& path) {
   if (path.empty()) return {};
   std::string normalized = path;
