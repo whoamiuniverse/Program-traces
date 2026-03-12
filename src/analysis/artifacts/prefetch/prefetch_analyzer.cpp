@@ -39,6 +39,43 @@ bool hasPfExtensionCaseInsensitive(const std::filesystem::path& file_path) {
          (extension[2] == 'f' || extension[2] == 'F');
 }
 
+std::optional<std::filesystem::path> resolvePrefetchDirectory(
+    const std::string& disk_root, const PrefetchConfig& cfg,
+    const std::shared_ptr<spdlog::logger>& logger) {
+  const std::string prefetch_path = disk_root + cfg.prefetch_path;
+  std::filesystem::path effective_prefetch_path(prefetch_path);
+
+  if (std::filesystem::exists(effective_prefetch_path)) {
+    return effective_prefetch_path;
+  }
+
+  if (const auto resolved =
+          PathUtils::findPathCaseInsensitive(std::filesystem::path(prefetch_path));
+      resolved.has_value()) {
+    logger->debug("Путь Prefetch разрешён case-insensitive: \"{}\" -> \"{}\"",
+                  prefetch_path, resolved->string());
+    return *resolved;
+  }
+
+  logger->warn("Папка Prefetch не найдена");
+  logger->debug("Проверенный путь Prefetch: \"{}\"", prefetch_path);
+  return std::nullopt;
+}
+
+std::vector<std::filesystem::path> collectPrefetchFiles(
+    const std::filesystem::path& prefetch_directory) {
+  std::vector<std::filesystem::path> prefetch_files;
+  prefetch_files.reserve(512);
+
+  for (const auto& entry : std::filesystem::directory_iterator(prefetch_directory)) {
+    const std::filesystem::path& file_path = entry.path();
+    if (!hasPfExtensionCaseInsensitive(file_path)) continue;
+    prefetch_files.push_back(file_path);
+  }
+
+  return prefetch_files;
+}
+
 /// @brief Преобразует распарсенный Prefetch-объект в `ProcessInfo`.
 /// @param prefetch_data Данные Prefetch из парсера.
 /// @param fallback_path Путь к `.pf` для fallback имени процесса.
@@ -62,6 +99,31 @@ ProcessInfo buildProcessInfoFromPrefetch(
   info.volumes = prefetch_data.getVolumes();
   info.metrics = prefetch_data.getMetrics();
   return info;
+}
+
+template <typename ParseFn>
+bool tryParsePrefetchFile(
+    ParseFn&& parse_fn, const std::filesystem::path& file_path,
+    const std::shared_ptr<spdlog::logger>& logger, ProcessInfo& process_info) {
+  const std::string file_path_string = file_path.string();
+  try {
+    auto prefetch_data = parse_fn(file_path_string);
+    process_info = buildProcessInfoFromPrefetch(*prefetch_data, file_path);
+    return true;
+  } catch (const std::exception& e) {
+    logger->warn("Файл Prefetch пропущен из-за ошибки");
+    logger->debug("Ошибка анализа Prefetch \"{}\": {}", file_path_string, e.what());
+    return false;
+  }
+}
+
+void mergeWorkerResults(std::vector<ProcessInfo>& results,
+                        std::vector<ProcessInfo>&& worker_results,
+                        std::size_t& processed_count) {
+  processed_count += worker_results.size();
+  results.insert(results.end(),
+                 std::make_move_iterator(worker_results.begin()),
+                 std::make_move_iterator(worker_results.end()));
 }
 
 }  // namespace
@@ -132,31 +194,12 @@ std::vector<ProcessInfo> PrefetchAnalyzer::collect(
     return results;
   }
 
-  std::string prefetch_path = disk_root + cfg.prefetch_path;
-  std::filesystem::path effective_prefetch_path(prefetch_path);
+  const auto effective_prefetch_path =
+      resolvePrefetchDirectory(disk_root, cfg, logger);
+  if (!effective_prefetch_path.has_value()) return results;
 
-  // Проверяем существование директории
-  if (!std::filesystem::exists(effective_prefetch_path)) {
-    if (const auto resolved =
-            PathUtils::findPathCaseInsensitive(std::filesystem::path(prefetch_path));
-        resolved.has_value()) {
-      effective_prefetch_path = *resolved;
-      logger->debug("Путь Prefetch разрешён case-insensitive: \"{}\" -> \"{}\"",
-                    prefetch_path, effective_prefetch_path.string());
-    } else {
-      logger->warn("Папка Prefetch не найдена");
-      logger->debug("Проверенный путь Prefetch: \"{}\"", prefetch_path);
-      return results;
-    }
-  }
-
-  std::vector<std::filesystem::path> prefetch_files;
-  prefetch_files.reserve(512);
-  for (const auto& entry :
-       std::filesystem::directory_iterator(effective_prefetch_path)) {
-    if (!hasPfExtensionCaseInsensitive(entry.path())) continue;
-    prefetch_files.push_back(entry.path());
-  }
+  std::vector<std::filesystem::path> prefetch_files =
+      collectPrefetchFiles(*effective_prefetch_path);
 
   const std::size_t total_files = prefetch_files.size();
   results.reserve(total_files);
@@ -173,8 +216,14 @@ std::vector<ProcessInfo> PrefetchAnalyzer::collect(
     futures.reserve(workers);
 
     for (std::size_t worker = 0; worker < workers; ++worker) {
-      futures.push_back(std::async(std::launch::async, [&]() {
+      futures.push_back(std::async(
+          std::launch::async,
+          [&prefetch_files, &next_index, total_files, expected_per_worker,
+           logger]() {
         PrefetchAnalysis::PrefetchParser local_parser;
+        const auto parse_with_local = [&local_parser](const std::string& path) {
+          return local_parser.parse(path);
+        };
         std::vector<ProcessInfo> worker_results;
         worker_results.reserve(expected_per_worker);
 
@@ -184,14 +233,10 @@ std::vector<ProcessInfo> PrefetchAnalyzer::collect(
           if (index >= total_files) break;
           const std::filesystem::path& file_path = prefetch_files[index];
 
-          try {
-            auto prefetch_data = local_parser.parse(file_path.string());
-            worker_results.push_back(
-                buildProcessInfoFromPrefetch(*prefetch_data, file_path));
-          } catch (const std::exception& e) {
-            logger->warn("Файл Prefetch пропущен из-за ошибки");
-            logger->debug("Ошибка анализа Prefetch \"{}\": {}", file_path.string(),
-                          e.what());
+          ProcessInfo process_info;
+          if (tryParsePrefetchFile(parse_with_local, file_path, logger,
+                                   process_info)) {
+            worker_results.push_back(std::move(process_info));
           }
         }
         return worker_results;
@@ -199,23 +244,20 @@ std::vector<ProcessInfo> PrefetchAnalyzer::collect(
     }
 
     for (auto& future : futures) {
-      auto worker_results = future.get();
-      processed_count += worker_results.size();
-      results.insert(results.end(),
-                     std::make_move_iterator(worker_results.begin()),
-                     std::make_move_iterator(worker_results.end()));
+      mergeWorkerResults(results, future.get(), processed_count);
     }
   } else {
     // Последовательный режим: один parser object.
+    const auto parse_with_shared = [this](const std::string& path) {
+      return parser_->parse(path);
+    };
+
     for (const auto& file_path : prefetch_files) {
-      try {
-        auto prefetch_data = parser_->parse(file_path.string());
-        results.push_back(buildProcessInfoFromPrefetch(*prefetch_data, file_path));
-        processed_count++;
-      } catch (const std::exception& e) {
-        logger->warn("Файл Prefetch пропущен из-за ошибки");
-        logger->debug("Ошибка анализа Prefetch \"{}\": {}", file_path.string(),
-                      e.what());
+      ProcessInfo process_info;
+      if (tryParsePrefetchFile(parse_with_shared, file_path, logger,
+                               process_info)) {
+        results.push_back(std::move(process_info));
+        ++processed_count;
       }
     }
   }
