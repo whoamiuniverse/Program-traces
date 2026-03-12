@@ -33,12 +33,9 @@ constexpr std::string_view kCsvHeader =
     "LastSeenUTC;TimelineArtifacts;RecoveredFrom;Users;UserSIDs;LogonIDs;"
     "LogonTypes;ElevationType;ElevatedToken;IntegrityLevel;Privileges;"
     "Автозагрузка;СледыУдаления;КоличествоЗапусков;Тома(серийный:тип);"
-    "СетевыеПодключения;NetworkEventIDs;NetworkTimestamps;"
-    "NetworkProcessNames;NetworkProcessIDs;NetworkApplications;"
-    "NetworkProtocols;NetworkSourceIPs;NetworkSourcePorts;NetworkDestIPs;"
-    "NetworkDestPorts;NetworkDirections;NetworkActions;"
-    "NetworkTimelineArtifacts;NetworkContextSources;NetworkProfiles;"
-    "FirewallRules;ФайловыеМетрики;EvidenceSources;TamperFlags\n";
+    "СетевыеПодключения;NetworkTimelineArtifacts;NetworkContextSources;"
+    "NetworkProfiles;FirewallRules;ФайловыеМетрики;EvidenceSources;"
+    "TamperFlags\n";
 
 std::string escapeCsvField(std::string_view value) {
   if (value.empty()) {
@@ -276,21 +273,6 @@ void writeAggregatedRow(std::ofstream& file, const std::string& aggregation_key,
   sortAndUnique(network_values);
 
   const std::string network_str = joinStrings(network_values);
-  const std::string network_event_ids_str = joinStrings(row.network_event_ids);
-  const std::string network_timestamps_str = joinStrings(row.network_timestamps);
-  const std::string network_process_names_str =
-      joinStrings(row.network_process_names);
-  const std::string network_process_ids_str = joinStrings(row.network_process_ids);
-  const std::string network_applications_str =
-      joinStrings(row.network_applications);
-  const std::string network_protocols_str = joinStrings(row.network_protocols);
-  const std::string network_source_ips_str = joinStrings(row.network_source_ips);
-  const std::string network_source_ports_str =
-      joinStrings(row.network_source_ports);
-  const std::string network_dest_ips_str = joinStrings(row.network_dest_ips);
-  const std::string network_dest_ports_str = joinStrings(row.network_dest_ports);
-  const std::string network_directions_str = joinStrings(row.network_directions);
-  const std::string network_actions_str = joinStrings(row.network_actions);
   const std::string network_timeline_artifacts_str =
       joinStrings(row.network_timeline_artifacts);
   const std::string network_context_sources_str =
@@ -345,18 +327,6 @@ void writeAggregatedRow(std::ofstream& file, const std::string& aggregation_key,
 
   writeEscapedField(volumes_str);
   writeEscapedField(network_str);
-  writeEscapedField(network_event_ids_str);
-  writeEscapedField(network_timestamps_str);
-  writeEscapedField(network_process_names_str);
-  writeEscapedField(network_process_ids_str);
-  writeEscapedField(network_applications_str);
-  writeEscapedField(network_protocols_str);
-  writeEscapedField(network_source_ips_str);
-  writeEscapedField(network_source_ports_str);
-  writeEscapedField(network_dest_ips_str);
-  writeEscapedField(network_dest_ports_str);
-  writeEscapedField(network_directions_str);
-  writeEscapedField(network_actions_str);
   writeEscapedField(network_timeline_artifacts_str);
   writeEscapedField(network_context_sources_str);
   writeEscapedField(network_profiles_str);
@@ -436,9 +406,6 @@ void CSVExporter::exportToCSV(
 
     // 2. Обрабатываем данные процессов
     for (const auto& [path, info] : process_data) {
-      if (isSyntheticNetworkContextKey(path)) {
-        continue;
-      }
       processEntry(
           path, [&](AggregatedData& data, const std::string& normalized_path) {
             data.paths.insert(normalized_path);
@@ -530,45 +497,6 @@ void CSVExporter::exportToCSV(
                      data.network_connections.push_back(conn);
                      addEvidenceSource(data, "NetworkEvent");
                      data.network_context_sources.insert("NetworkEvent");
-
-                     if (conn.event_id > 0) {
-                       data.network_event_ids.insert(std::to_string(conn.event_id));
-                     }
-                     if (!conn.timestamp.empty()) {
-                       data.network_timestamps.insert(conn.timestamp);
-                     }
-                     if (!conn.process_name.empty()) {
-                       data.network_process_names.insert(conn.process_name);
-                     }
-                     if (conn.process_id > 0) {
-                       data.network_process_ids.insert(
-                           std::to_string(conn.process_id));
-                     }
-                     if (!conn.application.empty()) {
-                       data.network_applications.insert(conn.application);
-                     }
-                     if (!conn.protocol.empty()) {
-                       data.network_protocols.insert(conn.protocol);
-                     }
-                     if (!conn.source_ip.empty()) {
-                       data.network_source_ips.insert(conn.source_ip);
-                     }
-                     if (conn.source_port > 0) {
-                       data.network_source_ports.insert(
-                           std::to_string(conn.source_port));
-                     }
-                     if (!conn.dest_ip.empty()) {
-                       data.network_dest_ips.insert(conn.dest_ip);
-                     }
-                     if (conn.dest_port > 0) {
-                       data.network_dest_ports.insert(std::to_string(conn.dest_port));
-                     }
-                     if (!conn.direction.empty()) {
-                       data.network_directions.insert(conn.direction);
-                     }
-                     if (!conn.action.empty()) {
-                       data.network_actions.insert(conn.action);
-                     }
 
                      const std::string timeline_value =
                          serializeNetworkTimeline(conn);
