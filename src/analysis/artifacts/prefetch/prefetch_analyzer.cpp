@@ -2,10 +2,9 @@
 
 #include <algorithm>
 #include <atomic>
-#include <cctype>
 #include <future>
+#include <iterator>
 #include <optional>
-#include <string_view>
 #include <vector>
 
 #include "common/utils.hpp"
@@ -17,7 +16,7 @@ namespace WindowsDiskAnalysis {
 
 namespace {
 
-constexpr std::string_view kVersionDefaultsSection = "VersionDefaults";
+const std::string kVersionDefaultsSection = "VersionDefaults";
 
 std::string getConfigValueWithFallback(const Config& config,
                                        const std::string& version,
@@ -26,16 +25,18 @@ std::string getConfigValueWithFallback(const Config& config,
     return config.getString(version, key, "");
   }
 
-  if (config.hasKey(std::string(kVersionDefaultsSection), key)) {
-    return config.getString(std::string(kVersionDefaultsSection), key, "");
+  if (config.hasKey(kVersionDefaultsSection, key)) {
+    return config.getString(kVersionDefaultsSection, key, "");
   }
 
   return {};
 }
 
-std::optional<std::filesystem::path> findPathCaseInsensitive(
-    const std::filesystem::path& input_path) {
-  return PathUtils::findPathCaseInsensitive(input_path);
+bool hasPfExtensionCaseInsensitive(const std::filesystem::path& file_path) {
+  const std::string extension = file_path.extension().string();
+  return extension.size() == 3 && extension[0] == '.' &&
+         (extension[1] == 'p' || extension[1] == 'P') &&
+         (extension[2] == 'f' || extension[2] == 'F');
 }
 
 /// @brief Преобразует распарсенный Prefetch-объект в `ProcessInfo`.
@@ -43,22 +44,23 @@ std::optional<std::filesystem::path> findPathCaseInsensitive(
 /// @param fallback_path Путь к `.pf` для fallback имени процесса.
 /// @return Нормализованная структура `ProcessInfo`.
 ProcessInfo buildProcessInfoFromPrefetch(
-    const std::unique_ptr<PrefetchAnalysis::IPrefetchData>& prefetch_data,
+    const PrefetchAnalysis::IPrefetchData& prefetch_data,
     const std::filesystem::path& fallback_path) {
   ProcessInfo info;
 
-  for (const auto& run_time : prefetch_data->getRunTimes()) {
-    auto time = convert_run_times(run_time);
-    info.run_times.emplace_back(time);
+  const auto& run_times = prefetch_data.getRunTimes();
+  info.run_times.reserve(run_times.size());
+  for (const uint64_t run_time : run_times) {
+    info.run_times.emplace_back(convert_run_times(run_time));
   }
 
-  info.run_count = prefetch_data->getRunCount();
-  info.filename = prefetch_data->getExecutableName();
+  info.run_count = prefetch_data.getRunCount();
+  info.filename = prefetch_data.getExecutableName();
   if (info.filename.empty()) {
     info.filename = fallback_path.stem().string();
   }
-  info.volumes = prefetch_data->getVolumes();
-  info.metrics = prefetch_data->getMetrics();
+  info.volumes = prefetch_data.getVolumes();
+  info.metrics = prefetch_data.getMetrics();
   return info;
 }
 
@@ -116,13 +118,14 @@ std::vector<ProcessInfo> PrefetchAnalyzer::collect(
   const auto logger = GlobalLogger::get();
 
   // Проверяем наличие конфигурации для версии ОС
-  if (!configs_.contains(os_version_)) {
+  const auto cfg_it = configs_.find(os_version_);
+  if (cfg_it == configs_.end()) {
     logger->warn("Отсутствует конфигурация Prefetch для версии ОС: \"{}\"",
                  os_version_);
     return results;
   }
 
-  const auto& cfg = configs_[os_version_];
+  const auto& cfg = cfg_it->second;
   if (cfg.prefetch_path.empty()) {
     logger->warn("Путь к Prefetch не настроен");
     logger->debug("Версия ОС без PrefetchPath: \"{}\"", os_version_);
@@ -135,7 +138,7 @@ std::vector<ProcessInfo> PrefetchAnalyzer::collect(
   // Проверяем существование директории
   if (!std::filesystem::exists(effective_prefetch_path)) {
     if (const auto resolved =
-            findPathCaseInsensitive(std::filesystem::path(prefetch_path));
+            PathUtils::findPathCaseInsensitive(std::filesystem::path(prefetch_path));
         resolved.has_value()) {
       effective_prefetch_path = *resolved;
       logger->debug("Путь Prefetch разрешён case-insensitive: \"{}\" -> \"{}\"",
@@ -151,16 +154,20 @@ std::vector<ProcessInfo> PrefetchAnalyzer::collect(
   prefetch_files.reserve(512);
   for (const auto& entry :
        std::filesystem::directory_iterator(effective_prefetch_path)) {
-    const std::string ext_lower = to_lower(entry.path().extension().string());
-    if (ext_lower != ".pf") continue;
+    if (!hasPfExtensionCaseInsensitive(entry.path())) continue;
     prefetch_files.push_back(entry.path());
   }
 
+  const std::size_t total_files = prefetch_files.size();
+  results.reserve(total_files);
+
   std::size_t processed_count = 0;
   if (enable_parallel_prefetch_ && worker_threads_ > 1 &&
-      prefetch_files.size() > 1) {
+      total_files > 1) {
     const std::size_t workers =
-        std::min<std::size_t>(worker_threads_, prefetch_files.size());
+        std::min<std::size_t>(worker_threads_, total_files);
+    const std::size_t expected_per_worker =
+        (total_files + workers - 1) / workers;
     std::atomic<std::size_t> next_index{0};
     std::vector<std::future<std::vector<ProcessInfo>>> futures;
     futures.reserve(workers);
@@ -169,17 +176,18 @@ std::vector<ProcessInfo> PrefetchAnalyzer::collect(
       futures.push_back(std::async(std::launch::async, [&]() {
         PrefetchAnalysis::PrefetchParser local_parser;
         std::vector<ProcessInfo> worker_results;
-        worker_results.reserve(64);
+        worker_results.reserve(expected_per_worker);
 
         while (true) {
-          const std::size_t index = next_index.fetch_add(1);
-          if (index >= prefetch_files.size()) break;
+          const std::size_t index =
+              next_index.fetch_add(1, std::memory_order_relaxed);
+          if (index >= total_files) break;
           const std::filesystem::path& file_path = prefetch_files[index];
 
           try {
             auto prefetch_data = local_parser.parse(file_path.string());
             worker_results.push_back(
-                buildProcessInfoFromPrefetch(prefetch_data, file_path));
+                buildProcessInfoFromPrefetch(*prefetch_data, file_path));
           } catch (const std::exception& e) {
             logger->warn("Файл Prefetch пропущен из-за ошибки");
             logger->debug("Ошибка анализа Prefetch \"{}\": {}", file_path.string(),
@@ -202,7 +210,7 @@ std::vector<ProcessInfo> PrefetchAnalyzer::collect(
     for (const auto& file_path : prefetch_files) {
       try {
         auto prefetch_data = parser_->parse(file_path.string());
-        results.push_back(buildProcessInfoFromPrefetch(prefetch_data, file_path));
+        results.push_back(buildProcessInfoFromPrefetch(*prefetch_data, file_path));
         processed_count++;
       } catch (const std::exception& e) {
         logger->warn("Файл Prefetch пропущен из-за ошибки");

@@ -144,9 +144,6 @@ void appendRecoveredFrom(ProcessInfo& info, const std::string& source);
 /// @throws InvalidDiskRootException Если путь невалиден.
 [[nodiscard]] std::string normalizeDiskRoot(std::string disk_root);
 
-/// @brief Парсит список значений из INI (`a,b,c`).
-[[nodiscard]] std::vector<std::string> parseListSetting(std::string value);
-
 /// @brief Читает ключ из секции с fallback на `Default`.
 [[nodiscard]] std::string getConfigValueWithSectionDefault(
     const Config& config, const std::string& section, const std::string& key);

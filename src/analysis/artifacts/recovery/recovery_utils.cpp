@@ -5,11 +5,10 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstddef>
 #include <cmath>
 #include <filesystem>
-#include <iterator>
-#include <limits>
 #include <sstream>
 #include <utility>
 
@@ -24,7 +23,6 @@ using EvidenceUtils::extractExecutableCandidatesFromBinary;
 using EvidenceUtils::fileTimeToUtcString;
 using EvidenceUtils::readFilePrefix;
 using EvidenceUtils::readLeUInt32;
-using EvidenceUtils::toLowerAscii;
 
 constexpr std::size_t kPeEntropyWindowBytes = 4096;
 constexpr std::size_t kPePathProbeWindowBytes = 8192;
@@ -122,9 +120,20 @@ std::string normalizeExecutableCandidate(std::string executable) {
 void appendLocalUniqueEvidence(std::vector<RecoveryEvidence>& target,
                                std::unordered_set<std::string>& local_dedup,
                                RecoveryEvidence evidence) {
-  const std::string key = buildEvidenceDedupKey(evidence);
-  if (!local_dedup.insert(key).second) return;
+  if (!local_dedup.emplace(buildEvidenceDedupKey(evidence)).second) return;
   target.push_back(std::move(evidence));
+}
+
+/// @brief Добавляет ASCII-строку в lower-case напрямую в буфер ключа.
+/// @param target Целевая строка-буфер.
+/// @param text Исходный текст.
+void appendLowerAsciiToKey(std::string& target, const std::string& text) {
+  const std::size_t offset = target.size();
+  target.resize(offset + text.size());
+  for (std::size_t index = 0; index < text.size(); ++index) {
+    const unsigned char ch = static_cast<unsigned char>(text[index]);
+    target[offset + index] = static_cast<char>(std::tolower(ch));
+  }
 }
 
 }  // namespace
@@ -152,6 +161,7 @@ std::vector<RecoveryEvidence> scanRecoveryBufferBinary(
   if (buffer.empty() || max_candidates == 0) return results;
 
   std::unordered_set<std::string> local_dedup;
+  local_dedup.reserve(max_candidates);
   results.reserve(std::min<std::size_t>(max_candidates, 64));
 
   const std::size_t effective_container_size =
@@ -274,19 +284,38 @@ std::vector<RecoveryEvidence> scanRecoveryFileBinary(
 
 /// @copydoc WindowsDiskAnalysis::RecoveryUtils::buildEvidenceDedupKey
 std::string buildEvidenceDedupKey(const RecoveryEvidence& evidence) {
-  return toLowerAscii(evidence.executable_path) + "|" +
-         toLowerAscii(evidence.source) + "|" +
-         toLowerAscii(evidence.recovered_from) + "|" + evidence.timestamp + "|" +
-         toLowerAscii(evidence.details);
+  std::string key;
+  key.reserve(evidence.executable_path.size() + evidence.source.size() +
+              evidence.recovered_from.size() + evidence.timestamp.size() +
+              evidence.details.size() + 4);
+
+  appendLowerAsciiToKey(key, evidence.executable_path);
+  key.push_back('|');
+  appendLowerAsciiToKey(key, evidence.source);
+  key.push_back('|');
+  appendLowerAsciiToKey(key, evidence.recovered_from);
+  key.push_back('|');
+  key.append(evidence.timestamp);
+  key.push_back('|');
+  appendLowerAsciiToKey(key, evidence.details);
+  return key;
 }
 
 /// @copydoc WindowsDiskAnalysis::RecoveryUtils::appendUniqueEvidence
 void appendUniqueEvidence(std::vector<RecoveryEvidence>& target,
                           std::vector<RecoveryEvidence>& source,
                           std::unordered_set<std::string>& dedup_keys) {
+  if (source.empty()) return;
+
+  if (source.size() <= target.max_size() - target.size()) {
+    target.reserve(target.size() + source.size());
+  }
+  if (source.size() <= dedup_keys.max_size() - dedup_keys.size()) {
+    dedup_keys.reserve(dedup_keys.size() + source.size());
+  }
+
   for (auto& evidence : source) {
-    const std::string key = buildEvidenceDedupKey(evidence);
-    if (!dedup_keys.insert(key).second) continue;
+    if (!dedup_keys.emplace(buildEvidenceDedupKey(evidence)).second) continue;
     target.push_back(std::move(evidence));
   }
 }
