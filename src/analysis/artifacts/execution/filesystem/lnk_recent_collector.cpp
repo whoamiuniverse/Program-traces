@@ -3,13 +3,14 @@
 #include "lnk_recent_collector.hpp"
 
 #include <filesystem>
-#include <unordered_map>
 #include <string>
+#include <unordered_map>
 
 #include "analysis/artifacts/common/evidence_utils.hpp"
 #include "analysis/artifacts/execution/execution_evidence_helpers.hpp"
 #include "common/utils.hpp"
 #include "infra/logging/logger.hpp"
+#include "parsers/lnk/lnk_parser.hpp"
 
 namespace fs = std::filesystem;
 
@@ -51,19 +52,50 @@ void LnkRecentCollector::collect(const ExecutionEvidenceContext& ctx,
       if (toLowerAscii(file_entry.path().extension().string()) != ".lnk") continue;
 
       std::vector<std::string> candidates;
-      collectFileCandidates(file_entry.path(), max_bytes,
-                            ctx.config.max_candidates_per_source, candidates);
-      if (candidates.empty()) {
-        if (auto fallback = extractExecutableFromCommand(
-                file_entry.path().filename().string());
-            fallback.has_value()) {
-          candidates.push_back(*fallback);
+      std::string timestamp;
+      std::string details = "lnk=" + file_entry.path().filename().string();
+
+      if (auto parsed = parseLnkFile(file_entry.path().string());
+          parsed.has_value()) {
+        if (!parsed->target_path.empty()) {
+          if (auto executable =
+                  extractExecutableFromCommand(parsed->target_path);
+              executable.has_value()) {
+            candidates.push_back(*executable);
+          } else {
+            candidates.push_back(parsed->target_path);
+          }
+        } else if (!parsed->relative_path.empty()) {
+          candidates.push_back(parsed->relative_path);
+        }
+
+        if (!parsed->write_time.empty() && parsed->write_time != "N/A") {
+          timestamp = parsed->write_time;
+        }
+        if (!parsed->relative_path.empty()) {
+          details += ", relative=" + parsed->relative_path;
+        }
+        if (!parsed->working_dir.empty()) {
+          details += ", cwd=" + parsed->working_dir;
         }
       }
 
-      const std::string timestamp = fileTimeToUtcString(
-          fs::last_write_time(file_entry.path(), ec));
-      const std::string details = "lnk=" + file_entry.path().filename().string();
+      if (candidates.empty()) {
+        collectFileCandidates(file_entry.path(), max_bytes,
+                              ctx.config.max_candidates_per_source, candidates);
+        if (candidates.empty()) {
+          if (auto fallback = extractExecutableFromCommand(
+                  file_entry.path().filename().string());
+              fallback.has_value()) {
+            candidates.push_back(*fallback);
+          }
+        }
+      }
+
+      if (timestamp.empty()) {
+        timestamp =
+            fileTimeToUtcString(fs::last_write_time(file_entry.path(), ec));
+      }
 
       for (const auto& executable : candidates) {
         addExecutionEvidence(process_data, executable, "LNKRecent", timestamp,

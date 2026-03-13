@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "common/utils.hpp"
+#include "common/config_utils.hpp"
 #include "infra/config/config.hpp"
 #include "infra/logging/logger.hpp"
 #include "analysis/os/os_detection.hpp"
@@ -15,22 +16,6 @@
 namespace WindowsDiskAnalysis {
 
 namespace {
-
-const std::string kVersionDefaultsSection = "VersionDefaults";
-
-std::string getConfigValueWithFallback(const Config& config,
-                                       const std::string& version,
-                                       const std::string& key) {
-  if (config.hasKey(version, key)) {
-    return config.getString(version, key, "");
-  }
-
-  if (config.hasKey(kVersionDefaultsSection, key)) {
-    return config.getString(kVersionDefaultsSection, key, "");
-  }
-
-  return {};
-}
 
 bool hasPfExtensionCaseInsensitive(const std::filesystem::path& file_path) {
   const std::string extension = file_path.extension().string();
@@ -150,7 +135,8 @@ void PrefetchAnalyzer::loadConfigurations(const std::string& ini_path) {
     PrefetchConfig cfg;
 
     // Загрузка пути к папке Prefetch
-    std::string path = getConfigValueWithFallback(config, version, "PrefetchPath");
+    std::string path =
+        ConfigUtils::getWithVersionFallback(config, version, "PrefetchPath");
     trim(path);
     if (!path.empty()) {
       std::ranges::replace(path, '\\', '/');

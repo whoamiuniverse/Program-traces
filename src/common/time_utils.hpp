@@ -43,11 +43,25 @@ inline SYSTEMTIME filetimeToSystemTime(uint64_t filetime) {
 
   // Константа для перевода в Unix-время (100-нс интервалы с 1601-01-01)
   constexpr uint64_t EPOCH_DIFFERENCE = 116444736000000000ULL;
+  constexpr int64_t TICKS_PER_SECOND = 10000000LL;
 
-  // Конвертация в секунды и наносекунды
-  uint64_t total_ns = (filetime - EPOCH_DIFFERENCE);
-  time_t unix_seconds = total_ns / 10000000ULL;
-  uint32_t nanoseconds = (total_ns % 10000000ULL) * 100;
+  const int64_t relative_ticks =
+      static_cast<int64_t>(filetime) - static_cast<int64_t>(EPOCH_DIFFERENCE);
+  int64_t unix_seconds_i64 = relative_ticks / TICKS_PER_SECOND;
+  int64_t remainder_ticks = relative_ticks % TICKS_PER_SECOND;
+  if (remainder_ticks < 0) {
+    remainder_ticks += TICKS_PER_SECOND;
+    unix_seconds_i64 -= 1;
+  }
+
+  if (unix_seconds_i64 < static_cast<int64_t>(std::numeric_limits<time_t>::min()) ||
+      unix_seconds_i64 > static_cast<int64_t>(std::numeric_limits<time_t>::max())) {
+    return st;
+  }
+
+  const time_t unix_seconds = static_cast<time_t>(unix_seconds_i64);
+  const uint32_t nanoseconds =
+      static_cast<uint32_t>(remainder_ticks * 100);
 
   // Преобразование в UTC время
   tm* tm_value = gmtime(&unix_seconds);
@@ -73,6 +87,7 @@ inline std::string filetimeToString(uint64_t filetime) {
   if (filetime == 0) return "N/A";
 
   SYSTEMTIME st = filetimeToSystemTime(filetime);
+  if (st.wYear == 0) return "N/A";
 
   std::ostringstream oss;
   oss << std::setfill('0') << std::setw(4) << st.wYear << "-" << std::setw(2)
@@ -90,7 +105,14 @@ inline std::string filetimeToString(uint64_t filetime) {
 /// Unix; проверка диапазона не выполняется.
 inline time_t filetimeToUnixTime(uint64_t filetime) {
   constexpr uint64_t EPOCH_DIFFERENCE = 116444736000000000ULL;
-  return (filetime - EPOCH_DIFFERENCE) / 10000000ULL;
+  constexpr int64_t TICKS_PER_SECOND = 10000000LL;
+  const int64_t relative_ticks =
+      static_cast<int64_t>(filetime) - static_cast<int64_t>(EPOCH_DIFFERENCE);
+  int64_t unix_seconds = relative_ticks / TICKS_PER_SECOND;
+  if (relative_ticks < 0 && (relative_ticks % TICKS_PER_SECOND) != 0) {
+    unix_seconds -= 1;
+  }
+  return static_cast<time_t>(unix_seconds);
 }
 
 /// @brief Форматирует Unix timestamp в строку (UTC)

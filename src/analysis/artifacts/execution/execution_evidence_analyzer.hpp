@@ -41,13 +41,19 @@ class ExecutionEvidenceAnalyzer {
   /// @brief Регистрирует доступные коллекторы и детекторы tamper-сигналов.
   void initializeCollectors();
 
+  using CollectorGroup = std::vector<std::unique_ptr<IExecutionArtifactCollector>>;
+
   std::string os_version_;
   std::string ini_path_;
   ExecutionEvidenceConfig config_;
+  bool enable_parallel_groups_ = false;
   bool enable_parallel_user_hive_analysis_ = false;
   std::size_t worker_threads_ =
       std::max<std::size_t>(1, std::thread::hardware_concurrency());
-  std::vector<std::unique_ptr<IExecutionArtifactCollector>> collectors_;
+  CollectorGroup software_collectors_;
+  CollectorGroup system_collectors_;
+  CollectorGroup filesystem_collectors_;
+  CollectorGroup database_collectors_;
   std::vector<std::unique_ptr<ITamperSignalDetector>> tamper_detectors_;
 };
 

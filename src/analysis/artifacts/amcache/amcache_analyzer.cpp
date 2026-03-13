@@ -1,6 +1,7 @@
 #include "amcache_analyzer.hpp"
 
 #include <algorithm>
+#include <fstream>
 #include <filesystem>
 #include <string_view>
 #include <unordered_set>
@@ -8,25 +9,19 @@
 #include "infra/config/config.hpp"
 #include "infra/logging/logger.hpp"
 #include "common/utils.hpp"
+#include "common/config_utils.hpp"
+#include "analysis/artifacts/execution/execution_evidence_helpers.hpp"
 
 namespace fs = std::filesystem;
 using namespace WindowsDiskAnalysis;
 namespace {
 
-constexpr std::string_view kVersionDefaultsSection = "VersionDefaults";
-
-std::string getConfigValueWithFallback(const Config& config,
-                                       const std::string& version,
-                                       const std::string& key) {
-  if (config.hasKey(version, key)) {
-    return config.getString(version, key, "");
+std::string stripUtf8Bom(std::string line) {
+  constexpr char kUtf8Bom[] = "\xEF\xBB\xBF";
+  if (line.size() >= 3 && line.compare(0, 3, kUtf8Bom) == 0) {
+    line.erase(0, 3);
   }
-
-  if (config.hasKey(std::string(kVersionDefaultsSection), key)) {
-    return config.getString(std::string(kVersionDefaultsSection), key, "");
-  }
-
-  return {};
+  return line;
 }
 
 }  // namespace
@@ -45,12 +40,18 @@ void AmcacheAnalyzer::loadConfiguration() {
   Config config(ini_path_, false, false);
   auto logger = GlobalLogger::get();
 
-  amcache_path_ = getConfigValueWithFallback(config, os_version_, "AmcachePath");
+  amcache_path_ =
+      ConfigUtils::getWithVersionFallback(config, os_version_, "AmcachePath");
   trim(amcache_path_);
   std::ranges::replace(amcache_path_, '\\', '/');
 
+  recent_file_cache_path_ = ConfigUtils::getWithVersionFallback(
+      config, os_version_, "RecentFileCachePath");
+  trim(recent_file_cache_path_);
+  std::ranges::replace(recent_file_cache_path_, '\\', '/');
+
   std::string keys_str =
-      getConfigValueWithFallback(config, os_version_, "AmcacheKeys");
+      ConfigUtils::getWithVersionFallback(config, os_version_, "AmcacheKeys");
   auto keys = split(keys_str, ',');
   for (auto& key : keys) {
     trim(key);
@@ -75,15 +76,15 @@ void AmcacheAnalyzer::loadConfiguration() {
         config_.enable_inventory_shortcut);
   } catch (...) {}
   {
-    const std::string app_key =
-        getConfigValueWithFallback(config, os_version_, "AmcacheInventoryApplicationKey");
+    const std::string app_key = ConfigUtils::getWithVersionFallback(
+        config, os_version_, "AmcacheInventoryApplicationKey");
     if (!app_key.empty()) {
       config_.inventory_application_key = app_key;
     }
   }
   {
-    const std::string sc_key =
-        getConfigValueWithFallback(config, os_version_, "AmcacheInventoryShortcutKey");
+    const std::string sc_key = ConfigUtils::getWithVersionFallback(
+        config, os_version_, "AmcacheInventoryShortcutKey");
     if (!sc_key.empty()) {
       config_.inventory_shortcut_key = sc_key;
     }
@@ -95,84 +96,142 @@ std::vector<AmcacheEntry> AmcacheAnalyzer::collect(
   std::vector<AmcacheEntry> results;
   auto logger = GlobalLogger::get();
 
-  if (amcache_path_.empty() || amcache_keys_.empty()) {
-    logger->warn("Анализ Amcache пропущен: не настроен путь или ключи");
+  if (amcache_path_.empty() && recent_file_cache_path_.empty()) {
+    logger->warn("Анализ Amcache пропущен: не настроен путь к hive или BCF");
     return results;
   }
 
-  const std::string full_path = disk_root + amcache_path_;
-
-  if (!fs::exists(full_path)) {
-    logger->warn("Файл Amcache не найден");
-    logger->debug("Проверенный путь Amcache: {}", full_path);
-    return results;
+  std::optional<fs::path> resolved_hive_path;
+  if (!amcache_path_.empty()) {
+    const fs::path hive_candidate = fs::path(disk_root) / amcache_path_;
+    resolved_hive_path =
+        ExecutionEvidenceDetail::findPathCaseInsensitive(hive_candidate);
   }
 
-  try {
-    logger->debug("Анализ куста Amcache: {}", full_path);
+  if (resolved_hive_path.has_value() && !amcache_keys_.empty()) {
+    const std::string full_path = resolved_hive_path->string();
 
-    for (const auto& key : amcache_keys_) {
-      try {
-        auto subkeys = parser_->listSubkeys(full_path, key);
-        logger->debug("Найдено {} подразделов в {}", subkeys.size(), key);
+    try {
+      logger->debug("Анализ куста Amcache: {}", full_path);
 
-        for (const auto& subkey : subkeys) {
-          try {
-            std::string full_subkey_path = key + "/" + subkey;
-            logger->debug("Обработка подраздела: {}", full_subkey_path);
+      for (const auto& key : amcache_keys_) {
+        try {
+          auto subkeys = parser_->listSubkeys(full_path, key);
+          logger->debug("Найдено {} подразделов в {}", subkeys.size(), key);
 
-            auto values = parser_->getKeyValues(full_path, full_subkey_path);
+          for (const auto& subkey : subkeys) {
+            try {
+              std::string full_subkey_path = key + "/" + subkey;
+              logger->debug("Обработка подраздела: {}", full_subkey_path);
 
-            if (key.find("InventoryApplication") != std::string::npos) {
-              results.push_back(processInventoryApplicationEntry(values));
+              auto values = parser_->getKeyValues(full_path, full_subkey_path);
+
+              if (key.find("InventoryApplication") != std::string::npos) {
+                auto entry = processInventoryApplicationEntry(values);
+                entry.source = "Amcache";
+                results.push_back(std::move(entry));
+              }
+            } catch (const std::exception& e) {
+              logger->warn("Пропущен подраздел Amcache");
+              logger->debug("Ошибка обработки подраздела \"{}\": {}", subkey,
+                            e.what());
             }
-          } catch (const std::exception& e) {
-            logger->warn("Пропущен подраздел Amcache");
-            logger->debug("Ошибка обработки подраздела \"{}\": {}", subkey,
-                          e.what());
+          }
+        } catch (const std::exception& e) {
+          logger->error("Ошибка доступа к ключу Amcache");
+          logger->debug("Ошибка доступа к ключу \"{}\": {}", key, e.what());
+        }
+      }
+
+      // Собираем ключи file_path из InventoryApplicationFile для дедупликации
+      std::unordered_set<std::string> seen_paths;
+      seen_paths.reserve(results.size());
+      for (const auto& entry : results) {
+        if (!entry.file_path.empty()) {
+          seen_paths.insert(to_lower(entry.file_path));
+        }
+      }
+
+      // Добавляем записи из Root/InventoryApplication
+      if (config_.enable_inventory_application) {
+        auto app_entries = collectInventoryApplication(full_path);
+        for (auto& entry : app_entries) {
+          const std::string key = to_lower(entry.file_path);
+          if (seen_paths.insert(key).second) {
+            entry.source = "Amcache";
+            results.push_back(std::move(entry));
           }
         }
-      } catch (const std::exception& e) {
-        logger->error("Ошибка доступа к ключу Amcache");
-        logger->debug("Ошибка доступа к ключу \"{}\": {}", key, e.what());
       }
-    }
 
-    // Собираем ключи file_path из InventoryApplicationFile для дедупликации
-    std::unordered_set<std::string> seen_paths;
-    seen_paths.reserve(results.size());
-    for (const auto& entry : results) {
-      if (!entry.file_path.empty()) {
-        seen_paths.insert(to_lower(entry.file_path));
-      }
-    }
-
-    // Добавляем записи из Root/InventoryApplication
-    if (config_.enable_inventory_application) {
-      auto app_entries = collectInventoryApplication(full_path);
-      for (auto& entry : app_entries) {
-        const std::string key = to_lower(entry.file_path);
-        if (seen_paths.insert(key).second) {
-          results.push_back(std::move(entry));
+      // Добавляем записи из Root/InventoryApplicationShortcut
+      if (config_.enable_inventory_shortcut) {
+        auto sc_entries = collectInventoryShortcut(full_path);
+        for (auto& entry : sc_entries) {
+          const std::string key = to_lower(entry.file_path);
+          if (seen_paths.insert(key).second) {
+            entry.source = "Amcache";
+            results.push_back(std::move(entry));
+          }
         }
       }
+
+      logger->info("Извлечено {} записей из Amcache", results.size());
+      return results;
+    } catch (const std::exception& e) {
+      logger->error("Критическая ошибка анализа Amcache");
+      logger->debug("Критическая ошибка анализа Amcache: {}", e.what());
+    }
+  }
+
+  if (!recent_file_cache_path_.empty()) {
+    const fs::path bcf_candidate = fs::path(disk_root) / recent_file_cache_path_;
+    if (const auto resolved_bcf =
+            ExecutionEvidenceDetail::findPathCaseInsensitive(bcf_candidate);
+        resolved_bcf.has_value()) {
+      logger->debug("Анализ RecentFileCache.bcf: {}", resolved_bcf->string());
+      return collectFromRecentFileCache(resolved_bcf->string());
+    }
+  }
+
+  if (!amcache_path_.empty()) {
+    logger->warn("Файл Amcache не найден");
+    logger->debug("Проверенный путь Amcache: {}", amcache_path_);
+  }
+
+  logger->warn("Файл RecentFileCache.bcf не найден");
+  logger->debug("Проверенный путь RecentFileCache.bcf: {}",
+                recent_file_cache_path_);
+
+  return results;
+}
+
+std::vector<AmcacheEntry> AmcacheAnalyzer::collectFromRecentFileCache(
+    const std::string& path) const {
+  std::vector<AmcacheEntry> results;
+  std::ifstream file(path, std::ios::binary);
+  if (!file.is_open()) {
+    return results;
+  }
+
+  std::string line;
+  while (std::getline(file, line)) {
+    line = stripUtf8Bom(std::move(line));
+    trim(line);
+    if (line.empty() || line[0] == '#') {
+      continue;
     }
 
-    // Добавляем записи из Root/InventoryApplicationShortcut
-    if (config_.enable_inventory_shortcut) {
-      auto sc_entries = collectInventoryShortcut(full_path);
-      for (auto& entry : sc_entries) {
-        const std::string key = to_lower(entry.file_path);
-        if (seen_paths.insert(key).second) {
-          results.push_back(std::move(entry));
-        }
-      }
-    }
+    line.erase(std::remove(line.begin(), line.end(), '\r'), line.end());
+    std::ranges::replace(line, '\\', '/');
 
-    logger->info("Извлечено {} записей из Amcache", results.size());
-  } catch (const std::exception& e) {
-    logger->error("Критическая ошибка анализа Amcache");
-    logger->debug("Критическая ошибка анализа Amcache: {}", e.what());
+    AmcacheEntry entry;
+    entry.source = "Amcache(BCF)";
+    entry.file_path = line;
+    entry.name = fs::path(line).filename().string();
+    if (!entry.file_path.empty()) {
+      results.push_back(std::move(entry));
+    }
   }
 
   return results;

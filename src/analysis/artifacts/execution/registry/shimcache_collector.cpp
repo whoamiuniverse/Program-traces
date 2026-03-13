@@ -3,18 +3,17 @@
 #include "shimcache_collector.hpp"
 
 #include <iomanip>
-#include <unordered_map>
 #include <sstream>
+#include <unordered_map>
 #include <unordered_set>
 
 #include "analysis/artifacts/common/evidence_utils.hpp"
 #include "analysis/artifacts/execution/execution_evidence_helpers.hpp"
+#include "analysis/artifacts/execution/registry/shimcache_decoder.hpp"
 #include "common/utils.hpp"
 #include "infra/logging/logger.hpp"
 #include "parsers/registry/enums/value_type.hpp"
 #include "parsers/registry/parser/parser.hpp"
-
-namespace fs = std::filesystem;
 
 namespace WindowsDiskAnalysis {
 
@@ -23,8 +22,9 @@ using EvidenceUtils::extractExecutableCandidatesFromBinary;
 using EvidenceUtils::extractExecutableCandidatesFromStrings;
 using EvidenceUtils::toLowerAscii;
 
-void ShimCacheCollector::collect(const ExecutionEvidenceContext& ctx,
-                                 std::unordered_map<std::string, ProcessInfo>& process_data) {
+void ShimCacheCollector::collect(
+    const ExecutionEvidenceContext& ctx,
+    std::unordered_map<std::string, ProcessInfo>& process_data) {
   if (!ctx.config.enable_shimcache) return;
   if (ctx.system_hive_path.empty()) return;
 
@@ -36,8 +36,7 @@ void ShimCacheCollector::collect(const ExecutionEvidenceContext& ctx,
     const std::string control_set_root =
         resolveControlSetRoot(local_parser, system_hive_path, "CurrentControlSet");
     const std::string marker = "CurrentControlSet/";
-    std::vector<std::string> value_paths;
-    value_paths.push_back(shimcache_value_path);
+    std::vector<std::string> value_paths = {shimcache_value_path};
 
     if (shimcache_value_path.rfind(marker, 0) == 0) {
       const std::string suffix = shimcache_value_path.substr(marker.size());
@@ -83,16 +82,29 @@ void ShimCacheCollector::collect(const ExecutionEvidenceContext& ctx,
 
     if (value->getType() == RegistryAnalysis::RegistryValueType::REG_BINARY) {
       const auto binary = value->getAsBinary();
-      auto structured_candidates = parseShimCacheStructuredCandidates(
-          binary, ctx.config.max_candidates_per_source);
+      const auto decoded_records =
+          parseShimCacheRecords(binary, ctx.config.max_candidates_per_source);
 
-      for (const auto& candidate : structured_candidates) {
-        append_unique(candidate.executable_path, candidate.timestamp,
-                      candidate.details);
+      for (const auto& record : decoded_records) {
+        append_unique(record.executable_path, record.timestamp, record.details);
+        if (record.no_exec_flag) {
+          auto& info = ensureProcessInfo(process_data, record.executable_path);
+          appendTamperFlag(info.tamper_flags, "shimcache_no_exec_flag");
+        }
       }
-      structured_count = structured_candidates.size();
+      structured_count = decoded_records.size();
 
-      if (structured_candidates.empty()) {
+      if (decoded_records.empty()) {
+        const auto structured_candidates = parseShimCacheStructuredCandidates(
+            binary, ctx.config.max_candidates_per_source);
+        for (const auto& candidate : structured_candidates) {
+          append_unique(candidate.executable_path, candidate.timestamp,
+                        candidate.details);
+        }
+        structured_count = structured_candidates.size();
+      }
+
+      if (structured_count == 0) {
         const auto fallback_candidates = extractExecutableCandidatesFromBinary(
             binary, ctx.config.max_candidates_per_source);
         for (const auto& path : fallback_candidates) {
@@ -101,13 +113,14 @@ void ShimCacheCollector::collect(const ExecutionEvidenceContext& ctx,
         fallback_count = fallback_candidates.size();
       }
     } else {
-      const auto candidates = EvidenceUtils::extractExecutableCandidatesFromStrings(
+      const auto candidates = extractExecutableCandidatesFromStrings(
           {value->getDataAsString()}, ctx.config.max_candidates_per_source);
       for (const auto& path : candidates) {
         append_unique(path, "", "AppCompatCache(string)");
       }
       fallback_count = candidates.size();
     }
+
     logger->info("ShimCache: structured={} fallback={} total={}",
                  structured_count, fallback_count, seen.size());
   } catch (const std::exception& e) {

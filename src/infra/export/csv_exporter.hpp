@@ -57,7 +57,8 @@ class CSVExporter {
       const std::vector<AutorunEntry>& autorun_entries,
       const std::unordered_map<std::string, ProcessInfo>& process_data,
       const std::vector<NetworkConnection>& network_connections,
-      const std::vector<AmcacheEntry>& amcache_entries);
+      const std::vector<AmcacheEntry>& amcache_entries,
+      const std::vector<RecoveryEvidence>& recovery_evidence);
 };
 
 }

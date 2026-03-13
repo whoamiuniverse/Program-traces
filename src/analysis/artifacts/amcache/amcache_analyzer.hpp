@@ -60,11 +60,16 @@ class AmcacheAnalyzer {
   std::vector<AmcacheEntry> collectInventoryShortcut(
       const std::string& hive_path) const;
 
+  /// @brief Собирает записи из RecentFileCache.bcf (Windows 7 fallback).
+  std::vector<AmcacheEntry> collectFromRecentFileCache(
+      const std::string& path) const;
+
   std::unique_ptr<RegistryAnalysis::IRegistryParser>
       parser_;  ///< Парсер для доступа к значениям реестра
   std::string os_version_;   ///< Версия ОС для выбора конфигурационного профиля
   std::string ini_path_;     ///< Путь к INI-файлу с настройками
   std::string amcache_path_;  ///< Путь к файлу Amcache.hve относительно диска
+  std::string recent_file_cache_path_;  ///< Путь к RecentFileCache.bcf.
   std::vector<std::string>
       amcache_keys_;  ///< Список ключей реестра, подлежащих разбору
   AmcacheConfig config_;  ///< Расширенная конфигурация дополнительных ключей

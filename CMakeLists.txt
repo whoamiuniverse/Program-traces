@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(ProgramTraces LANGUAGES CXX)
+project(ProgramTraces VERSION 0.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -29,14 +29,24 @@ set(PROGRAM_TRACES_LIBS_ROOT "${CMAKE_SOURCE_DIR}/libs" CACHE PATH
     "Root directory with third-party prebuilt libraries")
 set(LIBS_BASE_PATH "${PROGRAM_TRACES_LIBS_ROOT}/${PLATFORM_LIBS_DIR}")
 set(PROGRAM_TRACES_SRC_ROOT "${CMAKE_SOURCE_DIR}/src")
+set(PROGRAM_TRACES_MAIN_SOURCE "${PROGRAM_TRACES_SRC_ROOT}/main.cpp")
+
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    ${PROGRAM_TRACES_SRC_ROOT})
+message(STATUS
+    "NOTE: Source list uses GLOB_RECURSE. CMake will reconfigure automatically.")
 
 file(GLOB_RECURSE ALL_SOURCES
     ${PROGRAM_TRACES_SRC_ROOT}/*.cpp
 )
 
-add_executable(program_traces ${ALL_SOURCES})
+set(PROGRAM_TRACES_LIBRARY_SOURCES ${ALL_SOURCES})
+list(REMOVE_ITEM PROGRAM_TRACES_LIBRARY_SOURCES ${PROGRAM_TRACES_MAIN_SOURCE})
 
-target_include_directories(program_traces PRIVATE
+add_library(program_traces_lib STATIC ${PROGRAM_TRACES_LIBRARY_SOURCES})
+add_executable(program_traces ${PROGRAM_TRACES_MAIN_SOURCE})
+
+target_include_directories(program_traces_lib PUBLIC
     ${PROGRAM_TRACES_SRC_ROOT}
     ${LIBS_BASE_PATH}/libregf/include
     ${LIBS_BASE_PATH}/libscca/include
@@ -88,12 +98,20 @@ if (EXISTS "${LIBS_BASE_PATH}/libfsntfs/libfsntfs.a")
     set(PROGRAM_TRACES_HAVE_LIBFSNTFS 1)
 endif()
 
-target_compile_definitions(program_traces PRIVATE
+if (UNIX AND NOT APPLE AND NOT EXISTS "${LIBS_BASE_PATH}/libregf/libregf.a")
+    message(FATAL_ERROR
+        "Missing prebuilt libs for ${CMAKE_SYSTEM_NAME}.\n"
+        "Run: bash scripts/build_deps_linux.sh\n"
+        "Expected: ${LIBS_BASE_PATH}/")
+endif()
+
+target_compile_definitions(program_traces_lib PUBLIC
     PROGRAM_TRACES_HAVE_LIBESEDB=${PROGRAM_TRACES_HAVE_LIBESEDB}
     PROGRAM_TRACES_HAVE_LIBFUSN=${PROGRAM_TRACES_HAVE_LIBFUSN}
     PROGRAM_TRACES_HAVE_LIBVSHADOW=${PROGRAM_TRACES_HAVE_LIBVSHADOW}
     PROGRAM_TRACES_HAVE_LIBHIBR=${PROGRAM_TRACES_HAVE_LIBHIBR}
     PROGRAM_TRACES_HAVE_LIBFSNTFS=${PROGRAM_TRACES_HAVE_LIBFSNTFS}
+    PROGRAM_TRACES_VERSION="${PROJECT_VERSION}"
 )
 
 foreach(LIB_FILE IN LISTS THIRD_PARTY_STATIC_LIBS)
@@ -105,7 +123,7 @@ foreach(LIB_FILE IN LISTS THIRD_PARTY_STATIC_LIBS)
 endforeach()
 
 if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|AppleClang|GNU")
-    target_compile_options(program_traces PRIVATE
+    target_compile_options(program_traces_lib PRIVATE
         -Wall
         -Wextra
         -Wpedantic
@@ -115,13 +133,14 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|AppleClang|GNU")
     )
 endif()
 
-target_link_libraries(program_traces PRIVATE ${THIRD_PARTY_STATIC_LIBS})
+target_link_libraries(program_traces_lib PRIVATE ${THIRD_PARTY_STATIC_LIBS})
+target_link_libraries(program_traces PRIVATE program_traces_lib)
 
 if (APPLE)
     find_library(COREFOUNDATION_LIB CoreFoundation REQUIRED)
     find_library(IOKIT_LIB IOKit REQUIRED)
 
-    target_link_libraries(program_traces PRIVATE
+    target_link_libraries(program_traces_lib PRIVATE
         ${COREFOUNDATION_LIB}
         ${IOKIT_LIB}
     )
@@ -131,17 +150,23 @@ elseif (UNIX AND NOT APPLE)
     find_library(M_LIB m)
     find_library(ICONV_LIB iconv)
 
-    target_link_libraries(program_traces PRIVATE Threads::Threads)
+    target_link_libraries(program_traces_lib PRIVATE Threads::Threads)
 
     if (DL_LIB)
-        target_link_libraries(program_traces PRIVATE ${DL_LIB})
+        target_link_libraries(program_traces_lib PRIVATE ${DL_LIB})
     endif()
     if (M_LIB)
-        target_link_libraries(program_traces PRIVATE ${M_LIB})
+        target_link_libraries(program_traces_lib PRIVATE ${M_LIB})
     endif()
     if (ICONV_LIB)
-        target_link_libraries(program_traces PRIVATE ${ICONV_LIB})
+        target_link_libraries(program_traces_lib PRIVATE ${ICONV_LIB})
     endif()
 endif()
 
-source_group(TREE ${PROGRAM_TRACES_SRC_ROOT} FILES ${ALL_SOURCES})
+source_group(TREE ${PROGRAM_TRACES_SRC_ROOT} FILES ${PROGRAM_TRACES_LIBRARY_SOURCES})
+
+option(PROGRAM_TRACES_BUILD_TESTS "Build unit tests" ON)
+if (PROGRAM_TRACES_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()

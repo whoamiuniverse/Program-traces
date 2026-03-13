@@ -13,6 +13,7 @@
 
 #include "analysis/artifacts/common/evidence_utils.hpp"
 #include "analysis/artifacts/recovery/recovery_utils.hpp"
+#include "common/utils.hpp"
 #include "infra/config/config.hpp"
 #include "infra/logging/logger.hpp"
 
@@ -44,6 +45,17 @@ uint16_t readLeUInt16(const std::vector<uint8_t>& bytes,
       static_cast<uint16_t>(bytes[offset + 1]) << 8);
 }
 
+uint64_t readLeUInt64(const std::vector<uint8_t>& bytes,
+                      const std::size_t offset) {
+  if (offset + 8 > bytes.size()) return 0;
+
+  uint64_t value = 0;
+  for (std::size_t index = 0; index < 8; ++index) {
+    value |= static_cast<uint64_t>(bytes[offset + index]) << (index * 8);
+  }
+  return value;
+}
+
 /// @brief Форматирует смещение в hex.
 /// @param offset Смещение.
 /// @return Строка вида `0x...`.
@@ -51,6 +63,53 @@ std::string formatOffsetHex(const std::size_t offset) {
   std::ostringstream stream;
   stream << "0x" << std::hex << std::uppercase << offset;
   return stream.str();
+}
+
+struct MftCreationTimes {
+  uint64_t si_creation = 0;
+  uint64_t fn_creation = 0;
+};
+
+MftCreationTimes parseMftCreationTimes(const std::vector<uint8_t>& record) {
+  MftCreationTimes times;
+  if (record.size() < 0x30) {
+    return times;
+  }
+
+  std::size_t attribute_offset = readLeUInt16(record, 0x14);
+  while (attribute_offset + 8 <= record.size()) {
+    const uint32_t attribute_type = readLeUInt32(record, attribute_offset);
+    if (attribute_type == 0xFFFFFFFFU) {
+      break;
+    }
+
+    const uint32_t attribute_size =
+        readLeUInt32(record, attribute_offset + 4);
+    if (attribute_size < 24 ||
+        attribute_offset + attribute_size > record.size()) {
+      break;
+    }
+
+    const bool non_resident = record[attribute_offset + 8] != 0;
+    if (!non_resident) {
+      const uint32_t content_size =
+          readLeUInt32(record, attribute_offset + 16);
+      const uint16_t content_offset =
+          readLeUInt16(record, attribute_offset + 20);
+      const std::size_t content_start = attribute_offset + content_offset;
+      if (content_start + content_size <= record.size()) {
+        if (attribute_type == 0x10U && content_size >= 8) {
+          times.si_creation = readLeUInt64(record, content_start);
+        } else if (attribute_type == 0x30U && content_size >= 16) {
+          times.fn_creation = readLeUInt64(record, content_start + 8);
+        }
+      }
+    }
+
+    attribute_offset += attribute_size;
+  }
+
+  return times;
 }
 
 /// @brief Fallback-парсинг `$MFT` с учетом FILE-record.
@@ -63,7 +122,8 @@ std::string formatOffsetHex(const std::size_t offset) {
 std::vector<RecoveryEvidence> parseMftFallback(
     const fs::path& mft_path, const std::size_t max_bytes,
     const std::size_t max_candidates, const std::size_t record_size,
-    const std::size_t max_records) {
+    const std::size_t max_records, const bool enable_si_fn_divergence_check,
+    const std::size_t timestamp_divergence_threshold_sec) {
   std::vector<RecoveryEvidence> results;
   if (record_size < 256 || max_candidates == 0) return results;
 
@@ -107,6 +167,16 @@ std::vector<RecoveryEvidence> parseMftFallback(
         timestamp, max_candidates - results.size(), offset, "mft_record",
         data.size());
 
+    const MftCreationTimes creation_times = parseMftCreationTimes(record_buffer);
+    const bool has_divergence =
+        enable_si_fn_divergence_check && creation_times.si_creation > 0 &&
+        creation_times.fn_creation > 0 &&
+        (creation_times.si_creation > creation_times.fn_creation
+             ? creation_times.si_creation - creation_times.fn_creation
+             : creation_times.fn_creation - creation_times.si_creation) >
+            static_cast<uint64_t>(timestamp_divergence_threshold_sec) *
+                10000000ULL;
+
     for (auto& evidence : record_evidence) {
       std::ostringstream details;
       if (!evidence.details.empty()) {
@@ -117,8 +187,16 @@ std::vector<RecoveryEvidence> parseMftFallback(
       if (directory) {
         details << "|directory";
       }
+      if (has_divergence) {
+        details << ", si_creation="
+                << filetimeToString(creation_times.si_creation)
+                << ", fn_creation="
+                << filetimeToString(creation_times.fn_creation);
+      }
       evidence.details = details.str();
-      if (!in_use) {
+      if (has_divergence) {
+        evidence.tamper_flag = "mft_si_fn_divergence";
+      } else if (!in_use) {
         evidence.tamper_flag = "ntfs_deleted_record_execution_candidate";
       }
     }
@@ -163,6 +241,17 @@ void NTFSMetadataAnalyzer::loadConfiguration() {
       mft_path_ = config.getString("Recovery", "MFTPath", mft_path_);
       bitmap_path_ = config.getString("Recovery", "BitmapPath", bitmap_path_);
     }
+    if (config.hasSection("TamperRules")) {
+      enable_si_fn_divergence_check_ = config.getBool(
+          "TamperRules", "EnableSIFNDivergenceCheck",
+          enable_si_fn_divergence_check_);
+      timestamp_divergence_threshold_sec_ =
+          static_cast<std::size_t>(std::max(
+              1, config.getInt("TamperRules",
+                               "TimestampDivergenceThresholdSec",
+                               static_cast<int>(
+                                   timestamp_divergence_threshold_sec_))));
+    }
   } catch (const std::exception& e) {
     logger->warn("Не удалось загрузить настройки NTFSMetadataAnalyzer");
     logger->debug("Ошибка чтения [Recovery] для NTFSMetadata: {}", e.what());
@@ -201,7 +290,9 @@ std::vector<RecoveryEvidence> NTFSMetadataAnalyzer::collect(
     if (!enable_native_fsntfs_parser_ || need_binary_fallback) {
       auto mft_evidence =
           parseMftFallback(*resolved_mft, max_bytes, max_candidates_per_source_,
-                           mft_record_size_, mft_max_records_);
+                           mft_record_size_, mft_max_records_,
+                           enable_si_fn_divergence_check_,
+                           timestamp_divergence_threshold_sec_);
       binary_count += mft_evidence.size();
       appendUniqueEvidence(results, mft_evidence, dedup);
     } else {

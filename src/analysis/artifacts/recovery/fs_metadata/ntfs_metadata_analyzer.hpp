@@ -47,6 +47,8 @@ class NTFSMetadataAnalyzer final : public IRecoveryAnalyzer {
   std::size_t mft_max_records_ = 200000;  ///< Лимит анализируемых MFT records.
   std::string mft_path_ = "$MFT";         ///< Путь к `$MFT`.
   std::string bitmap_path_ = "$Bitmap";   ///< Путь к `$Bitmap`.
+  bool enable_si_fn_divergence_check_ = true;  ///< Проверка SI/FN divergence.
+  std::size_t timestamp_divergence_threshold_sec_ = 2;
 };
 
 }  // namespace WindowsDiskAnalysis
