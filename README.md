@@ -111,7 +111,7 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-В проекте есть unit-тесты для `ConfigUtils`, `time_utils`, `CSVExporter`, `OSDetection`, `Amcache` fallback, `ShimCache` decoder, `LNK` parser и CLI smoke-проверка.
+В проекте есть unit-тесты для `ConfigUtils`, `time_utils`, `CSVExporter`, `OSDetection`, `RegistryParser`, `PrefetchParser`, `Amcache` fallback, `ShimCache` decoder, `LNK` parser и CLI smoke-проверка.
 
 ## Зависимости и установка
 
