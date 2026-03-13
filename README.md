@@ -111,35 +111,43 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-В проекте есть unit-тесты для `ConfigUtils`, `time_utils`, `CSVExporter`, `Amcache` fallback, `ShimCache` decoder, `LNK` parser и CLI smoke-проверка.
+В проекте есть unit-тесты для `ConfigUtils`, `time_utils`, `CSVExporter`, `OSDetection`, `Amcache` fallback, `ShimCache` decoder, `LNK` parser и CLI smoke-проверка.
 
-## Linux
+## Зависимости и установка
 
-Под Linux проект ожидает prebuilt-статические библиотеки в `libs/linux/`.
+Проект ожидает prebuilt-статические библиотеки в `libs/<platform>/`, где `<platform>` — `linux` или `macos`.
 
-Автоматическая сборка зависимостей:
-
-```bash
-bash scripts/build_deps_linux.sh
-```
-
-Только обязательный набор зависимостей:
+Для подготовки окружения и сборки зависимостей используйте единый cross-platform script:
 
 ```bash
-bash scripts/build_deps_linux.sh --required-only
+bash scripts/install_deps.sh
 ```
+
+Если нужно, чтобы скрипт сам поставил системные пакеты:
+
+```bash
+bash scripts/install_deps.sh --install-system-deps
+```
+
+Только обязательный набор библиотек:
+
+```bash
+bash scripts/install_deps.sh --required-only
+```
+
+Сценарий выполняет этапы последовательно:
+
+1. определяет платформу и выбирает `libs/linux/` или `libs/macos/`;
+2. при флаге `--install-system-deps` ставит системные build-зависимости для Linux/macOS;
+3. клонирует или обновляет исходники libyal/spdlog;
+4. собирает обязательные библиотеки;
+5. при необходимости собирает опциональные библиотеки и раскладывает `.a`/`include` в ожидаемую структуру.
 
 После этого:
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j4
-```
-
-Для воспроизводимой сборки есть `Dockerfile` на базе Ubuntu 22.04:
-
-```bash
-docker build -t program-traces .
 ```
 
 ## Зависимости

@@ -16,6 +16,7 @@ set(PROGRAM_TRACES_TEST_SOURCES
     test_config_utils.cpp
     test_csv_exporter.cpp
     test_lnk_parser.cpp
+    test_os_detection.cpp
     test_pipeline_win7.cpp
     test_pipeline_win10.cpp
     test_shimcache_decoder.cpp
