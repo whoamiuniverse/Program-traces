@@ -20,6 +20,7 @@ set(PROGRAM_TRACES_TEST_SOURCES
     test_prefetch_parser.cpp
     test_pipeline_win7.cpp
     test_pipeline_win10.cpp
+    test_registry_parser.cpp
     test_shimcache_decoder.cpp
     test_time_utils.cpp
 )
