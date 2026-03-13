@@ -1,0 +1,8 @@
+.git
+.idea
+.DS_Store
+build
+.deps-build
+windows11_ntfs.raw
+plan1.md
+plan2.md
