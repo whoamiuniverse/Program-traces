@@ -1,5 +1,6 @@
 #include <array>
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -102,4 +103,19 @@ TEST(LnkParserTest, ParsesTargetPathAndHeaderTimes) {
   EXPECT_EQ(info->working_dir, R"(C:\Program Files\Test App)");
   EXPECT_EQ(info->arguments, "--flag");
   EXPECT_EQ(info->write_time, "2020-01-01 00:00:00");
+}
+
+TEST(LnkParserTest, ParsesRealFixtureFile) {
+  const auto fixture_path =
+      std::filesystem::path(PROGRAM_TRACES_FIXTURES_DIR) / "lnk" / "example.lnk";
+  const auto info = WindowsDiskAnalysis::parseLnkFile(fixture_path.string());
+  ASSERT_TRUE(info.has_value());
+  EXPECT_EQ(info->target_path,
+            R"(.\migwiz\migwiz.exe\@%windir%\system32\migwiz\wet.dll,-590)");
+  EXPECT_EQ(info->relative_path,
+            R"(@%windir%\system32\migwiz\wet.dll,-590)");
+  EXPECT_EQ(info->working_dir, R"(.\migwiz\migwiz.exe)");
+  EXPECT_EQ(info->creation_time, "2009-07-13 23:29:02");
+  EXPECT_EQ(info->access_time, "2009-07-13 23:29:02");
+  EXPECT_EQ(info->write_time, "2009-07-14 01:39:18");
 }

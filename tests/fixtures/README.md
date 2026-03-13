@@ -3,5 +3,8 @@ Synthetic fixtures and small text artifacts used by unit tests.
 `tests/fixtures/prefetch/CMD.EXE-087B4001.pf` is a public sample from
 `log2timeline/plaso` `test_data/winprefetch`.
 
+`tests/fixtures/lnk/example.lnk` is a public sample from `log2timeline/plaso`
+`test_data`.
+
 `tests/fixtures/registry/NTUSER.DAT` is a public sample from
 `log2timeline/dfwinreg` `test_data`.
