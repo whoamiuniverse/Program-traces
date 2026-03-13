@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <filesystem>
 #include <fstream>
 #include <set>
 #include <string_view>
@@ -37,6 +38,9 @@ constexpr std::string_view kCsvHeader =
     "NetworkProfiles;FirewallRules;ФайловыеМетрики;EvidenceSources;"
     "TamperFlags\n";
 
+constexpr std::string_view kRecoveryCsvHeader =
+    "ExecutablePath;Source;RecoveredFrom;Timestamp;Details;TamperFlag\n";
+
 std::string escapeCsvField(std::string_view value) {
   if (value.empty()) {
     return {};
@@ -64,6 +68,8 @@ std::string escapeCsvField(std::string_view value) {
 }
 
 void writeCsvHeader(std::ofstream& file) { file << kCsvHeader; }
+
+void writeRecoveryCsvHeader(std::ofstream& file) { file << kRecoveryCsvHeader; }
 
 template <typename Container>
 std::string joinStrings(const Container& container) {
@@ -336,6 +342,30 @@ void writeAggregatedRow(std::ofstream& file, const std::string& aggregation_key,
   file << escapeCsvField(tamper_flags_str) << '\n';
 }
 
+std::filesystem::path buildRecoveryOutputPath(const std::string& output_path) {
+  const std::filesystem::path base_path(output_path);
+  const std::filesystem::path parent = base_path.parent_path();
+  const std::string stem = base_path.stem().empty()
+                               ? base_path.filename().string()
+                               : base_path.stem().string();
+  const std::string extension =
+      base_path.has_extension() ? base_path.extension().string() : ".csv";
+  return parent / (stem + "_recovery" + extension);
+}
+
+void writeRecoveryRows(std::ofstream& file,
+                       const std::vector<WindowsDiskAnalysis::RecoveryEvidence>&
+                           recovery_evidence) {
+  for (const auto& entry : recovery_evidence) {
+    file << escapeCsvField(entry.executable_path) << kCsvDelimiter
+         << escapeCsvField(entry.source) << kCsvDelimiter
+         << escapeCsvField(entry.recovered_from) << kCsvDelimiter
+         << escapeCsvField(entry.timestamp) << kCsvDelimiter
+         << escapeCsvField(entry.details) << kCsvDelimiter
+         << escapeCsvField(entry.tamper_flag) << '\n';
+  }
+}
+
 }  // namespace
 
 namespace WindowsDiskAnalysis {
@@ -345,7 +375,8 @@ void CSVExporter::exportToCSV(
     const std::vector<AutorunEntry>& autorun_entries,
     const std::unordered_map<std::string, ProcessInfo>& process_data,
     const std::vector<NetworkConnection>& network_connections,
-    const std::vector<AmcacheEntry>& amcache_entries) {
+    const std::vector<AmcacheEntry>& amcache_entries,
+    const std::vector<RecoveryEvidence>& recovery_evidence) {
   std::ofstream file(output_path, std::ios::binary);
   if (!file.is_open()) {
     throw FileOpenException(output_path);
@@ -518,7 +549,8 @@ void CSVExporter::exportToCSV(
       processEntry(path,
                    [&](AggregatedData& data, const std::string& norm_path) {
                      data.paths.insert(norm_path);
-                     addEvidenceSource(data, "Amcache");
+                     addEvidenceSource(
+                         data, entry.source.empty() ? "Amcache" : entry.source);
 
                      // Добавляем версии и хэши
                      if (!entry.version.empty()) {
@@ -538,7 +570,10 @@ void CSVExporter::exportToCSV(
                        updateRowFirstSeen(data, entry.modification_time_str);
                        updateRowLastSeen(data, entry.modification_time_str);
                        data.timeline_artifacts.insert(
-                           "[Amcache] " + entry.modification_time_str);
+                           "[" +
+                           (entry.source.empty() ? std::string("Amcache")
+                                                 : entry.source) +
+                           "] " + entry.modification_time_str);
                      }
 
                      if (entry.is_deleted) {
@@ -555,6 +590,16 @@ void CSVExporter::exportToCSV(
     throw CsvExportException(std::string("Ошибка при экспорте данных: ") +
                              e.what());
   }
+
+  const std::filesystem::path recovery_output_path =
+      buildRecoveryOutputPath(output_path);
+  std::ofstream recovery_file(recovery_output_path, std::ios::binary);
+  if (!recovery_file.is_open()) {
+    throw FileOpenException(recovery_output_path.string());
+  }
+  recovery_file.write("\xEF\xBB\xBF", 3);
+  writeRecoveryCsvHeader(recovery_file);
+  writeRecoveryRows(recovery_file, recovery_evidence);
 }
 
 }  // namespace WindowsDiskAnalysis

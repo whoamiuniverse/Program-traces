@@ -15,6 +15,7 @@
 #include <unordered_set>
 
 #include "analysis/artifacts/common/evidence_utils.hpp"
+#include "common/config_utils.hpp"
 #include "infra/config/config.hpp"
 #include "infra/logging/logger.hpp"
 #include "common/utils.hpp"
@@ -24,22 +25,6 @@ namespace fs = std::filesystem;
 
 namespace WindowsDiskAnalysis {
 namespace {
-
-constexpr std::string_view kVersionDefaultsSection = "VersionDefaults";
-
-std::string getConfigValueWithFallback(const Config& config,
-                                       const std::string& version,
-                                       const std::string& key) {
-  if (config.hasKey(version, key)) {
-    return config.getString(version, key, "");
-  }
-
-  if (config.hasKey(std::string(kVersionDefaultsSection), key)) {
-    return config.getString(std::string(kVersionDefaultsSection), key, "");
-  }
-
-  return {};
-}
 
 std::vector<uint32_t> parseEventIds(const std::string& raw_ids,
                                     const std::string& category,
@@ -582,7 +567,7 @@ void EventLogAnalyzer::loadConfigurations(const std::string& ini_path) {
 
     // Загрузка путей к журналам событий
     std::string log_paths =
-        getConfigValueWithFallback(config, version, "EventLogs");
+        ConfigUtils::getWithVersionFallback(config, version, "EventLogs");
     for (auto& path : split(log_paths, ',')) {
       trim(path);
       if (!path.empty()) {
@@ -592,12 +577,12 @@ void EventLogAnalyzer::loadConfigurations(const std::string& ini_path) {
 
     // Загрузка ID событий о процессах
     cfg.process_event_ids = parseEventIds(
-        getConfigValueWithFallback(config, version, "ProcessEventIDs"),
+        ConfigUtils::getWithVersionFallback(config, version, "ProcessEventIDs"),
         "process", logger);
 
     // Загрузка ID событий о сети
     cfg.network_event_ids = parseEventIds(
-        getConfigValueWithFallback(config, version, "NetworkEventIDs"),
+        ConfigUtils::getWithVersionFallback(config, version, "NetworkEventIDs"),
         "network", logger);
 
     configs_[version] = cfg;

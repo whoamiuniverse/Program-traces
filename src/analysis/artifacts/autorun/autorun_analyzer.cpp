@@ -3,28 +3,13 @@
 #include <string_view>
 #include <utility>
 
+#include "common/config_utils.hpp"
 #include "infra/config/config.hpp"
 #include "infra/logging/logger.hpp"
 #include "common/utils.hpp"
 
 namespace WindowsDiskAnalysis {
 namespace {
-
-constexpr std::string_view kVersionDefaultsSection = "VersionDefaults";
-
-std::string getConfigValueWithFallback(const Config& config,
-                                       const std::string& version,
-                                       const std::string& key) {
-  if (config.hasKey(version, key)) {
-    return config.getString(version, key, "");
-  }
-
-  if (config.hasKey(std::string(kVersionDefaultsSection), key)) {
-    return config.getString(std::string(kVersionDefaultsSection), key, "");
-  }
-
-  return {};
-}
 
 std::string extractExecutablePath(std::string command) {
   trim(command);
@@ -70,7 +55,7 @@ void AutorunAnalyzer::loadConfigurations(const std::string& ini_path) {
 
     // Загрузка пути к кусту реестра
     std::string reg_path =
-        getConfigValueWithFallback(config, version, "RegistryPath");
+        ConfigUtils::getWithVersionFallback(config, version, "RegistryPath");
     trim(reg_path);
     if (!reg_path.empty()) {
       std::ranges::replace(reg_path, '\\', '/');
@@ -79,7 +64,7 @@ void AutorunAnalyzer::loadConfigurations(const std::string& ini_path) {
 
     // Загрузка ключей реестра
     std::string reg_keys =
-        getConfigValueWithFallback(config, version, "RegistryKeys");
+        ConfigUtils::getWithVersionFallback(config, version, "RegistryKeys");
     auto reg_key_list = split(reg_keys, ',');
     for (auto& key : reg_key_list) {
       trim(key);
@@ -89,8 +74,8 @@ void AutorunAnalyzer::loadConfigurations(const std::string& ini_path) {
     }
 
     // Загрузка путей файловой системы
-    std::string fs_paths =
-        getConfigValueWithFallback(config, version, "FilesystemPaths");
+    std::string fs_paths = ConfigUtils::getWithVersionFallback(
+        config, version, "FilesystemPaths");
     auto fs_path_list = split(fs_paths, ',');
     for (auto& path : fs_path_list) {
       trim(path);

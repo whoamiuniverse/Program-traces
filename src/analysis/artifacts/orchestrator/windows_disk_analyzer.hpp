@@ -63,6 +63,21 @@ class WindowsDiskAnalyzer {
     std::size_t max_io_workers         = 4;      ///< Ограничение I/O-bound workers
   };
 
+  /// @struct TamperOptions
+  /// @brief Настройки правил подозрительных признаков.
+  struct TamperOptions {
+    bool enable_prefetch_missing_rule = true;
+    bool prefetch_missing_require_process_image = true;
+    std::vector<std::string> runtime_sources = {
+        "EventLog",      "UserAssist",  "RunMRU",       "FeatureUsage",
+        "BAM",           "DAM",         "JumpList",     "LNKRecent",
+        "RecentApps",    "TaskScheduler","IFEO",         "WER",
+        "Timeline",      "BITS",        "WMIRepository","WindowsSearch",
+        "SRUM",          "ShimCache"};
+    bool enable_si_fn_divergence_check = true;
+    std::size_t timestamp_divergence_threshold_sec = 2;
+  };
+
   /// @struct NamedRecoveryAnalyzer
   /// @brief Recovery-анализатор с человеко-читаемой меткой для логирования.
   ///
@@ -105,6 +120,9 @@ class WindowsDiskAnalyzer {
   /// @brief Загружает настройки [Performance] для параллельного выполнения
   void loadPerformanceOptions(const Config& config);
 
+  /// @brief Загружает настройки правил Tamper из `[TamperRules]`.
+  void loadTamperOptions(const Config& config);
+
   /// @brief Очищает внутреннее состояние перед новым запуском анализа
   void resetAnalysisState();
 
@@ -131,6 +149,9 @@ class WindowsDiskAnalyzer {
   /// @brief Применяет глобальные tamper-флаги ко всем процессам
   void applyGlobalTamperFlags();
 
+  /// @brief Применяет локальные tamper-правила к агрегированным процессам.
+  void applyTamperRules();
+
   /// @brief Экспортирует агрегированные данные в CSV
   void exportCsv(const std::string& output_path);
 
@@ -142,6 +163,7 @@ class WindowsDiskAnalyzer {
 
   ArtifactDebugOptions debug_options_;       ///< Настройки debug-логирования
   PerformanceOptions   performance_options_; ///< Настройки производительности
+  TamperOptions        tamper_options_;      ///< Настройки tamper-правил
 
   // ---------------------------------------------------------------- analyzers
 

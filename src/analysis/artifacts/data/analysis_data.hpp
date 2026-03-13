@@ -21,6 +21,7 @@ struct AmcacheEntry {
   std::string name;       ///< Название файла
   std::string file_hash;  ///< SHA-1 хэш файла
   std::string version;    ///< Версия ПО
+  std::string source = "Amcache";  ///< Источник записи (Amcache/Amcache(BCF))
 
   // Временные метки
   uint64_t modification_time = 0;     ///< Время последнего изменения (FILETIME)

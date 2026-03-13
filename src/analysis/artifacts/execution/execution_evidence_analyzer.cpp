@@ -5,9 +5,10 @@
 #include "execution_evidence_helpers.hpp"
 
 #include <algorithm>
-#include <unordered_map>
 #include <filesystem>
+#include <future>
 #include <thread>
+#include <unordered_map>
 
 #include "common/utils.hpp"
 #include "infra/config/config.hpp"
@@ -55,7 +56,6 @@ using namespace ExecutionEvidenceDetail;
 
 namespace {
 
-constexpr std::size_t kCollectorCount = 25;
 constexpr std::size_t kTamperDetectorCount = 1;
 
 std::string resolveHivePath(const Config& config, const std::string& disk_root,
@@ -73,22 +73,24 @@ std::string resolveHivePath(const Config& config, const std::string& disk_root,
 }
 
 void appendRegistryCollectors(
-    std::vector<std::unique_ptr<IExecutionArtifactCollector>>& collectors) {
-  collectors.push_back(std::make_unique<ShimCacheCollector>());
-  collectors.push_back(std::make_unique<BamDamCollector>());
-  collectors.push_back(std::make_unique<ServicesCollector>());
-  collectors.push_back(std::make_unique<NetworkProfilesCollector>());
-  collectors.push_back(std::make_unique<FirewallRulesCollector>());
-  collectors.push_back(std::make_unique<UserAssistRunMruCollector>());
-  collectors.push_back(std::make_unique<FeatureUsageCollector>());
-  collectors.push_back(std::make_unique<RecentAppsCollector>());
-  collectors.push_back(std::make_unique<TaskSchedulerCollector>());
-  collectors.push_back(std::make_unique<IfeoCollector>());
-  collectors.push_back(std::make_unique<MuiCacheCollector>());
-  collectors.push_back(std::make_unique<AppCompatFlagsCollector>());
-  collectors.push_back(std::make_unique<TypedPathsCollector>());
-  collectors.push_back(std::make_unique<LastVisitedMruCollector>());
-  collectors.push_back(std::make_unique<OpenSaveMruCollector>());
+    std::vector<std::unique_ptr<IExecutionArtifactCollector>>& software_collectors,
+    std::vector<std::unique_ptr<IExecutionArtifactCollector>>& system_collectors) {
+  software_collectors.push_back(std::make_unique<UserAssistRunMruCollector>());
+  software_collectors.push_back(std::make_unique<FeatureUsageCollector>());
+  software_collectors.push_back(std::make_unique<RecentAppsCollector>());
+  software_collectors.push_back(std::make_unique<NetworkProfilesCollector>());
+  software_collectors.push_back(std::make_unique<TaskSchedulerCollector>());
+  software_collectors.push_back(std::make_unique<IfeoCollector>());
+  software_collectors.push_back(std::make_unique<MuiCacheCollector>());
+  software_collectors.push_back(std::make_unique<AppCompatFlagsCollector>());
+  software_collectors.push_back(std::make_unique<TypedPathsCollector>());
+  software_collectors.push_back(std::make_unique<LastVisitedMruCollector>());
+  software_collectors.push_back(std::make_unique<OpenSaveMruCollector>());
+
+  system_collectors.push_back(std::make_unique<ShimCacheCollector>());
+  system_collectors.push_back(std::make_unique<BamDamCollector>());
+  system_collectors.push_back(std::make_unique<ServicesCollector>());
+  system_collectors.push_back(std::make_unique<FirewallRulesCollector>());
 }
 
 void appendFilesystemCollectors(
@@ -126,14 +128,20 @@ ExecutionEvidenceAnalyzer::ExecutionEvidenceAnalyzer(
 }
 
 void ExecutionEvidenceAnalyzer::initializeCollectors() {
-  collectors_.clear();
+  software_collectors_.clear();
+  system_collectors_.clear();
+  filesystem_collectors_.clear();
+  database_collectors_.clear();
   tamper_detectors_.clear();
-  collectors_.reserve(kCollectorCount);
+  software_collectors_.reserve(11);
+  system_collectors_.reserve(4);
+  filesystem_collectors_.reserve(8);
+  database_collectors_.reserve(2);
   tamper_detectors_.reserve(kTamperDetectorCount);
 
-  appendRegistryCollectors(collectors_);
-  appendFilesystemCollectors(collectors_);
-  appendDatabaseCollectors(collectors_);
+  appendRegistryCollectors(software_collectors_, system_collectors_);
+  appendFilesystemCollectors(filesystem_collectors_);
+  appendDatabaseCollectors(database_collectors_);
   appendTamperDetectors(tamper_detectors_);
 }
 
@@ -346,6 +354,15 @@ void ExecutionEvidenceAnalyzer::loadConfiguration() {
 
     if (config.hasSection("Performance")) {
       try {
+        enable_parallel_groups_ = config.getBool(
+            "Performance", "EnableParallelStages", enable_parallel_groups_);
+      } catch (const std::exception& e) {
+        logger->warn("Некорректный параметр [Performance]/EnableParallelStages");
+        logger->debug("Ошибка чтения [Performance]/EnableParallelStages: {}",
+                      e.what());
+      }
+
+      try {
         enable_parallel_user_hive_analysis_ = config.getBool(
             "Performance", "EnableParallelUserHives",
             config.getBool("Performance", "EnableParallelStages",
@@ -396,8 +413,35 @@ void ExecutionEvidenceAnalyzer::collect(
                                enable_parallel_user_hive_analysis_, worker_threads_,
                                config_};
 
-  for (auto& collector : collectors_) {
-    collector->collect(ctx, process_data);
+  using LocalMap = std::unordered_map<std::string, ProcessInfo>;
+  auto run_group = [&ctx](CollectorGroup& group) {
+    LocalMap local;
+    for (auto& collector : group) {
+      collector->collect(ctx, local);
+    }
+    return local;
+  };
+
+  if (enable_parallel_groups_ && worker_threads_ > 1) {
+    std::vector<std::future<LocalMap>> tasks;
+    tasks.reserve(4);
+    tasks.push_back(
+        std::async(std::launch::async, run_group, std::ref(software_collectors_)));
+    tasks.push_back(
+        std::async(std::launch::async, run_group, std::ref(system_collectors_)));
+    tasks.push_back(
+        std::async(std::launch::async, run_group, std::ref(filesystem_collectors_)));
+    tasks.push_back(
+        std::async(std::launch::async, run_group, std::ref(database_collectors_)));
+
+    for (auto& task : tasks) {
+      mergeProcessDataMaps(process_data, task.get());
+    }
+  } else {
+    mergeProcessDataMaps(process_data, run_group(software_collectors_));
+    mergeProcessDataMaps(process_data, run_group(system_collectors_));
+    mergeProcessDataMaps(process_data, run_group(filesystem_collectors_));
+    mergeProcessDataMaps(process_data, run_group(database_collectors_));
   }
 
   for (auto& detector : tamper_detectors_) {
