@@ -98,10 +98,10 @@ if (EXISTS "${LIBS_BASE_PATH}/libfsntfs/libfsntfs.a")
     set(PROGRAM_TRACES_HAVE_LIBFSNTFS 1)
 endif()
 
-if (UNIX AND NOT APPLE AND NOT EXISTS "${LIBS_BASE_PATH}/libregf/libregf.a")
+if ((APPLE OR UNIX) AND NOT EXISTS "${LIBS_BASE_PATH}/libregf/libregf.a")
     message(FATAL_ERROR
         "Missing prebuilt libs for ${CMAKE_SYSTEM_NAME}.\n"
-        "Run: bash scripts/build_deps_linux.sh\n"
+        "Run: bash scripts/install_deps.sh --install-system-deps\n"
         "Expected: ${LIBS_BASE_PATH}/")
 endif()
 
