@@ -6,6 +6,7 @@
 #include <cctype>
 #include <filesystem>
 #include <future>
+#include <iterator>
 #include <limits>
 #include <optional>
 #include <sstream>
@@ -13,6 +14,7 @@
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 #include "analysis/artifacts/common/evidence_utils.hpp"
 #include "common/config_utils.hpp"
@@ -316,58 +318,61 @@ struct EventLogFileParseResult {
   std::vector<NetworkConnection> network_connections;
 };
 
-void mergeProcessInfo(ProcessInfo& target, const ProcessInfo& source) {
+void mergeProcessInfo(ProcessInfo& target, ProcessInfo&& source) {
   if (target.filename.empty()) {
-    target.filename = source.filename;
+    target.filename = std::move(source.filename);
   }
   if (target.command.empty()) {
-    target.command = source.command;
+    target.command = std::move(source.command);
   }
 
   target.run_count += source.run_count;
-  target.run_times.insert(target.run_times.end(), source.run_times.begin(),
-                          source.run_times.end());
-  target.volumes.insert(target.volumes.end(), source.volumes.begin(),
-                        source.volumes.end());
-  target.metrics.insert(target.metrics.end(), source.metrics.begin(),
-                        source.metrics.end());
+  target.run_times.insert(target.run_times.end(),
+                          std::make_move_iterator(source.run_times.begin()),
+                          std::make_move_iterator(source.run_times.end()));
+  target.volumes.insert(target.volumes.end(),
+                        std::make_move_iterator(source.volumes.begin()),
+                        std::make_move_iterator(source.volumes.end()));
+  target.metrics.insert(target.metrics.end(),
+                        std::make_move_iterator(source.metrics.begin()),
+                        std::make_move_iterator(source.metrics.end()));
 
-  for (const auto& user : source.users) {
-    EvidenceUtils::appendUniqueToken(target.users, user);
+  for (auto& user : source.users) {
+    EvidenceUtils::appendUniqueToken(target.users, std::move(user));
   }
-  for (const auto& sid : source.user_sids) {
-    EvidenceUtils::appendUniqueToken(target.user_sids, sid);
+  for (auto& sid : source.user_sids) {
+    EvidenceUtils::appendUniqueToken(target.user_sids, std::move(sid));
   }
-  for (const auto& logon_id : source.logon_ids) {
-    EvidenceUtils::appendUniqueToken(target.logon_ids, logon_id);
+  for (auto& logon_id : source.logon_ids) {
+    EvidenceUtils::appendUniqueToken(target.logon_ids, std::move(logon_id));
   }
-  for (const auto& logon_type : source.logon_types) {
-    EvidenceUtils::appendUniqueToken(target.logon_types, logon_type);
+  for (auto& logon_type : source.logon_types) {
+    EvidenceUtils::appendUniqueToken(target.logon_types, std::move(logon_type));
   }
-  for (const auto& privilege : source.privileges) {
-    EvidenceUtils::appendUniqueToken(target.privileges, privilege);
+  for (auto& privilege : source.privileges) {
+    EvidenceUtils::appendUniqueToken(target.privileges, std::move(privilege));
   }
-  for (const auto& source_name : source.evidence_sources) {
-    EvidenceUtils::appendUniqueToken(target.evidence_sources, source_name);
+  for (auto& source_name : source.evidence_sources) {
+    EvidenceUtils::appendUniqueToken(target.evidence_sources, std::move(source_name));
   }
-  for (const auto& flag : source.tamper_flags) {
-    EvidenceUtils::appendUniqueToken(target.tamper_flags, flag);
+  for (auto& flag : source.tamper_flags) {
+    EvidenceUtils::appendUniqueToken(target.tamper_flags, std::move(flag));
   }
-  for (const auto& timeline : source.timeline_artifacts) {
-    EvidenceUtils::appendUniqueToken(target.timeline_artifacts, timeline);
+  for (auto& timeline : source.timeline_artifacts) {
+    EvidenceUtils::appendUniqueToken(target.timeline_artifacts, std::move(timeline));
   }
-  for (const auto& recovered : source.recovered_from) {
-    EvidenceUtils::appendUniqueToken(target.recovered_from, recovered);
+  for (auto& recovered : source.recovered_from) {
+    EvidenceUtils::appendUniqueToken(target.recovered_from, std::move(recovered));
   }
 
   if (target.elevation_type.empty()) {
-    target.elevation_type = source.elevation_type;
+    target.elevation_type = std::move(source.elevation_type);
   }
   if (target.elevated_token.empty()) {
-    target.elevated_token = source.elevated_token;
+    target.elevated_token = std::move(source.elevated_token);
   }
   if (target.integrity_level.empty()) {
-    target.integrity_level = source.integrity_level;
+    target.integrity_level = std::move(source.integrity_level);
   }
 
   EvidenceUtils::updateTimestampMin(target.first_seen_utc, source.first_seen_utc);
@@ -375,10 +380,17 @@ void mergeProcessInfo(ProcessInfo& target, const ProcessInfo& source) {
 }
 
 void mergeProcessMaps(std::unordered_map<std::string, ProcessInfo>& target,
-                      const std::unordered_map<std::string, ProcessInfo>& source) {
-  for (const auto& [process_name, process_info] : source) {
-    auto& target_info = target[process_name];
-    mergeProcessInfo(target_info, process_info);
+                      std::unordered_map<std::string, ProcessInfo>&& source) {
+  target.reserve(target.size() + source.size());
+  for (auto& [process_name, process_info] : source) {
+    if (auto it = target.find(process_name); it == target.end()) {
+      if (process_info.filename.empty()) {
+        process_info.filename = process_name;
+      }
+      target.emplace(process_name, std::move(process_info));
+    } else {
+      mergeProcessInfo(it->second, std::move(process_info));
+    }
   }
 }
 
@@ -697,7 +709,7 @@ void EventLogAnalyzer::collect(
         continue;
       }
       auto parsed = parseLogFile(file_path, cfg, logger);
-      mergeProcessMaps(process_data, parsed.process_data);
+      mergeProcessMaps(process_data, std::move(parsed.process_data));
       network_connections.insert(
           network_connections.end(),
           std::make_move_iterator(parsed.network_connections.begin()),
@@ -722,7 +734,7 @@ void EventLogAnalyzer::collect(
         if (!fs::exists(file_path)) continue;
 
         auto parsed = parseLogFile(file_path, cfg, logger);
-        mergeProcessMaps(worker_result.process_data, parsed.process_data);
+        mergeProcessMaps(worker_result.process_data, std::move(parsed.process_data));
         worker_result.network_connections.insert(
             worker_result.network_connections.end(),
             std::make_move_iterator(parsed.network_connections.begin()),
@@ -734,7 +746,7 @@ void EventLogAnalyzer::collect(
 
   for (auto& future : futures) {
     auto worker_result = future.get();
-    mergeProcessMaps(process_data, worker_result.process_data);
+    mergeProcessMaps(process_data, std::move(worker_result.process_data));
     network_connections.insert(
         network_connections.end(),
         std::make_move_iterator(worker_result.network_connections.begin()),

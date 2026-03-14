@@ -3,8 +3,9 @@
 #include "feature_usage_collector.hpp"
 
 #include <atomic>
-#include <unordered_map>
 #include <future>
+#include <unordered_map>
+#include <utility>
 
 #include "analysis/artifacts/common/evidence_utils.hpp"
 #include "analysis/artifacts/execution/execution_evidence_helpers.hpp"
@@ -135,7 +136,7 @@ void FeatureUsageCollector::collect(const ExecutionEvidenceContext& ctx,
       process_hive(local_parser, hive_path, sequential_result);
       if (global_collected.load() >= ctx.config.max_candidates_per_source) break;
     }
-    mergeProcessDataMaps(process_data, sequential_result.process_data);
+    mergeProcessDataMaps(process_data, std::move(sequential_result.process_data));
     collected = sequential_result.collected;
   } else {
     const std::size_t workers =
@@ -162,7 +163,7 @@ void FeatureUsageCollector::collect(const ExecutionEvidenceContext& ctx,
 
     for (auto& future : futures) {
       auto worker_result = future.get();
-      mergeProcessDataMaps(process_data, worker_result.process_data);
+      mergeProcessDataMaps(process_data, std::move(worker_result.process_data));
       collected += worker_result.collected;
     }
   }

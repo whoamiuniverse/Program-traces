@@ -3,8 +3,9 @@
 #include "user_assist_runmru_collector.hpp"
 
 #include <atomic>
-#include <unordered_map>
 #include <future>
+#include <unordered_map>
+#include <utility>
 
 #include "analysis/artifacts/common/evidence_utils.hpp"
 #include "analysis/artifacts/execution/execution_evidence_helpers.hpp"
@@ -138,7 +139,7 @@ void UserAssistRunMruCollector::collect(const ExecutionEvidenceContext& ctx,
     for (const fs::path& hive_path : user_hives) {
       process_hive(local_parser, hive_path, sequential_result);
     }
-    mergeProcessDataMaps(process_data, sequential_result.process_data);
+    mergeProcessDataMaps(process_data, std::move(sequential_result.process_data));
     userassist_count = sequential_result.userassist_count;
     runmru_count = sequential_result.runmru_count;
   } else {
@@ -163,7 +164,7 @@ void UserAssistRunMruCollector::collect(const ExecutionEvidenceContext& ctx,
 
     for (auto& future : futures) {
       auto worker_result = future.get();
-      mergeProcessDataMaps(process_data, worker_result.process_data);
+      mergeProcessDataMaps(process_data, std::move(worker_result.process_data));
       userassist_count += worker_result.userassist_count;
       runmru_count += worker_result.runmru_count;
     }

@@ -34,10 +34,21 @@ extern const uint64_t kMaxReasonableFiletime; ///< Upper bound for sanity-checki
 void mergeProcessDataMaps(std::unordered_map<std::string, ProcessInfo>& target,
                           const std::unordered_map<std::string, ProcessInfo>& source);
 
+/// @brief Merges a temporary source process data map into a target map, moving payloads where possible.
+/// @param target Destination map to merge into.
+/// @param source Temporary source map whose entries are moved/merged into @p target.
+void mergeProcessDataMaps(std::unordered_map<std::string, ProcessInfo>& target,
+                          std::unordered_map<std::string, ProcessInfo>&& source);
+
 /// @brief Merges a source @c ProcessInfo into a target entry, deduplicating key fields.
 /// @param target Destination @c ProcessInfo to merge into.
 /// @param source Source @c ProcessInfo whose fields are merged.
 void mergeProcessInfo(ProcessInfo& target, const ProcessInfo& source);
+
+/// @brief Merges a temporary source @c ProcessInfo into a target entry, moving vectors/strings where possible.
+/// @param target Destination @c ProcessInfo to merge into.
+/// @param source Temporary source @c ProcessInfo whose fields are moved/merged.
+void mergeProcessInfo(ProcessInfo& target, ProcessInfo&& source);
 
 /// @brief Enriches a process entry with identity and privilege context extracted from a details string.
 /// @param info    @c ProcessInfo to enrich.

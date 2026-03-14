@@ -11,6 +11,7 @@
 #include <fstream>
 #include <future>
 #include <iomanip>
+#include <iterator>
 #include <limits>
 #include <optional>
 #include <sstream>
@@ -19,6 +20,7 @@
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 #include "analysis/artifacts/common/evidence_utils.hpp"
 #include "common/utils.hpp"
@@ -336,14 +338,101 @@ void mergeProcessInfo(ProcessInfo& target, const ProcessInfo& source) {
   updateTimestampMax(target.last_seen_utc, source.last_seen_utc);
 }
 
+/// @brief Сливает временный `source`-процесс в `target`, двигая данные при возможности.
+/// @param target Целевая запись процесса.
+/// @param source Временная запись процесса.
+void mergeProcessInfo(ProcessInfo& target, ProcessInfo&& source) {
+  if (target.filename.empty()) {
+    target.filename = std::move(source.filename);
+  }
+  if (target.command.empty()) {
+    target.command = std::move(source.command);
+  }
+
+  target.run_count += source.run_count;
+  target.run_times.insert(target.run_times.end(),
+                          std::make_move_iterator(source.run_times.begin()),
+                          std::make_move_iterator(source.run_times.end()));
+  target.volumes.insert(target.volumes.end(),
+                        std::make_move_iterator(source.volumes.begin()),
+                        std::make_move_iterator(source.volumes.end()));
+  target.metrics.insert(target.metrics.end(),
+                        std::make_move_iterator(source.metrics.begin()),
+                        std::make_move_iterator(source.metrics.end()));
+
+  for (auto& value : source.users) appendUniqueToken(target.users, std::move(value));
+  for (auto& value : source.user_sids) {
+    appendUniqueToken(target.user_sids, std::move(value));
+  }
+  for (auto& value : source.logon_ids) {
+    appendUniqueToken(target.logon_ids, std::move(value));
+  }
+  for (auto& value : source.logon_types) {
+    appendUniqueToken(target.logon_types, std::move(value));
+  }
+  for (auto& value : source.privileges) {
+    appendUniqueToken(target.privileges, std::move(value));
+  }
+  for (auto& value : source.evidence_sources) {
+    appendUniqueToken(target.evidence_sources, std::move(value));
+  }
+  for (auto& value : source.tamper_flags) {
+    appendUniqueToken(target.tamper_flags, std::move(value));
+  }
+  for (auto& value : source.timeline_artifacts) {
+    appendUniqueToken(target.timeline_artifacts, std::move(value));
+  }
+  for (auto& value : source.recovered_from) {
+    appendUniqueToken(target.recovered_from, std::move(value));
+  }
+
+  if (target.elevation_type.empty()) {
+    target.elevation_type = std::move(source.elevation_type);
+  }
+  if (target.elevated_token.empty()) {
+    target.elevated_token = std::move(source.elevated_token);
+  }
+  if (target.integrity_level.empty()) {
+    target.integrity_level = std::move(source.integrity_level);
+  }
+
+  updateTimestampMin(target.first_seen_utc, source.first_seen_utc);
+  updateTimestampMax(target.last_seen_utc, source.last_seen_utc);
+}
+
 /// @brief Сливает карту процессов `source` в `target`.
 /// @param target Целевая карта процессов.
 /// @param source Исходная карта процессов.
 void mergeProcessDataMaps(std::unordered_map<std::string, ProcessInfo>& target,
                           const std::unordered_map<std::string, ProcessInfo>& source) {
+  target.reserve(target.size() + source.size());
   for (const auto& [process_name, source_info] : source) {
-    auto& target_info = ensureProcessInfo(target, process_name);
-    mergeProcessInfo(target_info, source_info);
+    if (auto it = target.find(process_name); it == target.end()) {
+      auto [inserted_it, _] = target.emplace(process_name, source_info);
+      if (inserted_it->second.filename.empty()) {
+        inserted_it->second.filename = process_name;
+      }
+    } else {
+      mergeProcessInfo(it->second, source_info);
+    }
+  }
+}
+
+/// @brief Сливает временную карту процессов `source` в `target`, двигая данные при возможности.
+/// @param target Целевая карта процессов.
+/// @param source Временная карта процессов.
+void mergeProcessDataMaps(std::unordered_map<std::string, ProcessInfo>& target,
+                          std::unordered_map<std::string, ProcessInfo>&& source) {
+  target.reserve(target.size() + source.size());
+  for (auto& [process_name, source_info] : source) {
+    if (auto it = target.find(process_name); it == target.end()) {
+      if (source_info.filename.empty()) {
+        source_info.filename = process_name;
+      }
+      target.emplace(process_name, std::move(source_info));
+    } else {
+      mergeProcessInfo(it->second, std::move(source_info));
+    }
   }
 }
 
