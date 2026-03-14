@@ -30,6 +30,7 @@ set(PROGRAM_TRACES_TEST_SOURCES
     placeholder_smoke.cpp
     test_amcache_analyzer.cpp
     test_cli.cpp
+    test_cli_options.cpp
     test_config_utils.cpp
     test_csv_exporter.cpp
     test_lnk_parser.cpp
