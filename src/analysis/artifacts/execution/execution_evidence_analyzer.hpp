@@ -1,5 +1,5 @@
 /// @file execution_evidence_analyzer.hpp
-/// @brief Оркестратор дополнительных источников исполнения процессов.
+/// @brief Orchestrator for the extended process execution evidence analysis stage.
 
 #pragma once
 
@@ -17,44 +17,50 @@
 namespace WindowsDiskAnalysis {
 
 /// @class ExecutionEvidenceAnalyzer
-/// @brief Оркестратор: загружает конфигурацию, инициализирует коллекторы и запускает их.
+/// @brief Orchestrator that loads configuration, initializes collectors, and runs them.
+///
+/// @details Manages four groups of @c IExecutionArtifactCollector instances
+/// (software registry, system registry, filesystem, and database) plus a list
+/// of @c ITamperSignalDetector instances. Groups can optionally be processed
+/// in parallel.
 class ExecutionEvidenceAnalyzer {
  public:
-  /// @brief Создает оркестратор анализа источников исполнения.
-  /// @param os_version Обнаруженная версия Windows.
-  /// @param ini_path Путь к конфигурационному INI-файлу.
+  /// @brief Constructs the execution evidence orchestrator.
+  /// @param os_version Detected Windows OS version string.
+  /// @param ini_path   Path to the INI configuration file.
   ExecutionEvidenceAnalyzer(
       std::string os_version, std::string ini_path);
 
-  /// @brief Обогащает карту процессов источниками исполнения и таймлайном.
-  /// @param disk_root Корень Windows-раздела.
-  /// @param process_data Агрегированные данные процессов (изменяются).
-  /// @param global_tamper_flags Глобальные tamper-флаги (дополняются).
+  /// @brief Enriches the process map with execution sources and timeline entries.
+  /// @param disk_root          Root path of the Windows partition.
+  /// @param process_data       Aggregated process data map (updated in place).
+  /// @param global_tamper_flags Global tamper flags vector (appended to).
   void collect(const std::string& disk_root,
                std::unordered_map<std::string, ProcessInfo>& process_data,
                std::vector<std::string>& global_tamper_flags);
 
  private:
-  /// @brief Загружает настройки секции `[ExecutionArtifacts]`.
+  /// @brief Loads settings from the @c [ExecutionArtifacts] INI section.
   void loadConfiguration();
 
-  /// @brief Регистрирует доступные коллекторы и детекторы tamper-сигналов.
+  /// @brief Registers all available collectors and tamper signal detectors.
   void initializeCollectors();
 
+  /// @brief Type alias for a group of execution artifact collectors.
   using CollectorGroup = std::vector<std::unique_ptr<IExecutionArtifactCollector>>;
 
-  std::string os_version_;
-  std::string ini_path_;
-  ExecutionEvidenceConfig config_;
-  bool enable_parallel_groups_ = false;
-  bool enable_parallel_user_hive_analysis_ = false;
+  std::string os_version_;  ///< Detected Windows OS version string.
+  std::string ini_path_;    ///< Path to the INI configuration file.
+  ExecutionEvidenceConfig config_;  ///< Loaded analysis configuration.
+  bool enable_parallel_groups_ = false;  ///< Whether collector groups run in parallel.
+  bool enable_parallel_user_hive_analysis_ = false;  ///< Whether per-user hive traversal is parallelized.
   std::size_t worker_threads_ =
-      std::max<std::size_t>(1, std::thread::hardware_concurrency());
-  CollectorGroup software_collectors_;
-  CollectorGroup system_collectors_;
-  CollectorGroup filesystem_collectors_;
-  CollectorGroup database_collectors_;
-  std::vector<std::unique_ptr<ITamperSignalDetector>> tamper_detectors_;
+      std::max<std::size_t>(1, std::thread::hardware_concurrency());  ///< Number of worker threads.
+  CollectorGroup software_collectors_;    ///< Collectors reading from the SOFTWARE hive.
+  CollectorGroup system_collectors_;      ///< Collectors reading from the SYSTEM hive.
+  CollectorGroup filesystem_collectors_;  ///< Collectors reading from the filesystem.
+  CollectorGroup database_collectors_;    ///< Collectors reading from ESE/SQLite databases.
+  std::vector<std::unique_ptr<ITamperSignalDetector>> tamper_detectors_;  ///< Registered tamper signal detectors.
 };
 
 }  // namespace WindowsDiskAnalysis

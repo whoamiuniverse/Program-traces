@@ -53,7 +53,6 @@ using EvidenceUtils::updateTimestampMin;
 constexpr std::string_view kDefaultKey = "Default";
 const uint64_t kFiletimeUnixEpoch = 116444736000000000ULL;
 const uint64_t kMaxReasonableFiletime = 210000000000000000ULL;
-constexpr std::string_view kNetworkContextProcessKey = "__network_context__";
 
 /// @brief Читает значение из секции с fallback на ключ `Default`.
 /// @param config Загруженный INI-конфиг.

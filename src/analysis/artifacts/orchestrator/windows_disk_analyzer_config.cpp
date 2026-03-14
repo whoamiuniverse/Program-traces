@@ -128,33 +128,11 @@ void WindowsDiskAnalyzer::loadTamperOptions(const Config& config) {
     }
   };
 
-  auto readSize = [&](const std::string& key, const std::size_t current_value,
-                      const std::size_t min_value) {
-    try {
-      const int raw =
-          config.getInt("TamperRules", key, static_cast<int>(current_value));
-      if (raw < static_cast<int>(min_value)) {
-        return current_value;
-      }
-      return static_cast<std::size_t>(raw);
-    } catch (const std::exception& e) {
-      logger->warn("Некорректный параметр [TamperRules]/{}", key);
-      logger->debug("Ошибка чтения [TamperRules]/{}: {}", key, e.what());
-      return current_value;
-    }
-  };
-
   tamper_options_.enable_prefetch_missing_rule = readBool(
       "EnablePrefetchMissingRule", tamper_options_.enable_prefetch_missing_rule);
   tamper_options_.prefetch_missing_require_process_image = readBool(
       "PrefetchMissingRequireProcessImage",
       tamper_options_.prefetch_missing_require_process_image);
-  tamper_options_.enable_si_fn_divergence_check =
-      readBool("EnableSIFNDivergenceCheck",
-               tamper_options_.enable_si_fn_divergence_check);
-  tamper_options_.timestamp_divergence_threshold_sec =
-      readSize("TimestampDivergenceThresholdSec",
-               tamper_options_.timestamp_divergence_threshold_sec, 1);
 
   try {
     const std::string raw_sources = config.getString(

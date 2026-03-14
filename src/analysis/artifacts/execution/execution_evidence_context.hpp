@@ -1,5 +1,5 @@
 /// @file execution_evidence_context.hpp
-/// @brief Контекст, передаваемый каждому коллектору артефактов исполнения.
+/// @brief Immutable analysis context passed to each execution artifact collector.
 #pragma once
 
 #include <cstddef>
@@ -10,15 +10,19 @@
 namespace WindowsDiskAnalysis {
 
 /// @struct ExecutionEvidenceContext
-/// @brief Неизменяемый срез входных данных, передаваемый каждому коллектору.
+/// @brief Read-only slice of input data supplied to every collector during analysis.
+///
+/// @details The context is constructed once by @c ExecutionEvidenceAnalyzer and
+/// passed by const reference to each @c IExecutionArtifactCollector::collect()
+/// and @c ITamperSignalDetector::detect() call.
 struct ExecutionEvidenceContext {
-  std::string disk_root;  ///< Корень анализируемого Windows-раздела.
-  std::string software_hive_path;  ///< Разрешенный путь к SOFTWARE hive.
-  std::string system_hive_path;  ///< Разрешенный путь к SYSTEM hive.
+  std::string disk_root;          ///< Root path of the analyzed Windows partition.
+  std::string software_hive_path; ///< Resolved absolute path to the SOFTWARE registry hive.
+  std::string system_hive_path;   ///< Resolved absolute path to the SYSTEM registry hive.
   bool enable_parallel_user_hives =
-      false;  ///< Разрешен ли параллельный обход пользовательских hive.
-  std::size_t worker_threads = 1;  ///< Верхняя граница числа рабочих потоков.
-  const ExecutionEvidenceConfig& config;  ///< Ссылка на загруженную конфигурацию анализа.
+      false;  ///< Whether parallel traversal of per-user NTUSER.DAT hives is enabled.
+  std::size_t worker_threads = 1;  ///< Upper bound on the number of worker threads available.
+  const ExecutionEvidenceConfig& config;  ///< Reference to the loaded analysis configuration.
 };
 
 }  // namespace WindowsDiskAnalysis

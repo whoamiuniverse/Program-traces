@@ -13,7 +13,6 @@ Config::Config(std::string filename, const bool useMultiKey,
       filename_(std::move(filename)),
       useMultiKey_(useMultiKey),
       useMultiLine_(useMultiLine) {
-  const auto logger = GlobalLogger::get();
   reload();
 }
 
@@ -65,23 +64,6 @@ int Config::getInt(const std::string& section, const std::string& key,
   }
 }
 
-double Config::getDouble(const std::string& section, const std::string& key,
-                         double defaultValue) const {
-  const char* value = ini_->GetValue(section.c_str(), key.c_str(), nullptr);
-  if (!value) {
-    return defaultValue;
-  }
-
-  try {
-    return std::stod(value);
-  } catch (const std::exception& e) {
-    throw ConfigValueException(section, key,
-                               "не удалось преобразовать в число с плавающей "
-                               "точкой: " +
-                                   std::string(e.what()));
-  }
-}
-
 bool Config::getBool(const std::string& section, const std::string& key,
                      const bool defaultValue) const {
   const char* value = ini_->GetValue(section.c_str(), key.c_str(), nullptr);
@@ -105,29 +87,6 @@ bool Config::getBool(const std::string& section, const std::string& key,
 
   throw ConfigValueException(
       section, key, "недопустимое значение для булевого типа: " + strValue);
-}
-
-std::vector<std::pair<std::string, std::string>> Config::getAllValues(
-    const std::string& section) const {
-  const auto logger = GlobalLogger::get();
-  std::vector<std::pair<std::string, std::string>> result;
-
-  if (!hasSection(section)) {
-    throw ConfigValueException(section, "", "секция не найдена");
-  }
-
-  if (CSimpleIniA::TNamesDepend keys; ini_->GetAllKeys(section.c_str(), keys)) {
-    keys.sort(CSimpleIniA::Entry::LoadOrder());
-
-    for (const auto& key : keys) {
-      const char* value = ini_->GetValue(section.c_str(), key.pItem, "");
-      result.emplace_back(key.pItem, value ? value : "");
-    }
-    logger->debug("Получено {} параметров из секции [{}]", result.size(),
-                  section);
-  }
-
-  return result;
 }
 
 bool Config::hasSection(const std::string& section) const noexcept {

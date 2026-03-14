@@ -58,12 +58,14 @@ class ScopedDebugLevelOverride {
   explicit ScopedDebugLevelOverride(bool debug_enabled);
 
   /// @brief Восстанавливает исходный уровень логирования.
-  ~ScopedDebugLevelOverride();
+ ~ScopedDebugLevelOverride();
 
  private:
-  std::shared_ptr<spdlog::logger> logger_;
-  spdlog::level::level_enum previous_level_ = spdlog::level::info;
-  bool active_ = false;
+  std::shared_ptr<spdlog::logger>
+      logger_;  ///< Логгер, у которого временно изменяется уровень.
+  spdlog::level::level_enum
+      previous_level_ = spdlog::level::info;  ///< Исходный уровень для восстановления.
+  bool active_ = false;  ///< Признак, что override был применён.
 };
 
 /// @brief Добавляет завершающий `/` к пути, если отсутствует.

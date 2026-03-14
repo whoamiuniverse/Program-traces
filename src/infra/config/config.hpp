@@ -3,7 +3,6 @@
 
 #pragma once
 
-#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -60,17 +59,6 @@ class Config {
   [[nodiscard]] int getInt(const std::string& section, const std::string& key,
                            int defaultValue = 0) const;
 
-  /// @brief Получение параметра с плавающей точкой
-  /// @param section Секция в INI-файле
-  /// @param key Ключ параметра
-  /// @param defaultValue Значение по умолчанию
-  /// @return Значение параметра или defaultValue
-  /// @throw ConfigValueException Если значение не может быть преобразовано в
-  /// число
-  [[nodiscard]] double getDouble(const std::string& section,
-                                 const std::string& key,
-                                 double defaultValue = 0.0) const;
-
   /// @brief Получение булева параметра
   /// @param section Секция в INI-файле
   /// @param key Ключ параметра
@@ -93,13 +81,6 @@ class Config {
 
   /// @name Методы проверки и получения данных
   /// @{
-
-  /// @brief Получение всех значений для секции
-  /// @param section Секция в INI-файле
-  /// @return Вектор пар ключ-значение
-  /// @throw ConfigValueException Если секция не существует
-  [[nodiscard]] std::vector<std::pair<std::string, std::string>> getAllValues(
-      const std::string& section) const;
 
   /// @brief Проверка существования секции
   /// @param section Имя секции
@@ -128,6 +109,4 @@ class Config {
   std::string filename_;  ///< Путь к конфигурационному файлу
   bool useMultiKey_;      ///< Поддержка нескольких ключей
   bool useMultiLine_;     ///< Поддержка многострочных значений
-  std::map<std::string, std::map<std::string, std::string>>
-      data_;  ///< Кэш значений секций и ключей для быстрого доступа
 };

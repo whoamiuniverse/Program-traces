@@ -46,13 +46,13 @@ class WindowsDiskAnalyzer {
   /// @struct ArtifactDebugOptions
   /// @brief Флаги подробного debug-логирования по этапам анализа
   struct ArtifactDebugOptions {
-    bool os_detection = true;
-    bool autorun      = true;
-    bool prefetch     = true;
-    bool eventlog     = true;
-    bool amcache      = true;
-    bool execution    = true;
-    bool recovery     = true;
+    bool os_detection = true;  ///< Логирование этапа определения ОС.
+    bool autorun      = true;  ///< Логирование анализа автозагрузки.
+    bool prefetch     = true;  ///< Логирование анализа Prefetch.
+    bool eventlog     = true;  ///< Логирование анализа EventLog.
+    bool amcache      = true;  ///< Логирование анализа Amcache.
+    bool execution    = true;  ///< Логирование расширенных execution-артефактов.
+    bool recovery     = true;  ///< Логирование recovery-анализаторов.
   };
 
   /// @struct PerformanceOptions
@@ -66,16 +66,15 @@ class WindowsDiskAnalyzer {
   /// @struct TamperOptions
   /// @brief Настройки правил подозрительных признаков.
   struct TamperOptions {
-    bool enable_prefetch_missing_rule = true;
-    bool prefetch_missing_require_process_image = true;
+    bool enable_prefetch_missing_rule = true;  ///< Включает правило `PrefetchMissingOnDisk`.
+    bool prefetch_missing_require_process_image =
+        true;  ///< Требует наличие process-image для срабатывания Prefetch-правила.
     std::vector<std::string> runtime_sources = {
         "EventLog",      "UserAssist",  "RunMRU",       "FeatureUsage",
         "BAM",           "DAM",         "JumpList",     "LNKRecent",
         "RecentApps",    "TaskScheduler","IFEO",         "WER",
         "Timeline",      "BITS",        "WMIRepository","WindowsSearch",
-        "SRUM",          "ShimCache"};
-    bool enable_si_fn_divergence_check = true;
-    std::size_t timestamp_divergence_threshold_sec = 2;
+        "SRUM",          "ShimCache"};  ///< Источники runtime-следов для rule engine.
   };
 
   /// @struct NamedRecoveryAnalyzer
@@ -167,10 +166,14 @@ class WindowsDiskAnalyzer {
 
   // ---------------------------------------------------------------- analyzers
 
-  std::unique_ptr<AutorunAnalyzer>          autorun_analyzer_;
-  std::unique_ptr<PrefetchAnalyzer>         prefetch_analyzer_;
-  std::unique_ptr<AmcacheAnalyzer>          amcache_analyzer_;
-  std::unique_ptr<ExecutionEvidenceAnalyzer> execution_evidence_analyzer_;
+  std::unique_ptr<AutorunAnalyzer>
+      autorun_analyzer_;  ///< Анализатор автозагрузки.
+  std::unique_ptr<PrefetchAnalyzer>
+      prefetch_analyzer_;  ///< Анализатор Prefetch.
+  std::unique_ptr<AmcacheAnalyzer>
+      amcache_analyzer_;  ///< Анализатор Amcache.
+  std::unique_ptr<ExecutionEvidenceAnalyzer>
+      execution_evidence_analyzer_;  ///< Анализатор execution-артефактов.
 
   /// Все collectors event-log (EventLogAnalyzer, SecurityContextAnalyzer, …)
   /// зарегистрированы через интерфейс IEventLogCollector (DIP / OCP).
@@ -182,11 +185,14 @@ class WindowsDiskAnalyzer {
 
   // -------------------------------------------------------------- results
 
-  std::vector<AutorunEntry>                        autorun_entries_;
-  std::unordered_map<std::string, ProcessInfo>     process_data_;
-  std::vector<NetworkConnection>          network_connections_;
-  std::vector<AmcacheEntry>               amcache_entries_;
-  std::vector<std::string>                global_tamper_flags_;
+  std::vector<AutorunEntry> autorun_entries_;  ///< Собранные записи автозапуска.
+  std::unordered_map<std::string, ProcessInfo>
+      process_data_;  ///< Агрегированная карта процессов по имени.
+  std::vector<NetworkConnection>
+      network_connections_;  ///< Сетевые события процесса.
+  std::vector<AmcacheEntry> amcache_entries_;  ///< Собранные записи Amcache.
+  std::vector<std::string>
+      global_tamper_flags_;  ///< Глобальные tamper-флаги из execution-этапа.
   std::vector<RecoveryEvidence>           recovery_evidence_;  ///< Общий пул recovery
 };
 
