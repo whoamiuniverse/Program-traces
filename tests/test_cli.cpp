@@ -31,13 +31,16 @@ TEST(CliIntegrationTest, HelpAndVersionReturnExpectedText) {
 
   const std::string help_output = runCommand(binary + " --help 2>&1");
   EXPECT_NE(help_output.find("Использование:"), std::string::npos);
-  EXPECT_NE(help_output.find("--log <path>"), std::string::npos);
-  EXPECT_NE(help_output.find("--recovery-csv"), std::string::npos);
-  EXPECT_NE(help_output.find("--recovery-output <path>"), std::string::npos);
-  EXPECT_NE(help_output.find("--disk-root"), std::string::npos);
-  EXPECT_NE(help_output.find("--config"), std::string::npos);
-  EXPECT_NE(help_output.find("--output"), std::string::npos);
+  EXPECT_NE(help_output.find("-l, --log"), std::string::npos);
+  EXPECT_NE(help_output.find("-r, --recovery-csv"), std::string::npos);
+  EXPECT_NE(help_output.find("-R, --recovery-output <path>"), std::string::npos);
+  EXPECT_NE(help_output.find("-d, --disk-root"), std::string::npos);
+  EXPECT_NE(help_output.find("-c, --config"), std::string::npos);
+  EXPECT_NE(help_output.find("-o, --output"), std::string::npos);
+  EXPECT_NE(help_output.find("Режим auto:"), std::string::npos);
 
   const std::string version_output = runCommand(binary + " --version 2>&1");
   EXPECT_NE(version_output.find("Program traces"), std::string::npos);
+  const std::string short_version_output = runCommand(binary + " -v 2>&1");
+  EXPECT_NE(short_version_output.find("Program traces"), std::string::npos);
 }
