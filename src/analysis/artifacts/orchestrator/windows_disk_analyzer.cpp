@@ -130,6 +130,11 @@ void WindowsDiskAnalyzer::resetAnalysisState() {
 }
 
 void WindowsDiskAnalyzer::analyze(const std::string& output_path) {
+  analyze(output_path, AnalyzeOutputOptions{});
+}
+
+void WindowsDiskAnalyzer::analyze(const std::string& output_path,
+                                  const AnalyzeOutputOptions& options) {
   const auto logger = GlobalLogger::get();
   logger->info("Старт полного анализа артефактов");
 
@@ -142,7 +147,7 @@ void WindowsDiskAnalyzer::analyze(const std::string& output_path) {
   runRecoveryStage();
   applyTamperRules();
   applyGlobalTamperFlags();
-  exportCsv(output_path);
+  exportCsv(output_path, options);
 
   logger->info("Анализ завершен: процессов={}, сетевых событий={}",
                process_data_.size(), network_connections_.size());

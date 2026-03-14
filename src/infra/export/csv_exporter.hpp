@@ -12,6 +12,13 @@
 
 namespace WindowsDiskAnalysis {
 
+/// @struct CSVExportOptions
+/// @brief Параметры экспорта CSV.
+struct CSVExportOptions {
+  bool export_recovery_csv = false;  ///< Создавать дополнительный recovery CSV.
+  std::string recovery_output_path;  ///< Явный путь recovery CSV (опционально).
+};
+
 /// @class CSVExporter
 /// @brief Класс для экспорта результатов анализа Windows в CSV формат
 /// @details Предоставляет статический метод для экспорта данных о процессах,
@@ -59,7 +66,8 @@ class CSVExporter {
       const std::unordered_map<std::string, ProcessInfo>& process_data,
       const std::vector<NetworkConnection>& network_connections,
       const std::vector<AmcacheEntry>& amcache_entries,
-      const std::vector<RecoveryEvidence>& recovery_evidence);
+      const std::vector<RecoveryEvidence>& recovery_evidence,
+      const CSVExportOptions& options = {});
 };
 
 }
