@@ -31,11 +31,28 @@ set(LIBS_BASE_PATH "${PROGRAM_TRACES_LIBS_ROOT}/${PLATFORM_LIBS_DIR}")
 set(PROGRAM_TRACES_SRC_ROOT "${CMAKE_SOURCE_DIR}/src")
 set(PROGRAM_TRACES_MAIN_SOURCE "${PROGRAM_TRACES_SRC_ROOT}/main.cpp")
 
-message(STATUS
-    "NOTE: Source list uses GLOB_RECURSE. CMake will reconfigure automatically.")
+# Keep source discovery resilient for CLion/Ninja workflows:
+# - *.cpp / *.cc / *.cxx are all treated as translation units
+# - header globs are added to CMAKE_CONFIGURE_DEPENDS so CMake
+#   reliably re-runs configure when file sets change.
+set(PROGRAM_TRACES_SOURCE_GLOBS
+    "${PROGRAM_TRACES_SRC_ROOT}/*.cpp"
+    "${PROGRAM_TRACES_SRC_ROOT}/*.cc"
+    "${PROGRAM_TRACES_SRC_ROOT}/*.cxx"
+)
+set(PROGRAM_TRACES_HEADER_GLOBS
+    "${PROGRAM_TRACES_SRC_ROOT}/*.hpp"
+    "${PROGRAM_TRACES_SRC_ROOT}/*.hh"
+    "${PROGRAM_TRACES_SRC_ROOT}/*.hxx"
+    "${PROGRAM_TRACES_SRC_ROOT}/*.h"
+)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    ${PROGRAM_TRACES_SOURCE_GLOBS}
+    ${PROGRAM_TRACES_HEADER_GLOBS}
+)
 
 file(GLOB_RECURSE ALL_SOURCES CONFIGURE_DEPENDS
-    "${PROGRAM_TRACES_SRC_ROOT}/*.cpp"
+    ${PROGRAM_TRACES_SOURCE_GLOBS}
 )
 
 set(PROGRAM_TRACES_LIBRARY_SOURCES ${ALL_SOURCES})
