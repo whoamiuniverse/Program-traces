@@ -42,8 +42,13 @@ int main(int argc, char* argv[]) {
   const auto logger = GlobalLogger::get();
 
   try {
+    const std::string disk_root_display =
+        options->disk_root == "auto"
+            ? std::string("auto (автоматический поиск Windows-тома)")
+            : options->disk_root;
+
     std::cout << "\n=== Запуск анализа диска Windows ===\n"
-              << "\tКорневая директория: " << options->disk_root << "\n"
+              << "\tКорневая директория: " << disk_root_display << "\n"
               << "\tКонфигурационный файл: " << options->config_path << "\n"
               << "\tВыходной CSV-файл: " << options->output_path << "\n"
               << "\tRecovery CSV: "
