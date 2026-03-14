@@ -129,10 +129,6 @@ void WindowsDiskAnalyzer::resetAnalysisState() {
   recovery_evidence_.clear();
 }
 
-void WindowsDiskAnalyzer::analyze(const std::string& output_path) {
-  analyze(output_path, AnalyzeOutputOptions{});
-}
-
 void WindowsDiskAnalyzer::analyze(const std::string& output_path,
                                   const AnalyzeOutputOptions& options) {
   const auto logger = GlobalLogger::get();

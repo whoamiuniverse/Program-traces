@@ -46,11 +46,6 @@ class WindowsDiskAnalyzer {
   /// @throws DiskAnalyzerException     При ошибках выбора/валидации диска
   /// @throws ParsingException          При ошибках разбора артефактов
   /// @throws CsvExportException        При ошибках экспорта отчёта
-  void analyze(const std::string& output_path);
-
-  /// @brief Выполняет полный анализ с расширенными параметрами выхода.
-  /// @param output_path Путь к основному output CSV.
-  /// @param options Параметры формирования выходных файлов.
   void analyze(const std::string& output_path,
                const AnalyzeOutputOptions& options);
 
