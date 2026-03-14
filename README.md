@@ -4,6 +4,12 @@
 
 Подробная конфигурация: [CONFIGURATION.md](CONFIGURATION.md).
 
+`config.ini` в репозитории намеренно упрощен: в нем оставлены базовые, часто
+используемые параметры. Полный список опциональных ключей и расширенных
+override-настроек описан в `CONFIGURATION.md`.
+
+В самом `config.ini` добавлены короткие комментарии по каждому полю.
+
 ## Быстрый старт
 
 Сборка:
@@ -12,6 +18,21 @@
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ```
+
+По умолчанию unit-тесты не собираются, поэтому обычная конфигурация не требует `GTest` и не пытается скачивать его из сети.
+
+Настройка перед запуском:
+
+1. При необходимости скорректируйте `Versions` в `config.ini`.
+2. Проверьте базовые секции текущего профиля: `[Performance]`, `[Recovery]`, `[VersionDefaults]`.
+3. Для сложных образов (legacy/нестандартные пути) используйте version-overrides (`[WindowsXX]`) и расширенные ключи по `CONFIGURATION.md`.
+
+Ключевые поля минимального `config.ini`:
+
+- `General.Versions` — порядок определения версии ОС.
+- `Performance.EnableParallelStages` — общий флаг параллельного выполнения.
+- `Recovery.EnableUnallocated` — сканировать ли unallocated image.
+- `VersionDefaults.*` — базовые пути/ID для анализаторов (автозагрузка, prefetch, eventlog, amcache).
 
 Запуск:
 
@@ -105,13 +126,28 @@ ExecutablePath;Source;RecoveredFrom;Timestamp;Details;TamperFlag
 
 ## Тесты
 
+Тестовая сборка включается отдельно:
+
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DPROGRAM_TRACES_BUILD_TESTS=ON
-cmake --build build -j
-ctest --test-dir build --output-on-failure
+cmake -S . -B build-tests -DCMAKE_BUILD_TYPE=Debug -DPROGRAM_TRACES_BUILD_TESTS=ON
+cmake --build build-tests -j
+ctest --test-dir build-tests --output-on-failure
 ```
 
 В проекте есть unit-тесты для `ConfigUtils`, `time_utils`, `CSVExporter`, `OSDetection`, `RegistryParser`, `PrefetchParser`, `Amcache` fallback, `ShimCache` decoder, `LNK` parser и CLI smoke-проверка.
+
+Если `GTest` уже установлен в системе и доступен для `find_package(GTest)`, конфигурации выше достаточно.
+Если локального `GTest` нет, разрешите явную загрузку зависимостей для тестов:
+
+```bash
+cmake -S . -B build-tests -DCMAKE_BUILD_TYPE=Debug \
+  -DPROGRAM_TRACES_BUILD_TESTS=ON \
+  -DPROGRAM_TRACES_FETCH_GTEST=ON
+cmake --build build-tests -j
+ctest --test-dir build-tests --output-on-failure
+```
+
+Если включить `PROGRAM_TRACES_BUILD_TESTS=ON` без установленного `GTest` и без `PROGRAM_TRACES_FETCH_GTEST=ON`, CMake пропустит таргет `program_traces_tests` и выведет предупреждение.
 
 ## Зависимости и установка
 

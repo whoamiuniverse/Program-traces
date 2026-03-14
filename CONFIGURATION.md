@@ -1,306 +1,341 @@
 # Configuration
 
-Справочник по `config.ini` для `Program traces`.
+Подробный справочник по настройке `config.ini` для `Program traces`.
 
-## Как читается конфиг
+## 1. Как работает конфиг
 
-Программа использует два уровня настроек:
+### 1.1 Fallback-логика
 
-- глобальные секции (`[General]`, `[Logging]`, `[Recovery]`, `[ExecutionArtifacts]` и т.д.);
-- версионные override-секции (`[WindowsXP]`, `[Windows7]`, `[Windows11]`, `[WindowsServer]`).
+Проект использует два уровня настроек:
 
-Для путей и списков артефактов действует правило fallback:
+1. Глобальные секции (`[General]`, `[Performance]`, `[Recovery]`, `[ExecutionArtifacts]` и т.д.).
+2. Версионные секции (`[Windows11]`, `[Windows7]`, `[WindowsXP]`, ...).
 
-1. сначала читается ключ из секции конкретной версии Windows;
-2. если ключ пустой или отсутствует, используется `[VersionDefaults]`.
+Для version-aware ключей применяется fallback:
 
-## Основные секции
+1. Сначала читается значение из секции конкретной версии (например, `[Windows10]`).
+2. Если ключ отсутствует/пустой, берется значение из `[VersionDefaults]`.
 
-### `[General]`
+### 1.2 Что обязательно должно быть
+
+Минимально обязательные элементы:
+
+- `[General]` с ключом `Versions`.
+- Базовые OS-detection секции:
+  - `[OSInfoRegistryPaths]` (минимум `Default`)
+  - `[OSInfoHive]` (минимум `Default`)
+  - `[OSInfoKeys]` (минимум `Default`)
+- `[VersionDefaults]` с базовыми путями/ID для артефактов.
+
+Остальные секции опциональны: если ключи отсутствуют, используются кодовые значения по умолчанию.
+
+## 2. Пошаговая настройка `config.ini`
+
+1. Скопируйте `config.ini` из репозитория как базовый профиль.
+2. Настройте список версий в `[General]/Versions` в нужном порядке.
+3. Проверьте `[VersionDefaults]`:
+   - пути к registry hive и Prefetch;
+   - paths автозагрузки;
+   - EventLog-пути и IDs.
+4. Добавьте/оставьте только нужные version-overrides (`[Windows11]`, `[WindowsXP]` и т.п.).
+5. Настройте производительность (`[Performance]`) под машину и объем образа.
+6. При необходимости включайте/выключайте источники в `[Recovery]` и `[ExecutionArtifacts]`.
+7. Проверьте запуск:
+   - `./build/program_traces --help`
+   - `./build/program_traces <disk_root|auto> ./config.ini /tmp/out.csv`
+
+## 3. Поля текущего `config.ini` (минимальный профиль)
+
+Ниже перечислены поля, которые **сейчас реально присутствуют** в `config.ini`.
+
+### [General]
 
 - `Versions` — порядок проверки версий Windows в детекторе ОС.
 
-### `[Logging]`
+### [Logging]
 
-Флаги детального логирования по этапам:
+- `DebugEventLog` — включает/выключает DEBUG-логи этапа EventLog.
 
-- `DebugOSDetection`
-- `DebugAutorun`
-- `DebugPrefetch`
-- `DebugEventLog`
-- `DebugAmcache`
-- `DebugExecution`
-- `DebugRecovery`
+### [Performance]
 
-### `[Performance]`
+- `EnableParallelStages` — разрешает параллельный запуск независимых этапов.
 
-- `EnableParallelStages` — параллельный запуск независимых этапов/групп.
-- `WorkerThreads` — верхний лимит рабочих потоков.
-- `MaxIOWorkers` — лимит IO-задач.
-- `EnableParallelPrefetch`
-- `EnableParallelEventLog`
-- `EnableParallelUserHives`
+### [OSInfoRegistryPaths]
 
-### `[CSVExport]`
+- `Default` — базовый путь к `SOFTWARE` hive.
+- `WindowsXP` — override пути к `SOFTWARE` hive для XP.
+- `WindowsServer` — override пути к `SOFTWARE` hive для server-линейки.
 
-Управляет фильтрацией шумных токенов в колонке файловых метрик:
+### [OSInfoSystemRegistryPaths]
 
-- `MetricMaxNames`
-- `MetricSkipPrefixes`
-- `MetricSkipContains`
-- `MetricSkipExact`
-- `DropShortUpperTokens`
-- `ShortUpperTokenMaxLength`
-- `DropHexLikeTokens`
-- `HexLikeMinLength`
-- `DropUpperAlnumTokens`
-- `UpperAlnumMinLength`
+- `Default` — базовый путь к `SYSTEM` hive.
+- `WindowsXP` — override пути к `SYSTEM` hive для XP.
+- `WindowsServer` — override пути к `SYSTEM` hive для server-линейки.
 
-## Tamper rules
+### [OSInfoHive]
 
-### `[TamperRules]`
+- `Default` — ключ в `SOFTWARE` hive, откуда читаются данные версии ОС.
 
-- `EnablePrefetchMissingRule` — флаг `prefetch_missing_but_other_artifacts_present`.
-- `PrefetchMissingRequireProcessImage` — правило срабатывает только если известен путь/имя исполняемого файла.
-- `PrefetchMissingRuntimeSources` — источники, считающиеся runtime-доказательством запуска.
-- `EnableSIFNDivergenceCheck` — включает проверку расхождения `$STANDARD_INFORMATION` и `$FILE_NAME`.
-- `TimestampDivergenceThresholdSec` — порог расхождения во времени создания.
-- `EnableAmcacheDeletedTraceRule` — флаг для удаленных артефактов Amcache.
-- `EnableRegistryInconsistencyRule` — флаг для конфликтов между registry-only и strong sources.
-- `RegistryOnlySources`
-- `RegistryStrongSources`
+### [OSInfoKeys]
 
-## Recovery
+- `Default` — список значений из `CurrentVersion`, используемых в OS detection.
 
-### `[Recovery]`
+### [BuildMappingsClient]
 
-Блок восстановления удаленных или слабо доступных следов.
+- `<build> = <name>` — маппинг build-номера на клиентское имя ОС.
 
-Переключатели источников:
+### [BuildMappingsServer]
 
-- `EnableUSN`
-- `EnableVSS`
-- `EnableHiber`
-- `EnableNTFSMetadata`
-- `EnableRegistryLogsRecovery`
-- `EnableLogFile`
-- `EnablePagefile`
-- `EnableMemory`
-- `EnableUnallocated`
+- `<build> = <name>` — маппинг build-номера на серверное имя ОС.
 
-Native/fallback режимы:
+### [OSKeywords]
 
-- `EnableNativeUSNParser`
-- `USNFallbackToBinaryOnNativeFailure`
-- `EnableNativeVSSParser`
-- `VSSFallbackToBinaryOnNativeFailure`
-- `EnableVSSSnapshotReplay`
-- `EnableNativeHiberParser`
-- `HiberFallbackToBinary`
-- `EnableNativeFsntfsParser`
-- `FsntfsFallbackToBinaryOnNativeFailure`
+- `DefaultServerKeywords` — fallback-слова для определения server edition.
 
-Лимиты и пути:
+### [Recovery]
 
-- `USNNativeMaxRecords`
-- `USNJournalPath`
-- `VSSNativeMaxStores`
-- `VSSSnapshotReplayMaxFiles`
-- `VSSVolumePath`
-- `HiberMaxPages`
-- `HiberPath`
-- `MFTPath`
-- `MFTMaxRecords`
-- `MFTRecordSize`
-- `BitmapPath`
-- `RegistryConfigPath`
-- `UnallocatedImagePath`
-- `BinaryScanMaxMB`
-- `MaxCandidatesPerSource`
+- `EnableUnallocated` — включает/выключает сканирование unallocated image.
 
-## Execution artifacts
+### [VersionDefaults]
 
-### `[ExecutionArtifacts]`
+- `RegistryPath` — базовый путь к `SOFTWARE` hive для артефактных этапов.
+- `RegistryKeys` — базовые ветки автозапуска в реестре.
+- `FilesystemPaths` — базовые startup-пути в файловой системе.
+- `PrefetchPath` — путь к каталогу Prefetch.
+- `EventLogs` — путь к файлам/каталогу EventLog.
+- `ProcessEventIDs` — ID событий процессов для EventLog-корреляции.
+- `NetworkEventIDs` — ID сетевых событий.
+- `AmcachePath` — путь к `Amcache.hve`.
+- `AmcacheKeys` — ключи `Amcache` для извлечения записей.
 
-Переключатели коллекторов:
+### Version Overrides
 
-- `EnableShimCache`
-- `EnableUserAssist`
-- `EnableRunMRU`
-- `EnableFeatureUsage`
-- `EnableRecentApps`
-- `EnableBamDam`
-- `EnableServices`
-- `EnableHostsFile`
-- `EnableNetworkProfiles`
-- `EnableFirewallRules`
-- `IncludeInactiveFirewallRules`
-- `EnableJumpLists`
-- `EnableLnkRecent`
-- `EnableTaskScheduler`
-- `EnableIFEO`
-- `EnableWER`
-- `EnableTimeline`
-- `EnableBITS`
-- `EnableWMIRepository`
-- `EnableWindowsSearch`
-- `EnableNativeWindowsSearchParser`
-- `WindowsSearchFallbackToBinaryOnNativeFailure`
-- `EnableSRUM`
-- `EnableNativeSRUM`
-- `SrumFallbackToBinaryOnNativeFailure`
-- `EnableMuiCache`
-- `EnableAppCompatFlags`
-- `EnableTypedPaths`
-- `EnableLastVisitedMRU`
-- `EnableOpenSaveMRU`
-- `EnablePSHistory`
-- `EnableSecurityLogTamperCheck`
+Используются только для отличий от `[VersionDefaults]`:
 
-Лимиты native database parsers:
+- `[Windows11]`: `RegistryKeys`, `NetworkEventIDs`
+- `[Windows10]`: `RegistryKeys`, `FilesystemPaths`, `NetworkEventIDs`
+- `[Windows8]`: `RegistryKeys`
+- `[Windows7]`: `ProcessEventIDs`, `NetworkEventIDs`, `RecentFileCachePath`
+- `[WindowsVista]`: `ProcessEventIDs`, `NetworkEventIDs`, `AmcachePath`, `AmcacheKeys`
+- `[WindowsXP]`: `RegistryPath`, `FilesystemPaths`, `PrefetchPath`, `EventLogs`, `ProcessEventIDs`, `NetworkEventIDs`, `AmcachePath`, `AmcacheKeys`
+- `[WindowsServer]`: `RegistryKeys`
 
-- `WindowsSearchNativeMaxRecordsPerTable`
-- `SrumNativeMaxRecordsPerTable`
-- `WindowsSearchTableAllowlist`
-- `SrumTableAllowlist`
+## 4. Секции и ключи
 
-Пути к registry keys и файловым артефактам:
+### [General]
 
-- `UserAssistKey`
-- `RunMRUKey`
-- `FeatureUsageAppSwitchedKey`
-- `FeatureUsageShowJumpViewKey`
-- `FeatureUsageAppBadgeUpdatedKey`
-- `RecentAppsRootKey`
-- `RecentAppsRecentItemsSuffix`
-- `ShimCacheValuePath`
-- `MuiCacheKey`
-- `AppCompatLayersKey`
-- `AppCompatAssistKey`
-- `TypedPathsKey`
-- `LastVisitedMruKey`
-- `OpenSaveMruKey`
-- `PSHistorySuffix`
-- `BamRootPath`
-- `DamRootPath`
-- `BamLegacyRootPath`
-- `DamLegacyRootPath`
-- `ServicesRootPath`
-- `NetworkProfilesRootKey`
-- `NetworkSignatureRoots`
-- `FirewallRulesKeys`
-- `RecentLnkPath`
-- `JumpListAutoPath`
-- `JumpListCustomPath`
-- `TaskSchedulerPath`
-- `TaskCacheTasksKey`
-- `TaskCacheTreeKey`
-- `IFEORootKey`
-- `IFEOWow6432RootKey`
-- `WERProgramDataPath`
-- `WERUserPath`
-- `TimelineRootPath`
-- `BITSDownloaderPath`
-- `HostsFilePath`
-- `WMIRepositoryPath`
-- `WindowsSearchPath`
-- `SRUMPath`
-- `SecurityLogPath`
+- `Versions` (обязательный): список секций ОС в порядке проверки, через запятую.
 
-## Security context
-
-### `[SecurityContext]`
-
-Корреляция процессов с logon session и привилегиями:
-
-- `Enabled`
-- `SecurityLogPath`
-- `ProcessCreateEventIDs`
-- `LogonEventIDs`
-- `PrivilegeEventIDs`
-- `LogonCorrelationWindowSeconds`
-- `PidCorrelationWindowSeconds`
-
-## OS detection
-
-### `[OSInfoRegistryPaths]`
-
-Путь к `SOFTWARE` hive по версии Windows.
-
-### `[OSInfoSystemRegistryPaths]`
-
-Путь к `SYSTEM` hive для определения `ProductType`.
-
-### `[OSInfoHive]`
-
-- `Default` — путь к `Microsoft/Windows NT/CurrentVersion`.
-
-### `[OSInfoKeys]`
-
-Список значений, которые читаются из `CurrentVersion`:
-
-- `ProductName`
-- `InstallationType`
-- `CurrentBuild`
-- `CurrentBuildNumber`
-- `ReleaseId`
-- `DisplayVersion`
-- `EditionID`
-- `CurrentVersion`
-- `CSDVersion`
-
-### `[BuildMappingsClient]` и `[BuildMappingsServer]`
-
-Пороговые сборки для классификации семейства ОС.
-
-### `[OSKeywords]`
-
-- `DefaultServerKeywords` — fallback-слова для server edition.
-
-## Version defaults и overrides
-
-### `[VersionDefaults]`
-
-Базовые пути и ключи для артефактов:
-
-- `RegistryPath`
-- `RegistryKeys`
-- `FilesystemPaths`
-- `PrefetchPath`
-- `EventLogs`
-- `ProcessEventIDs`
-- `NetworkEventIDs`
-- `AmcachePath`
-- `AmcacheKeys`
-
-### `[Windows7]`
-
-Дополнительно поддерживается:
-
-- `RecentFileCachePath` — fallback для систем без `Amcache.hve`.
-
-### `[WindowsVista]` и `[WindowsXP]`
-
-`AmcachePath` и `AmcacheKeys` обычно оставляются пустыми.
-
-### `[Windows10]`, `[Windows11]`, `[WindowsServer]`
-
-Используйте эти секции только для отличий от `[VersionDefaults]`.
-
-## Пример минимальной настройки для Windows 7
+Пример:
 
 ```ini
-[Windows7]
-ProcessEventIDs = 4688
-NetworkEventIDs = 5156
-RecentFileCachePath = Windows/AppCompat/Programs/RecentFileCache.bcf
-AmcachePath = Windows/appcompat/Programs/Amcache.hve
-AmcacheKeys = Root/InventoryApplicationFile
+[General]
+Versions = WindowsXP, WindowsVista, Windows7, Windows8, Windows10, Windows11, WindowsServer
 ```
 
-## Практика изменения конфигурации
+### [Logging]
 
-1. Меняйте только нужные секции версии, не копируйте весь `config.ini`.
-2. При добавлении нового execution-коллектора сначала заведите переключатель в `[ExecutionArtifacts]`.
-3. Если ключ зависит от версии Windows, добавьте override в `[WindowsXX]`, а общее значение оставьте в `[VersionDefaults]`.
-4. После изменения конфига проверяйте запуск через `./build/program_traces --help` и тесты через `ctest --test-dir build --output-on-failure`.
+Флаги этапов для DEBUG-логов:
+
+- `DebugOSDetection` (default: `true`)
+- `DebugAutorun` (default: `true`)
+- `DebugPrefetch` (default: `true`)
+- `DebugEventLog` (default: `true`)
+- `DebugAmcache` (default: `true`)
+- `DebugExecution` (default: `true`)
+- `DebugRecovery` (default: `true`)
+
+Если секция или ключ отсутствуют, соответствующий этап использует default.
+
+### [Performance]
+
+Ключи:
+
+- `EnableParallelStages` (default: `false`)  
+  Общий флаг параллельного режима.
+- `WorkerThreads` (default: `4`)  
+  Верхний лимит worker-потоков.
+- `MaxIOWorkers` (default: `4`)  
+  Лимит IO-задач в оркестраторе.
+- `EnableParallelPrefetch` (default: fallback на `EnableParallelStages`)
+- `EnableParallelEventLog` (default: fallback на `EnableParallelStages`)
+- `EnableParallelUserHives` (default: fallback на `EnableParallelStages`)
+
+Практика:
+
+- Для локального ноутбука: `WorkerThreads = 4`.
+- Для мощной машины: `WorkerThreads = 8..16` (по нагрузке диска/CPU).
+
+### [TamperRules]
+
+Ключи:
+
+- `EnablePrefetchMissingRule` (default: `true`)
+- `PrefetchMissingRequireProcessImage` (default: `true`)
+- `PrefetchMissingRuntimeSources`  
+  Список источников, доказывающих исполнение (через запятую).
+- `EnableSIFNDivergenceCheck` (default: `true`)
+- `TimestampDivergenceThresholdSec` (default: `2`)
+
+### [OSInfoRegistryPaths], [OSInfoSystemRegistryPaths], [OSInfoHive], [OSInfoKeys], [OSKeywords]
+
+Используются детектором ОС.
+
+- `[OSInfoRegistryPaths]`: путь к `SOFTWARE` hive (`Default` + при необходимости overrides).
+- `[OSInfoSystemRegistryPaths]`: путь к `SYSTEM` hive.
+- `[OSInfoHive]`: путь к разделу (обычно `Microsoft/Windows NT/CurrentVersion`).
+- `[OSInfoKeys]`: список считываемых значений (`ProductName`, `CurrentBuild`, ...).
+- `[OSKeywords]`: fallback-ключевые слова для server edition.
+
+### [BuildMappingsClient] и [BuildMappingsServer]
+
+Пороговые маппинги build-номера на семейство ОС.  
+Используются для нормализации имени ОС в отчётах и при выборе version-section.
+
+### [Recovery]
+
+Базовые ключи (часто используются в `config.ini`):
+
+- `EnableUSN` (default: `true`)
+- `EnableVSS` (default: `true`)
+- `EnableHiber` (default: `true`)
+- `EnableNTFSMetadata` (default: `true`)
+- `EnableRegistryLogsRecovery` (default: `true`)
+- `EnableUnallocated` (default: `true`)
+- `BinaryScanMaxMB` (default: `64`)
+- `MaxCandidatesPerSource` (default: `2000`)
+
+Расширенные recovery-ключи (опционально):
+
+- USN:
+  - `EnableNativeUSNParser` (default: `true`)
+  - `USNFallbackToBinaryOnNativeFailure` (default: `true`)
+  - `USNNativeMaxRecords` (default: `200000`)
+  - `USNJournalPath` (default: empty)
+  - `EnableLogFile` (default: `true`)
+- VSS/pagefile/memory:
+  - `EnableNativeVSSParser` (default: `true`)
+  - `VSSFallbackToBinaryOnNativeFailure` (default: `true`)
+  - `VSSNativeMaxStores` (default: `32`)
+  - `EnableVSSSnapshotReplay` (default: `true`)
+  - `VSSSnapshotReplayMaxFiles` (default: `200`)
+  - `VSSVolumePath` (default: empty)
+  - `EnablePagefile` (default: `true`)
+  - `EnableMemory` (default: `true`)
+  - `UnallocatedImagePath` (default: empty)
+- Hiber:
+  - `EnableNativeHiberParser` (default: `true`)
+  - `HiberFallbackToBinary` (default: `true`)
+  - `HiberMaxPages` (default: `16384`)
+  - `HiberPath` (default: `hiberfil.sys`)
+- NTFS metadata:
+  - `EnableNativeFsntfsParser` (default: `true`)
+  - `FsntfsFallbackToBinaryOnNativeFailure` (default: `true`)
+  - `MFTPath` (default: `$MFT`)
+  - `MFTMaxRecords` (default: `200000`)
+  - `MFTRecordSize` (default: `1024`)
+  - `BitmapPath` (default: `$Bitmap`)
+- Registry logs:
+  - `RegistryConfigPath` (default: `Windows/System32/config`)
+
+### [ExecutionArtifacts]
+
+Коллекторы execution-сигналов:
+
+- Registry: `EnableShimCache`, `EnableUserAssist`, `EnableRunMRU`, `EnableFeatureUsage`, `EnableRecentApps`, `EnableBamDam`, `EnableServices`, `EnableNetworkProfiles`, `EnableFirewallRules`, `EnableTaskScheduler`, `EnableIFEO`, `EnableMuiCache`, `EnableAppCompatFlags`, `EnableTypedPaths`, `EnableLastVisitedMRU`, `EnableOpenSaveMRU`.
+- Filesystem: `EnableHostsFile`, `EnableJumpLists`, `EnableLnkRecent`, `EnableWER`, `EnableTimeline`, `EnableBITS`, `EnableWMIRepository`, `EnablePSHistory`.
+- Databases: `EnableWindowsSearch`, `EnableSRUM`.
+- Tamper: `EnableSecurityLogTamperCheck`.
+
+Ключи native/fallback и лимитов:
+
+- `EnableNativeWindowsSearchParser` (default: `true`)
+- `WindowsSearchFallbackToBinaryOnNativeFailure` (default: `true`)
+- `WindowsSearchNativeMaxRecordsPerTable` (default: `25000`)
+- `WindowsSearchTableAllowlist` (default: empty = все таблицы)
+- `EnableNativeSRUM` (default: `true`)
+- `SrumFallbackToBinaryOnNativeFailure` (default: `true`)
+- `SrumNativeMaxRecordsPerTable` (default: `25000`)
+- `SrumTableAllowlist` (default: empty = все таблицы)
+- `BinaryScanMaxMB` (default: `64`)
+- `MaxCandidatesPerSource` (default: `2000`)
+- `IncludeInactiveFirewallRules` (default: `false`)
+
+Расширенные path/key override-ключи (опционально):
+
+- `UserAssistKey`, `RunMRUKey`
+- `FeatureUsageAppSwitchedKey`, `FeatureUsageShowJumpViewKey`, `FeatureUsageAppBadgeUpdatedKey`
+- `RecentAppsRootKey`, `RecentAppsRecentItemsSuffix`
+- `ShimCacheValuePath`
+- `MuiCacheKey`, `AppCompatLayersKey`, `AppCompatAssistKey`, `TypedPathsKey`, `LastVisitedMruKey`, `OpenSaveMruKey`
+- `PSHistorySuffix`
+- `BamRootPath`, `DamRootPath`, `BamLegacyRootPath`, `DamLegacyRootPath`
+- `ServicesRootPath`
+- `NetworkProfilesRootKey`, `NetworkSignatureRoots`, `FirewallRulesKeys`
+- `RecentLnkPath`, `JumpListAutoPath`, `JumpListCustomPath`
+- `TaskSchedulerPath`, `TaskCacheTasksKey`, `TaskCacheTreeKey`
+- `IFEORootKey`, `IFEOWow6432RootKey`
+- `WERProgramDataPath`, `WERUserPath`, `TimelineRootPath`, `BITSDownloaderPath`
+- `HostsFilePath`, `WMIRepositoryPath`, `WindowsSearchPath`, `SRUMPath`
+- `SecurityLogPath`
+
+### [SecurityContext]
+
+Корреляция security-событий с процессами:
+
+- `Enabled` (default: `true`)
+- `SecurityLogPath` (default: `Windows/System32/winevt/Logs/Security.evtx`)
+- `ProcessCreateEventIDs` (default: `4688`)
+- `LogonEventIDs` (default: `4624`)
+- `PrivilegeEventIDs` (default: `4672`)
+- `LogonCorrelationWindowSeconds` (default: `43200`)
+- `PidCorrelationWindowSeconds` (default: `3600`)
+
+Если `SecurityLogPath` не указан в `[SecurityContext]`, используется fallback из `[ExecutionArtifacts]/SecurityLogPath`.
+
+### [VersionDefaults] и version-overrides
+
+Ключи в `[VersionDefaults]`:
+
+- `RegistryPath`, `RegistryKeys`, `FilesystemPaths`
+- `PrefetchPath`
+- `EventLogs`, `ProcessEventIDs`, `NetworkEventIDs`
+- `AmcachePath`, `AmcacheKeys`
+- (опционально) `EnableInventoryApplication`, `EnableInventoryShortcut`, `AmcacheInventoryApplicationKey`, `AmcacheInventoryShortcutKey`
+
+Overrides (`[Windows11]`, `[Windows10]`, `[Windows7]`, ...) содержат только отличия от `[VersionDefaults]`.
+
+## 5. Практические профили
+
+### 4.1 Быстрый и безопасный baseline
+
+- Оставьте `EnableParallelStages = true`, `WorkerThreads = 4`.
+- Не трогайте path/key overrides, если нет специфики образа.
+- `EnableUnallocated = false`, если нет отдельного unallocated image.
+
+### 4.2 Максимум сигналов
+
+- Включите все `Enable* = true` в `[Recovery]` и `[ExecutionArtifacts]`.
+- Оставьте native + fallback ключи включенными.
+- Увеличьте `WorkerThreads`, `BinaryScanMaxMB`, `MaxCandidatesPerSource` при достаточных ресурсах.
+
+### 4.3 Ускоренный прогон
+
+- Временно выключите тяжелые источники (`EnableVSS`, `EnableHiber`, `EnableWindowsSearch`, `EnableSRUM`).
+- Снизьте `BinaryScanMaxMB` и `MaxCandidatesPerSource`.
+- Сократите `Versions` до реально ожидаемых.
+
+## 6. Типичные ошибки
+
+- Пустой/невалидный `[General]/Versions` -> OS detection не инициализируется.
+- Удален ключ из `[VersionDefaults]` без override в `[WindowsXX]` -> этап пропускается с warning.
+- Слишком маленькие лимиты (`BinaryScanMaxMB`, `MaxCandidatesPerSource`) -> потеря части evidence.
+- Слишком большие лимиты на слабом диске -> долгий анализ.
+
+## 7. Что изменено в текущем `config.ini`
+
+Текущий `config.ini` в репозитории намеренно упрощен:
+
+- удалены низкоуровневые path/key overrides, которые уже покрыты кодовыми default;
+- оставлены обязательные и наиболее полезные ключи для ежедневной настройки;
+- полный набор опциональных ключей описан в этом файле и может быть добавлен при необходимости.
