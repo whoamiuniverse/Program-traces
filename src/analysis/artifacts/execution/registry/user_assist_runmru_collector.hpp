@@ -1,5 +1,5 @@
 /// @file user_assist_runmru_collector.hpp
-/// @brief Коллектор артефактов UserAssist и RunMRU.
+/// @brief Collector for UserAssist and RunMRU execution artifacts.
 #pragma once
 #include <map>
 #include <unordered_map>
@@ -9,9 +9,17 @@
 namespace WindowsDiskAnalysis {
 
 /// @class UserAssistRunMruCollector
-/// @brief Собирает артефакты UserAssist и RunMRU из пользовательских hive.
+/// @brief Collects UserAssist and RunMRU execution artifacts from per-user NTUSER.DAT hives.
+///
+/// @details Reads ROT-13 encoded UserAssist entries from @c ctx.config.userassist_key
+/// and plain-text RunMRU entries from @c ctx.config.runmru_key in each user's NTUSER.DAT.
+/// Skipped for UserAssist when @c ctx.config.enable_userassist is @c false;
+/// skipped for RunMRU when @c ctx.config.enable_runmru is @c false.
 class UserAssistRunMruCollector final : public IExecutionArtifactCollector {
  public:
+  /// @brief Collects UserAssist and RunMRU execution artifacts from user hives.
+  /// @param ctx          Analysis context containing disk paths, config, and parallelism limits.
+  /// @param process_data Map of processes to enrich (updated in place).
   void collect(const ExecutionEvidenceContext& ctx,
                std::unordered_map<std::string, ProcessInfo>& process_data) override;
 };

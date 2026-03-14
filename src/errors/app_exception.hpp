@@ -25,8 +25,8 @@ class AppException : public std::exception {
 
   /// @brief Сообщение об ошибке в std::string.
   /// @return Константная ссылка на сообщение.
-  [[nodiscard]] const std::string& message() const noexcept { return message_; }
+ [[nodiscard]] const std::string& message() const noexcept { return message_; }
 
  private:
-  std::string message_;
+  std::string message_;  ///< Текстовое описание ошибки.
 };

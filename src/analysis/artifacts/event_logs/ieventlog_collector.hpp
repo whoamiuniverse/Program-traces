@@ -1,5 +1,5 @@
 /// @file ieventlog_collector.hpp
-/// @brief Базовый интерфейс для анализаторов журналов событий Windows
+/// @brief Base interface for Windows Event Log collectors.
 
 #pragma once
 
@@ -12,19 +12,20 @@
 namespace WindowsDiskAnalysis {
 
 /// @class IEventLogCollector
-/// @brief Общий контракт для сборщиков данных из журналов событий
+/// @brief Common contract for collectors that extract data from Windows Event Logs.
 ///
-/// @details Унифицирует сигнатуру `collect()` для EventLogAnalyzer
-/// и SecurityContextAnalyzer, позволяя оркестратору работать с ними
-/// через единый полиморфный интерфейс (DIP / LSP).
+/// @details Unifies the @c collect() signature for @c EventLogAnalyzer
+/// and @c SecurityContextAnalyzer, enabling the orchestrator to work
+/// with them through a single polymorphic interface (DIP / LSP).
 class IEventLogCollector {
  public:
+  /// @brief Virtual destructor for safe polymorphic deletion.
   virtual ~IEventLogCollector() noexcept = default;
 
-  /// @brief Обогащает агрегированные данные сведениями из журналов событий
-  /// @param disk_root   Корень смонтированного Windows-раздела
-  /// @param process_data        Карта процессов (обновляется на месте)
-  /// @param network_connections Сетевые события (может дополняться или читаться)
+  /// @brief Enriches aggregated data with information from Event Logs.
+  /// @param disk_root           Root path of the mounted Windows partition.
+  /// @param process_data        Map of processes to enrich (updated in place).
+  /// @param network_connections Network events vector (may be extended or read).
   virtual void collect(const std::string& disk_root,
                        std::unordered_map<std::string, ProcessInfo>& process_data,
                        std::vector<NetworkConnection>& network_connections) = 0;

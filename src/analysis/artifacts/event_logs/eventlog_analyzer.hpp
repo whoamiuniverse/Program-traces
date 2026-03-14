@@ -1,5 +1,5 @@
 /// @file eventlog_analyzer.hpp
-/// @brief Анализатор журналов событий Windows
+/// @brief Windows Event Log analyzer for process and network event extraction.
 
 #pragma once
 
@@ -18,62 +18,65 @@
 namespace WindowsDiskAnalysis {
 
 /// @struct EventLogConfig
-/// @brief Конфигурация параметров для анализа журналов событий
+/// @brief Configuration parameters for Windows Event Log analysis.
 struct EventLogConfig {
-  std::vector<std::string> log_paths;       ///< Пути к файлам журналов событий
-  std::vector<uint32_t> process_event_ids;  ///< ID событий о процессах
+  std::vector<std::string> log_paths;       ///< Paths to Event Log files.
+  std::vector<uint32_t> process_event_ids;  ///< Event IDs related to process creation.
   std::vector<uint32_t>
-      network_event_ids;  ///< ID событий о сетевых подключениях
+      network_event_ids;  ///< Event IDs related to network connections.
 };
 
 /// @class EventLogAnalyzer
-/// @brief Анализатор журналов событий Windows
+/// @brief Analyzer that extracts process and network data from Windows Event Logs.
+///
+/// @details Supports both legacy EVT and modern EVTX formats.
+/// Optionally processes log files in parallel across worker threads.
 class EventLogAnalyzer final : public IEventLogCollector {
  public:
-  /// @brief Конструктор анализатора
-  /// @param evt_parser Парсер для формата EVT
-  /// @param evtx_parser Парсер для формата EVTX
-  /// @param os_version Версия целевой ОС
-  /// @param ini_path Путь к конфигурационному файлу
+  /// @brief Constructs the Event Log analyzer.
+  /// @param evt_parser  Parser for the legacy EVT format.
+  /// @param evtx_parser Parser for the modern EVTX format.
+  /// @param os_version  Target OS version string used for configuration lookup.
+  /// @param ini_path    Path to the INI configuration file.
   EventLogAnalyzer(
       std::unique_ptr<EventLogAnalysis::IEventLogParser> evt_parser,
       std::unique_ptr<EventLogAnalysis::IEventLogParser> evtx_parser,
       std::string os_version, const std::string& ini_path);
 
-  /// @brief Сбор данных из журналов событий
-  /// @param disk_root Корневой путь анализируемого диска
-  /// @param process_data Карта данных о процессах (заполняется)
-  /// @param network_connections Вектор сетевых подключений (заполняется)
-  /// @throws ParsingException При ошибках открытия или чтения журналов
+  /// @brief Collects process and network data from Windows Event Logs.
+  /// @param disk_root           Root path of the analyzed disk.
+  /// @param process_data        Map of processes to populate (updated in place).
+  /// @param network_connections Vector of network connections to populate.
+  /// @throws ParsingException   On errors opening or reading Event Log files.
   void collect(const std::string& disk_root,
                std::unordered_map<std::string, ProcessInfo>& process_data,
                std::vector<NetworkConnection>& network_connections) override;
 
  private:
-  /// @brief Загружает конфигурацию из INI-файла
-  /// @param ini_path Путь к конфигурационному файлу
+  /// @brief Loads per-OS-version configuration from the INI file.
+  /// @param ini_path Path to the INI configuration file.
   void loadConfigurations(const std::string& ini_path);
 
-  /// @brief Определяет парсер по расширению файла журнала
-  /// @param file_path Путь к файлу журнала
-  /// @return Указатель на соответствующий парсер
+  /// @brief Selects the appropriate parser based on the log file extension.
+  /// @param file_path Path to the Event Log file.
+  /// @return Pointer to the matching parser, or @c nullptr if no match found.
   [[nodiscard]] EventLogAnalysis::IEventLogParser* getParserForFile(
       const std::string& file_path) const;
 
-  /// @brief Загружает параметры производительности из секции `[Performance]`.
-  /// @param config Конфиг приложения.
+  /// @brief Loads performance options from the @c [Performance] INI section.
+  /// @param config Application configuration object.
   void loadPerformanceOptions(const Config& config);
 
   std::unique_ptr<EventLogAnalysis::IEventLogParser>
-      evt_parser_;  ///< Парсер для EVT
+      evt_parser_;  ///< Parser for the legacy EVT format.
   std::unique_ptr<EventLogAnalysis::IEventLogParser>
-      evtx_parser_;  ///< Парсер для EVTX
+      evtx_parser_;  ///< Parser for the modern EVTX format.
   std::map<std::string, EventLogConfig>
-      configs_;             ///< Конфигурации для версий ОС
-  std::string os_version_;  ///< Целевая версия ОС
-  bool enable_parallel_eventlog_ = false;
+      configs_;             ///< Per-OS-version analyzer configurations.
+  std::string os_version_;  ///< Target OS version string.
+  bool enable_parallel_eventlog_ = false;  ///< Whether parallel log processing is enabled.
   std::size_t worker_threads_ =
-      std::max<std::size_t>(1, std::thread::hardware_concurrency());
+      std::max<std::size_t>(1, std::thread::hardware_concurrency());  ///< Number of worker threads.
 };
 
 }  // namespace WindowsDiskAnalysis

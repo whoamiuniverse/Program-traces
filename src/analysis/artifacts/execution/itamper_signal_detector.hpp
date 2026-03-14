@@ -1,5 +1,5 @@
 /// @file itamper_signal_detector.hpp
-/// @brief ISP-интерфейс детектора глобальных tamper-сигналов.
+/// @brief ISP interface for global tamper signal detectors.
 #pragma once
 
 #include <string>
@@ -10,17 +10,18 @@
 namespace WindowsDiskAnalysis {
 
 /// @class ITamperSignalDetector
-/// @brief Интерфейс детектора глобальных признаков фальсификации артефактов.
-/// @details Реализация работает только с глобальными флагами и не изменяет
-/// агрегированные данные процессов.
+/// @brief Interface for detectors of global artifact tampering signals.
+///
+/// @details Implementations operate exclusively on the global tamper flags
+/// vector and must not modify aggregated process data.
 class ITamperSignalDetector {
  public:
-  /// @brief Виртуальный деструктор базового интерфейса.
+  /// @brief Virtual destructor for safe polymorphic deletion.
   virtual ~ITamperSignalDetector() = default;
 
-  /// @brief Обнаруживает tamper-сигналы и добавляет флаги.
-  /// @param ctx Неизменяемый контекст анализа.
-  /// @param global_tamper_flags Выходной вектор глобальных флагов без дублей.
+  /// @brief Detects tampering signals and appends corresponding flags.
+  /// @param ctx                 Immutable analysis context (paths, config).
+  /// @param global_tamper_flags Output vector of global tamper flags (no duplicates).
   virtual void detect(const ExecutionEvidenceContext& ctx,
                       std::vector<std::string>& global_tamper_flags) = 0;
 };

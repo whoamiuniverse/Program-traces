@@ -128,9 +128,11 @@ class RegistryParser : public IRegistryParser {
 
   libregf_file_t* regf_file_handle_ =
       nullptr;  ///< Handle открытого файла реестра
-  bool is_registry_file_open_ = false;
-  std::string opened_registry_file_path_;
-  std::unordered_map<std::string, std::string> resolved_registry_paths_cache_;
+  bool is_registry_file_open_ = false;  ///< Признак открытого hive-файла.
+  std::string
+      opened_registry_file_path_;  ///< Абсолютный путь текущего открытого hive.
+  std::unordered_map<std::string, std::string>
+      resolved_registry_paths_cache_;  ///< Кэш путей с нормализацией регистра.
 };
 
 }  // namespace RegistryAnalysis

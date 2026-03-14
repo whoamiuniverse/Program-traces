@@ -26,6 +26,7 @@ class CSVExporter {
   /// @param[in] network_connections Список сетевых подключений
   /// @param[in] amcache_entries Список записей из Amcache (версия, publisher,
   /// пути, хэши)
+  /// @param[in] recovery_evidence Список recovery-свидетельств из USN/VSS/...
   /// @throw CsvExportException В случае ошибок экспорта
   /// @throw FileOpenException Если не удалось открыть файл для записи
   /// @throw DataFormatException При обнаружении некорректных данных

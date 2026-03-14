@@ -1,3 +1,6 @@
+/// @file test_support.hpp
+/// @brief Общие тестовые утилиты для работы с временными файлами и командами.
+
 #pragma once
 
 #include <array>
@@ -11,8 +14,11 @@
 
 namespace TestSupport {
 
+/// @class TempDir
+/// @brief RAII-обёртка для временного каталога теста.
 class TempDir {
  public:
+  /// @brief Создаёт/очищает каталог `program_traces_<name>` во временной директории.
   explicit TempDir(std::string name) {
     path_ = std::filesystem::temp_directory_path() /
             ("program_traces_" + std::move(name));
@@ -20,14 +26,17 @@ class TempDir {
     std::filesystem::create_directories(path_);
   }
 
+  /// @brief Удаляет временный каталог вместе с содержимым.
   ~TempDir() { std::filesystem::remove_all(path_); }
 
-  const std::filesystem::path& path() const { return path_; }
+  /// @brief Возвращает путь к каталогу.
+ const std::filesystem::path& path() const { return path_; }
 
  private:
-  std::filesystem::path path_;
+  std::filesystem::path path_;  ///< Путь к временному каталогу теста.
 };
 
+/// @brief Записывает текстовый файл, предварительно создавая родительские каталоги.
 inline void writeTextFile(const std::filesystem::path& path,
                           const std::string& content) {
   std::filesystem::create_directories(path.parent_path());
@@ -38,6 +47,7 @@ inline void writeTextFile(const std::filesystem::path& path,
   file << content;
 }
 
+/// @brief Записывает бинарный файл, предварительно создавая родительские каталоги.
 inline void writeBinaryFile(const std::filesystem::path& path,
                             const std::vector<uint8_t>& bytes) {
   std::filesystem::create_directories(path.parent_path());
@@ -49,6 +59,7 @@ inline void writeBinaryFile(const std::filesystem::path& path,
              static_cast<std::streamsize>(bytes.size()));
 }
 
+/// @brief Читает файл целиком как текст.
 inline std::string readTextFile(const std::filesystem::path& path) {
   std::ifstream file(path, std::ios::binary);
   std::ostringstream buffer;
@@ -56,6 +67,7 @@ inline std::string readTextFile(const std::filesystem::path& path) {
   return buffer.str();
 }
 
+/// @brief Выполняет shell-команду и возвращает stdout.
 inline std::string runCommand(const std::string& command) {
   std::string output;
   std::array<char, 256> buffer{};

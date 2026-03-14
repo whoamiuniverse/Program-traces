@@ -15,10 +15,12 @@ namespace WindowsDiskAnalysis {
 /// @struct AmcacheConfig
 /// @brief Конфигурация для дополнительных ключей Amcache
 struct AmcacheConfig {
-  std::string inventory_application_key = "Root/InventoryApplication";
-  std::string inventory_shortcut_key    = "Root/InventoryApplicationShortcut";
-  bool enable_inventory_application     = true;
-  bool enable_inventory_shortcut        = true;
+  std::string inventory_application_key =
+      "Root/InventoryApplication";  ///< Путь к ключу InventoryApplication.
+  std::string inventory_shortcut_key =
+      "Root/InventoryApplicationShortcut";  ///< Путь к ключу InventoryApplicationShortcut.
+  bool enable_inventory_application = true;  ///< Включает сбор записей приложений.
+  bool enable_inventory_shortcut    = true;  ///< Включает сбор записей shortcut.
 };
 
 /// @class AmcacheAnalyzer

@@ -12,8 +12,8 @@ namespace WindowsDiskAnalysis::CompoundFile {
 /// @struct Stream
 /// @brief Один stream внутри Compound File.
 struct Stream {
-  std::string name;
-  std::vector<uint8_t> data;
+  std::string name;          ///< Имя stream в дереве каталога OLE2.
+  std::vector<uint8_t> data;  ///< Сырые байты содержимого stream.
 };
 
 /// @brief Читает и перечисляет stream'ы Compound File.
