@@ -2,12 +2,14 @@
 
 set -euo pipefail
 
-# Stage 1: determine host platform, output layout and build options.
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HOST_OS="$(uname -s)"
-INSTALL_SYSTEM_DEPS=0
 REQUIRED_ONLY=0
 CLEAN_BUILD_ROOT=0
+CLEANUP_AFTER=0
+CLEANUP_ONLY=0
+CLEANUP_DONE=0
+STAGE_INDEX=0
 
 detect_jobs() {
   if command -v nproc >/dev/null 2>&1; then
@@ -39,23 +41,47 @@ esac
 LIBS_DIR="${ROOT_DIR}/libs/${PLATFORM_ID}"
 BUILD_ROOT="${ROOT_DIR}/.deps-build/${PLATFORM_ID}"
 
+deps_to_remove=(
+  libregf
+  libscca
+  libevtx
+  libevt
+  libesedb
+  libfusn
+  libvshadow
+  libhibr
+  libfsntfs
+  libspdlog
+)
+
+required_archives=(
+  "${LIBS_DIR}/libregf/libregf.a"
+  "${LIBS_DIR}/libscca/libscca.a"
+  "${LIBS_DIR}/libevtx/libevtx.a"
+  "${LIBS_DIR}/libevt/libevt.a"
+  "${LIBS_DIR}/libspdlog/libspdlog.a"
+)
+
 usage() {
   cat <<EOF
 Usage:
-  bash scripts/install_deps.sh [--install-system-deps] [--required-only] [--clean]
+  bash scripts/install_deps.sh [--required-only] [--clean] [--cleanup-after]
+  bash scripts/install_deps.sh --cleanup-only
 
 Stages performed by this script:
   1. Detect host OS and select libs output directory (${LIBS_DIR})
-  2. Optionally install system packages needed for autotools/cmake builds
+  2. Validate that required local build tools are already installed
   3. Clone or update third-party dependency sources
   4. Build required static libraries (libregf, libscca, libevtx, libevt, libspdlog)
   5. Build optional forensic libraries when --required-only is not used
-  6. Flatten the output layout to match CMake expectations under libs/<platform>/
+  6. Verify output layout under libs/<platform>/
+  7. (Optional) Cleanup downloaded/build artifacts
 
 Options:
-  --install-system-deps  Install host packages first (apt/dnf/pacman on Linux, brew on macOS)
   --required-only        Build only the mandatory libraries expected by CMake
   --clean                Remove the temporary .deps-build/<platform> directory before starting
+  --cleanup-after        Always remove downloaded/build artifacts after build
+  --cleanup-only         Skip build and only remove .deps-build + libs/<platform>/<dep>
   -h, --help             Show this help
 
 Environment:
@@ -63,16 +89,62 @@ Environment:
 EOF
 }
 
+repeat_char() {
+  local char="$1"
+  local count="$2"
+  local out=""
+  local i
+  for ((i = 0; i < count; ++i)); do
+    out+="${char}"
+  done
+  printf '%s' "${out}"
+}
+
+render_stage() {
+  local index="$1"
+  local title="$2"
+  local width=36
+  local percent=$((index * 100 / TOTAL_STAGES))
+  local filled=$((percent * width / 100))
+  local empty=$((width - filled))
+  local filled_bar
+  local empty_bar
+  filled_bar="$(repeat_char "#" "${filled}")"
+  empty_bar="$(repeat_char "-" "${empty}")"
+
+  printf '\n\033[1;36m[%s%s]\033[0m %3d%%  \033[1m(%d/%d)\033[0m %s\n' \
+    "${filled_bar}" "${empty_bar}" "${percent}" "${index}" "${TOTAL_STAGES}" "${title}"
+}
+
+stage() {
+  STAGE_INDEX=$((STAGE_INDEX + 1))
+  render_stage "${STAGE_INDEX}" "$*"
+}
+
+log() {
+  printf '[deps-%s] %s\n' "${PLATFORM_ID}" "$*"
+}
+
 while (($# > 0)); do
   case "$1" in
     --install-system-deps)
-      INSTALL_SYSTEM_DEPS=1
+      echo "Option --install-system-deps is no longer supported." >&2
+      echo "This script must not install packages into the OS." >&2
+      echo "Install required build tools manually and rerun." >&2
+      exit 2
       ;;
     --required-only)
       REQUIRED_ONLY=1
       ;;
     --clean)
       CLEAN_BUILD_ROOT=1
+      ;;
+    --cleanup-after)
+      CLEANUP_AFTER=1
+      ;;
+    --cleanup-only)
+      CLEANUP_ONLY=1
+      CLEANUP_AFTER=1
       ;;
     -h|--help)
       usage
@@ -87,13 +159,14 @@ while (($# > 0)); do
   shift
 done
 
-log() {
-  printf '[deps] %s\n' "$*"
-}
-
-stage() {
-  printf '\n[deps][stage] %s\n' "$*"
-}
+if ((CLEANUP_ONLY)); then
+  TOTAL_STAGES=3
+else
+  TOTAL_STAGES=7
+  if ((CLEANUP_AFTER)); then
+    TOTAL_STAGES=$((TOTAL_STAGES + 1))
+  fi
+fi
 
 require_command() {
   local binary="$1"
@@ -103,95 +176,46 @@ require_command() {
   fi
 }
 
-run_with_sudo() {
-  if [[ "${EUID}" -eq 0 ]]; then
-    "$@"
-    return
-  fi
-  require_command sudo
-  sudo "$@"
-}
+require_one_of() {
+  local label="$1"
+  shift
 
-install_linux_packages() {
-  if command -v apt-get >/dev/null 2>&1; then
-    stage "2/6 Install Linux packages with apt-get"
-    run_with_sudo apt-get update
-    run_with_sudo apt-get install -y \
-      autoconf \
-      automake \
-      autopoint \
-      build-essential \
-      ca-certificates \
-      cmake \
-      git \
-      libtool \
-      pkg-config \
-      python3 \
-      zlib1g-dev
-    return
-  fi
+  local candidate
+  for candidate in "$@"; do
+    if command -v "${candidate}" >/dev/null 2>&1; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
 
-  if command -v dnf >/dev/null 2>&1; then
-    stage "2/6 Install Linux packages with dnf"
-    run_with_sudo dnf install -y \
-      autoconf \
-      automake \
-      ca-certificates \
-      cmake \
-      gcc \
-      gcc-c++ \
-      gettext \
-      gettext-devel \
-      git \
-      libtool \
-      make \
-      pkgconf-pkg-config \
-      python3 \
-      zlib-devel
-    return
-  fi
-
-  if command -v pacman >/dev/null 2>&1; then
-    stage "2/6 Install Linux packages with pacman"
-    run_with_sudo pacman -Sy --noconfirm \
-      autoconf \
-      automake \
-      base-devel \
-      cmake \
-      git \
-      gettext \
-      libtool \
-      pkgconf \
-      python \
-      zlib
-    return
-  fi
-
-  echo "Unsupported Linux package manager. Install build tools manually and rerun." >&2
+  echo "Required command not found (${label}): $*" >&2
   exit 1
 }
 
-install_macos_packages() {
-  stage "2/6 Verify Xcode CLT and install Homebrew packages"
+cleanup_outputs() {
+  rm -rf "${BUILD_ROOT}"
 
-  if ! xcode-select -p >/dev/null 2>&1; then
-    echo "Xcode Command Line Tools are required. Run: xcode-select --install" >&2
-    exit 1
+  local dep
+  for dep in "${deps_to_remove[@]}"; do
+    rm -rf "${LIBS_DIR:?}/${dep}"
+  done
+
+  CLEANUP_DONE=1
+  log "Removed ${BUILD_ROOT} and dependency directories in ${LIBS_DIR}"
+}
+
+on_exit_cleanup() {
+  local exit_code="$1"
+  if ((exit_code != 0)) && ((CLEANUP_AFTER)) && ((CLEANUP_DONE == 0)); then
+    set +e
+    log "Build failed (${exit_code}), running mandatory cleanup-after."
+    cleanup_outputs
   fi
-
-  if [[ -x "/opt/homebrew/bin/brew" ]]; then
-    export PATH="/opt/homebrew/bin:${PATH}"
-  elif [[ -x "/usr/local/bin/brew" ]]; then
-    export PATH="/usr/local/bin:${PATH}"
-  fi
-
-  require_command brew
-  brew update
-  brew install autoconf automake cmake git libtool pkg-config gettext
+  exit "${exit_code}"
 }
 
 prepare_host() {
-  stage "1/6 Detect host platform"
+  stage "Detect host platform and output layout"
   log "Host OS: ${HOST_OS}"
   log "Target libs dir: ${LIBS_DIR}"
   log "Parallel jobs: ${JOBS}"
@@ -203,17 +227,55 @@ prepare_host() {
 
   mkdir -p "${LIBS_DIR}" "${BUILD_ROOT}"
 
-  if ((INSTALL_SYSTEM_DEPS == 0)); then
-    stage "2/6 System package installation skipped"
-    log "Re-run with --install-system-deps to install host prerequisites automatically"
-  elif [[ "${PLATFORM_ID}" == "linux" ]]; then
-    install_linux_packages
+  if ((CLEANUP_ONLY)); then
+    return
+  fi
+
+  stage "Validate local toolchain (no OS package installation)"
+  log "This script builds libraries only under ${LIBS_DIR}."
+  log "System packages must be installed manually beforehand."
+
+  if [[ "${PLATFORM_ID}" == "macos" ]]; then
+    if ! xcode-select -p >/dev/null 2>&1; then
+      echo "Xcode Command Line Tools are required. Run: xcode-select --install" >&2
+      exit 1
+    fi
+
+    if [[ -x "/opt/homebrew/bin/brew" ]]; then
+      export PATH="/opt/homebrew/bin:${PATH}"
+    elif [[ -x "/usr/local/bin/brew" ]]; then
+      export PATH="/usr/local/bin:${PATH}"
+    fi
   else
-    install_macos_packages
+    require_command python3
   fi
 
   require_command git
   require_command cmake
+  require_command autoconf
+  require_command automake
+
+  local libtoolize_bin
+  libtoolize_bin="$(require_one_of "GNU libtoolize helper" libtoolize glibtoolize)"
+  if [[ "${libtoolize_bin}" != "libtoolize" ]]; then
+    export LIBTOOLIZE="${libtoolize_bin}"
+  fi
+
+  local libtool_bin
+  libtool_bin="$(require_one_of "GNU libtool helper" libtool glibtool)"
+  if [[ "${libtool_bin}" != "libtool" ]]; then
+    export LIBTOOL="${libtool_bin}"
+  fi
+
+  if command -v pkg-config >/dev/null 2>&1; then
+    :
+  elif command -v pkgconf >/dev/null 2>&1; then
+    export PKG_CONFIG="pkgconf"
+  else
+    echo "Required command not found: pkg-config (or pkgconf)" >&2
+    exit 1
+  fi
+
   if command -v gmake >/dev/null 2>&1; then
     MAKE_BIN="gmake"
   else
@@ -314,14 +376,6 @@ build_spdlog() {
 }
 
 verify_layout() {
-  local required_archives=(
-    "${LIBS_DIR}/libregf/libregf.a"
-    "${LIBS_DIR}/libscca/libscca.a"
-    "${LIBS_DIR}/libevtx/libevtx.a"
-    "${LIBS_DIR}/libevt/libevt.a"
-    "${LIBS_DIR}/libspdlog/libspdlog.a"
-  )
-
   for archive in "${required_archives[@]}"; do
     if [[ ! -f "${archive}" ]]; then
       echo "Missing expected output archive: ${archive}" >&2
@@ -345,28 +399,50 @@ optional_libs=(
   libfsntfs
 )
 
+if ((CLEANUP_AFTER)); then
+  trap 'on_exit_cleanup $?' EXIT
+fi
+
 prepare_host
 
-stage "3/6 Clone/update dependency sources"
+if ((CLEANUP_ONLY)); then
+  stage "Cleanup downloaded/build artifacts"
+  cleanup_outputs
+  stage "Done"
+  log "Cleanup-only completed."
+  exit 0
+fi
+
+stage "Clone/update dependency sources"
 log "Dependency sources will be cached under ${BUILD_ROOT}"
 
-stage "4/6 Build required static libraries"
+stage "Build required static libraries"
 for lib in "${required_libs[@]}"; do
   build_libyal "${lib}"
 done
 
 if ((REQUIRED_ONLY == 0)); then
-  stage "5/6 Build optional forensic libraries"
+  stage "Build optional forensic libraries"
   for lib in "${optional_libs[@]}"; do
     build_libyal "${lib}"
   done
 else
-  stage "5/6 Skip optional forensic libraries"
+  stage "Skip optional forensic libraries"
   log "--required-only was provided"
 fi
 
-stage "6/6 Build spdlog and verify output layout"
+stage "Build spdlog and verify output layout"
 build_spdlog
 verify_layout
 
-log "Finished. Static libraries are available under ${LIBS_DIR}"
+if ((CLEANUP_AFTER)); then
+  stage "Cleanup downloaded/build artifacts"
+  cleanup_outputs
+fi
+
+stage "Done"
+if ((CLEANUP_AFTER)); then
+  log "Finished. Dependencies were built and then removed."
+else
+  log "Finished. Static libraries are available under ${LIBS_DIR}"
+fi
