@@ -12,7 +12,7 @@ using namespace std::string_literals;
 
 EvtxParser::EvtxParser() {
   const auto logger = GlobalLogger::get();
-  logger->debug("Инициализация EvtxParser");
+  logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Инициализация EvtxParser");
 
   libevtx_error_t* error = nullptr;
   if (libevtx_file_initialize(&evtx_file_, &error) != 1) {
@@ -38,7 +38,7 @@ void EvtxParser::OpenLogFile(const std::string& file_path) {
   const auto logger = GlobalLogger::get();
 
   if (file_opened_) {
-    logger->debug("Закрытие предыдущего открытого EVTX файла");
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Закрытие предыдущего открытого EVTX файла");
     CloseLogFile();
   }
 
@@ -62,7 +62,7 @@ void EvtxParser::CloseLogFile() {
   const auto logger = GlobalLogger::get();
 
   if (file_opened_ && evtx_file_) {
-    logger->debug("Закрытие EVTX файла");
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Закрытие EVTX файла");
     libevtx_file_close(evtx_file_, nullptr);
     file_opened_ = false;
   }
@@ -212,7 +212,7 @@ void EvtxParser::ExtractEventDataFromXml(EventData& event_data,
       }
     }
   } catch (const std::regex_error& e) {
-    logger->debug("Ошибка регулярного выражения при разборе XML: {}", e.what());
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Ошибка регулярного выражения при разборе XML: {}", e.what());
   }
 
   // Извлечение описания, если не установлено из CommandLine
@@ -224,7 +224,7 @@ void EvtxParser::ExtractEventDataFromXml(EventData& event_data,
         event_data.setDescription(match[1].str());
       }
     } catch (const std::regex_error& e) {
-      logger->debug("Ошибка регулярного выражения при разборе Description: {}",
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Ошибка регулярного выражения при разборе Description: {}",
                    e.what());
     }
   }
@@ -237,7 +237,7 @@ std::vector<std::unique_ptr<IEventData>> EvtxParser::parseEvents(
   try {
     OpenLogFile(file_path);
 
-    logger->debug("Начало обработки EVTX файла: \"{}\"", file_path);
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Начало обработки EVTX файла: \"{}\"", file_path);
 
     libevtx_error_t* error = nullptr;
     int record_count = 0;
@@ -256,7 +256,7 @@ std::vector<std::unique_ptr<IEventData>> EvtxParser::parseEvents(
       throw DataReadException(error_msg);
     }
 
-    logger->debug("Найдено \"{}\" записей в EVTX файле", record_count);
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Найдено \"{}\" записей в EVTX файле", record_count);
 
     // Получение всех записей
     for (int i = 0; i < record_count; i++) {
@@ -270,7 +270,7 @@ std::vector<std::unique_ptr<IEventData>> EvtxParser::parseEvents(
       }
     }
 
-    logger->debug("Файл успешно обработан. Успешно разобрано \"{}\" событие",
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Файл успешно обработан. Успешно разобрано \"{}\" событие",
                  events.size());
     return events;
   } catch (...) {
@@ -282,7 +282,7 @@ std::vector<std::unique_ptr<IEventData>> EvtxParser::parseEvents(
 std::vector<std::unique_ptr<IEventData>> EvtxParser::getEventsByType(
     const std::string& file_path, uint32_t event_id) {
   const auto logger = GlobalLogger::get();
-  logger->debug("Фильтрация событий по ID \"{}\" из EVTX файла: \"{}\"", event_id,
+  logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Фильтрация событий по ID \"{}\" из EVTX файла: \"{}\"", event_id,
                file_path);
 
   try {
@@ -305,7 +305,7 @@ std::vector<std::unique_ptr<IEventData>> EvtxParser::getEventsByType(
       throw DataReadException(error_msg);
     }
 
-    logger->debug("Найдено \"{}\" записей в EVTX файле", record_count);
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Найдено \"{}\" записей в EVTX файле", record_count);
 
     // Фильтрация записей по ID события
     for (int i = 0; i < record_count; i++) {
@@ -324,7 +324,7 @@ std::vector<std::unique_ptr<IEventData>> EvtxParser::getEventsByType(
       }
     }
 
-    logger->debug("Найдено \"{}\" событий с ID \"{}\"", filtered_events.size(),
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Найдено \"{}\" событий с ID \"{}\"", filtered_events.size(),
                  event_id);
     return filtered_events;
   } catch (...) {

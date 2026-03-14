@@ -32,7 +32,7 @@ void NetworkProfilesCollector::collect(const ExecutionEvidenceContext& ctx,
     profile_subkeys =
         local_parser.listSubkeys(software_hive_path, ctx.config.network_profiles_root_key);
   } catch (const std::exception& e) {
-    logger->debug("NetworkProfiles пропущен: {}", e.what());
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "NetworkProfiles пропущен: {}", e.what());
     return;
   }
 

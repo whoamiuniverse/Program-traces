@@ -74,7 +74,7 @@ void runRecoveryStageCollectorsInParallel(
       per_analyzer[task.index].evidence = task.future.get();
     } catch (const std::exception& e) {
       logger->error("Recovery({}): ошибка этапа", per_analyzer[task.index].label);
-      logger->debug("Recovery({}) exception: {}", per_analyzer[task.index].label,
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Recovery({}) exception: {}", per_analyzer[task.index].label,
                     e.what());
     } catch (...) {
       logger->error("Recovery({}): неизвестная ошибка этапа",

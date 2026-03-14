@@ -77,7 +77,7 @@ void PrefetchDataBuilder::validateRunTimes() const {
                                     "нулевое время последнего запуска");
     }
   } catch (const InvalidRunTimeException& e) {
-    logger->debug(e.what());
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, e.what());
   }
 
   constexpr uint64_t MAX_FILETIME = 0x01D9F3D6FDBD0000ULL;  // 01.01.2500
@@ -88,7 +88,7 @@ void PrefetchDataBuilder::validateRunTimes() const {
                                     "максимальное допустимое значение");
     }
   } catch (const InvalidRunTimeException& e) {
-    logger->debug(e.what());
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, e.what());
   }
 
   for (const auto& run_time : storage_.run_times) {
@@ -98,7 +98,7 @@ void PrefetchDataBuilder::validateRunTimes() const {
             run_time, "обнаружено нулевое время запуска в массиве run_times");
       }
     } catch (const InvalidRunTimeException& e) {
-      logger->debug(e.what());
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, e.what());
     }
 
     try {
@@ -109,7 +109,7 @@ void PrefetchDataBuilder::validateRunTimes() const {
                                       "значение");
       }
     } catch (const InvalidRunTimeException& e) {
-      logger->debug(e.what());
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, e.what());
     }
   }
 }
@@ -120,7 +120,7 @@ void PrefetchDataBuilder::validateVolumes() const {
   for (const auto& volume : storage_.volumes) {
     const auto& device_path = volume.getDevicePath();
 
-    logger->debug("Начало обработки устройства \"" + device_path + "\"");
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Начало обработки устройства \"" + device_path + "\"");
 
     try {
       if (volume.getDevicePath().empty()) {
@@ -128,7 +128,7 @@ void PrefetchDataBuilder::validateVolumes() const {
             device_path, "путь к устройству не может быть пустым");
       }
     } catch (const VolumeValidationException& e) {
-      logger->debug(e.what());
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, e.what());
     }
 
     try {
@@ -137,7 +137,7 @@ void PrefetchDataBuilder::validateVolumes() const {
             device_path, "серийный номер тома не может быть нулевым");
       }
     } catch (const VolumeValidationException& e) {
-      logger->debug(e.what());
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, e.what());
     }
 
     try {
@@ -146,7 +146,7 @@ void PrefetchDataBuilder::validateVolumes() const {
                                         "размер тома не может быть нулевым");
       }
     } catch (const VolumeValidationException& e) {
-      logger->debug(e.what());
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, e.what());
     }
 
     try {
@@ -155,7 +155,7 @@ void PrefetchDataBuilder::validateVolumes() const {
             device_path, "время создания тома не может быть нулевым");
       }
     } catch (const VolumeValidationException& e) {
-      logger->debug(e.what());
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, e.what());
     }
 
     try {
@@ -165,10 +165,10 @@ void PrefetchDataBuilder::validateVolumes() const {
                                         "неподдерживаемый тип тома");
       }
     } catch (const VolumeValidationException& e) {
-      logger->debug(e.what());
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, e.what());
     }
 
-    logger->debug("Конец обработки устройства \"" + device_path + "\"");
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Конец обработки устройства \"" + device_path + "\"");
   }
 }
 
@@ -178,7 +178,7 @@ void PrefetchDataBuilder::validateMetric() const {
   for (const auto& metric : storage_.metrics) {
     const auto& filename = metric.getFilename();
 
-    logger->debug("Начало обработки файла\"" + filename + "\"");
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Начало обработки файла\"" + filename + "\"");
 
     try {
       if (filename.empty()) {
@@ -186,7 +186,7 @@ void PrefetchDataBuilder::validateMetric() const {
                                         "имя файла не может быть пустым");
       }
     } catch (const MetricValidationException& e) {
-      logger->debug(e.what());
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, e.what());
     }
 
     try {
@@ -195,7 +195,7 @@ void PrefetchDataBuilder::validateMetric() const {
                                         "размер файла не может быть нулевым");
       }
     } catch (const MetricValidationException& e) {
-      logger->debug(e.what());
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, e.what());
     }
 
     try {
@@ -204,7 +204,7 @@ void PrefetchDataBuilder::validateMetric() const {
             filename, "время последнего доступа не может быть нулевым");
       }
     } catch (const MetricValidationException& e) {
-      logger->debug(e.what());
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, e.what());
     }
 
     try {
@@ -213,7 +213,7 @@ void PrefetchDataBuilder::validateMetric() const {
                                         "ссылка на MFT не может быть нулевой");
       }
     } catch (const MetricValidationException& e) {
-      logger->debug(e.what());
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, e.what());
     }
 
     try {
@@ -222,10 +222,10 @@ void PrefetchDataBuilder::validateMetric() const {
                                         "флаги доступа не могут быть нулевыми");
       }
     } catch (const MetricValidationException& e) {
-      logger->debug(e.what());
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, e.what());
     }
 
-    logger->debug("Конец обработки файла\"" + filename + "\"");
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Конец обработки файла\"" + filename + "\"");
   }
 }
 std::unique_ptr<IPrefetchData> PrefetchDataBuilder::build() {

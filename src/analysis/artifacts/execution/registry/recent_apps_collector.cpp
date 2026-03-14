@@ -49,7 +49,7 @@ void RecentAppsCollector::collect(const ExecutionEvidenceContext& ctx,
         try {
           app_subkeys = parser.listSubkeys(hive, ctx.config.recent_apps_root_key);
         } catch (const std::exception& e) {
-          logger->debug("RecentApps пропущен для {}: {}", hive, e.what());
+          logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "RecentApps пропущен для {}: {}", hive, e.what());
           return;
         }
 
@@ -218,7 +218,7 @@ void RecentAppsCollector::collect(const ExecutionEvidenceContext& ctx,
                             ctx.worker_threads > 1 && user_hives.size() > 1;
   std::size_t collected = 0;
   if (use_parallel) {
-    logger->debug("Execution(RecentApps): параллельный режим (workers={})",
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Execution(RecentApps): параллельный режим (workers={})",
                   std::min<std::size_t>(ctx.worker_threads, user_hives.size()));
   }
   if (!use_parallel) {

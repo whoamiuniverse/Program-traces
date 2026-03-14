@@ -64,7 +64,7 @@ void ShimCacheCollector::collect(
 
     if (!value) {
       if (last_error.has_value()) {
-        logger->debug("ShimCache недоступен: {}", *last_error);
+        logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "ShimCache недоступен: {}", *last_error);
       }
       return;
     }
@@ -124,7 +124,7 @@ void ShimCacheCollector::collect(
     logger->info("ShimCache: structured={} fallback={} total={}",
                  structured_count, fallback_count, seen.size());
   } catch (const std::exception& e) {
-    logger->debug("Ошибка ShimCache: {}", e.what());
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Ошибка ShimCache: {}", e.what());
   }
 }
 

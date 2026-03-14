@@ -143,7 +143,7 @@ void TaskSchedulerCollector::collect(const ExecutionEvidenceContext& ctx,
         collect_task_cache_task(task_id, "taskcache=");
       }
     } catch (const std::exception& e) {
-      logger->debug("TaskScheduler(TaskCache) пропущен: {}", e.what());
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "TaskScheduler(TaskCache) пропущен: {}", e.what());
     }
 
     if (!ctx.config.task_cache_tree_key.empty() &&

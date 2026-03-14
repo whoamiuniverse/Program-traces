@@ -60,7 +60,7 @@ void RegistryLogAnalyzer::loadConfiguration() {
     }
   } catch (const std::exception& e) {
     logger->warn("Не удалось загрузить настройки RegistryLogAnalyzer");
-    logger->debug("Ошибка чтения [Recovery] для RegistryLogs: {}", e.what());
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Ошибка чтения [Recovery] для RegistryLogs: {}", e.what());
   }
 }
 
@@ -68,7 +68,7 @@ std::vector<RecoveryEvidence> RegistryLogAnalyzer::collect(
     const std::string& disk_root) const {
   const auto logger = GlobalLogger::get();
   if (!enabled_) {
-    logger->debug("RegistryLog-анализ отключен в конфигурации");
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "RegistryLog-анализ отключен в конфигурации");
     return {};
   }
 

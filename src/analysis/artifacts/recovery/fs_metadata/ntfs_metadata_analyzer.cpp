@@ -254,7 +254,7 @@ void NTFSMetadataAnalyzer::loadConfiguration() {
     }
   } catch (const std::exception& e) {
     logger->warn("Не удалось загрузить настройки NTFSMetadataAnalyzer");
-    logger->debug("Ошибка чтения [Recovery] для NTFSMetadata: {}", e.what());
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Ошибка чтения [Recovery] для NTFSMetadata: {}", e.what());
   }
 }
 
@@ -262,7 +262,7 @@ std::vector<RecoveryEvidence> NTFSMetadataAnalyzer::collect(
     const std::string& disk_root) const {
   const auto logger = GlobalLogger::get();
   if (!enabled_) {
-    logger->debug("NTFSMetadata-анализ отключен в конфигурации");
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "NTFSMetadata-анализ отключен в конфигурации");
     return {};
   }
 
@@ -278,11 +278,11 @@ std::vector<RecoveryEvidence> NTFSMetadataAnalyzer::collect(
     bool need_binary_fallback = true;
     if (enable_native_fsntfs_parser_) {
 #if defined(PROGRAM_TRACES_HAVE_LIBFSNTFS) && PROGRAM_TRACES_HAVE_LIBFSNTFS
-      logger->debug("NTFSMetadata(native): libfsntfs подключен, но native "
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "NTFSMetadata(native): libfsntfs подключен, но native "
                     "парсер пока experimental и использует fallback");
       need_binary_fallback = fsntfs_fallback_to_binary_on_native_failure_;
 #else
-      logger->debug("NTFSMetadata(native): libfsntfs недоступен в текущей сборке");
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "NTFSMetadata(native): libfsntfs недоступен в текущей сборке");
       need_binary_fallback = true;
 #endif
     }

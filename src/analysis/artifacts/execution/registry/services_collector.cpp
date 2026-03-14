@@ -31,7 +31,7 @@ void ServicesCollector::collect(const ExecutionEvidenceContext& ctx,
   const std::string control_set_root =
       resolveControlSetRoot(local_parser, system_hive_path, "CurrentControlSet");
   if (control_set_root.empty()) {
-    logger->debug("Services: не удалось определить активный ControlSet");
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Services: не удалось определить активный ControlSet");
     return;
   }
 
@@ -45,7 +45,7 @@ void ServicesCollector::collect(const ExecutionEvidenceContext& ctx,
   try {
     service_keys = local_parser.listSubkeys(system_hive_path, services_root);
   } catch (const std::exception& e) {
-    logger->debug("Services пропущен: {}", e.what());
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Services пропущен: {}", e.what());
     return;
   }
 

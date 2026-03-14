@@ -34,7 +34,7 @@ void Config::reload() const {
   if (const SI_Error rc = ini_->LoadFile(filename_.c_str()); rc != SI_OK) {
     throw ConfigFileException(filename_);
   }
-  logger->debug("Конфигурация успешно загружена");
+  logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Конфигурация успешно загружена");
 }
 
 std::string Config::getString(const std::string& section,

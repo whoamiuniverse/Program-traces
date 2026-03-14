@@ -17,7 +17,7 @@ void WindowsDiskAnalyzer::loadLoggingOptions(const Config& config) {
   const auto logger = GlobalLogger::get();
 
   if (!config.hasSection("Logging")) {
-    logger->debug(
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, 
         "Секция [Logging] не найдена, используются настройки debug по "
         "умолчанию");
     return;
@@ -28,7 +28,7 @@ void WindowsDiskAnalyzer::loadLoggingOptions(const Config& config) {
       return config.getBool("Logging", key, current_value);
     } catch (const std::exception& e) {
       logger->warn("Некорректный параметр [Logging]/{}", key);
-      logger->debug("Ошибка чтения [Logging]/{}: {}", key, e.what());
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Ошибка чтения [Logging]/{}: {}", key, e.what());
       return current_value;
     }
   };
@@ -42,7 +42,7 @@ void WindowsDiskAnalyzer::loadLoggingOptions(const Config& config) {
   debug_options_.execution = readFlag("DebugExecution", debug_options_.execution);
   debug_options_.recovery = readFlag("DebugRecovery", debug_options_.recovery);
 
-  logger->debug(
+  logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, 
       "Загружены настройки [Logging]: OSDetection={}, Autorun={}, "
       "Prefetch={}, EventLog={}, Amcache={}, Execution={}, Recovery={}",
       debug_options_.os_detection, debug_options_.autorun,
@@ -54,7 +54,7 @@ void WindowsDiskAnalyzer::loadPerformanceOptions(const Config& config) {
   const auto logger = GlobalLogger::get();
 
   if (!config.hasSection("Performance")) {
-    logger->debug(
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, 
         "Секция [Performance] не найдена, используются значения по умолчанию");
     return;
   }
@@ -64,7 +64,7 @@ void WindowsDiskAnalyzer::loadPerformanceOptions(const Config& config) {
       return config.getBool("Performance", key, current_value);
     } catch (const std::exception& e) {
       logger->warn("Некорректный параметр [Performance]/{}", key);
-      logger->debug("Ошибка чтения [Performance]/{}: {}", key, e.what());
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Ошибка чтения [Performance]/{}: {}", key, e.what());
       return current_value;
     }
   };
@@ -80,7 +80,7 @@ void WindowsDiskAnalyzer::loadPerformanceOptions(const Config& config) {
       return static_cast<std::size_t>(raw);
     } catch (const std::exception& e) {
       logger->warn("Некорректный параметр [Performance]/{}", key);
-      logger->debug("Ошибка чтения [Performance]/{}: {}", key, e.what());
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Ошибка чтения [Performance]/{}: {}", key, e.what());
       return current_value;
     }
   };
@@ -103,7 +103,7 @@ void WindowsDiskAnalyzer::loadPerformanceOptions(const Config& config) {
     performance_options_.max_io_workers = performance_options_.worker_threads;
   }
 
-  logger->debug(
+  logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, 
       "Загружены настройки [Performance]: EnableParallelStages={}, "
       "WorkerThreads={}, MaxIOWorkers={}",
       performance_options_.enable_parallel_stages,
@@ -113,7 +113,7 @@ void WindowsDiskAnalyzer::loadPerformanceOptions(const Config& config) {
 void WindowsDiskAnalyzer::loadTamperOptions(const Config& config) {
   const auto logger = GlobalLogger::get();
   if (!config.hasSection("TamperRules")) {
-    logger->debug(
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, 
         "Секция [TamperRules] не найдена, используются значения по умолчанию");
     return;
   }
@@ -123,7 +123,7 @@ void WindowsDiskAnalyzer::loadTamperOptions(const Config& config) {
       return config.getBool("TamperRules", key, current_value);
     } catch (const std::exception& e) {
       logger->warn("Некорректный параметр [TamperRules]/{}", key);
-      logger->debug("Ошибка чтения [TamperRules]/{}: {}", key, e.what());
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Ошибка чтения [TamperRules]/{}: {}", key, e.what());
       return current_value;
     }
   };
@@ -150,7 +150,7 @@ void WindowsDiskAnalyzer::loadTamperOptions(const Config& config) {
   } catch (const std::exception& e) {
     logger->warn(
         "Некорректный параметр [TamperRules]/PrefetchMissingRuntimeSources");
-    logger->debug(
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, 
         "Ошибка чтения [TamperRules]/PrefetchMissingRuntimeSources: {}",
         e.what());
   }

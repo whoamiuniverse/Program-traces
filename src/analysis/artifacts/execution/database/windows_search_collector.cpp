@@ -112,7 +112,7 @@ std::size_t collectWindowsSearchNative(
     const std::string details = toLibesedbErrorMessage(error);
     free_error();
     close_file();
-    logger->debug(
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, 
         "WindowsSearch(native): не удалось инициализировать libesedb: {}",
         details);
     return 0;
@@ -134,7 +134,7 @@ std::size_t collectWindowsSearchNative(
     const std::string details = toLibesedbErrorMessage(error);
     free_error();
     close_file();
-    logger->debug(
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, 
         "WindowsSearch(native): не удалось получить список таблиц: {}",
         details);
     return 0;
@@ -265,7 +265,7 @@ void WindowsSearchCollector::collect(const ExecutionEvidenceContext& ctx,
 
   if (!ctx.config.windows_search_fallback_to_binary_on_native_failure &&
       native_attempted) {
-    logger->debug(
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, 
         "WindowsSearch fallback отключен, бинарный режим не используется после "
         "неуспеха native-парсера");
     return;

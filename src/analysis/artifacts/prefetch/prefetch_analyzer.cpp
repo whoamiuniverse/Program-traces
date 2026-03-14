@@ -37,13 +37,13 @@ std::optional<std::filesystem::path> resolvePrefetchDirectory(
   if (const auto resolved =
           PathUtils::findPathCaseInsensitive(std::filesystem::path(prefetch_path));
       resolved.has_value()) {
-    logger->debug("Путь Prefetch разрешён case-insensitive: \"{}\" -> \"{}\"",
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Путь Prefetch разрешён case-insensitive: \"{}\" -> \"{}\"",
                   prefetch_path, resolved->string());
     return *resolved;
   }
 
   logger->warn("Папка Prefetch не найдена");
-  logger->debug("Проверенный путь Prefetch: \"{}\"", prefetch_path);
+  logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Проверенный путь Prefetch: \"{}\"", prefetch_path);
   return std::nullopt;
 }
 
@@ -97,7 +97,7 @@ bool tryParsePrefetchFile(
     return true;
   } catch (const std::exception& e) {
     logger->warn("Файл Prefetch пропущен из-за ошибки");
-    logger->debug("Ошибка анализа Prefetch \"{}\": {}", file_path_string, e.what());
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Ошибка анализа Prefetch \"{}\": {}", file_path_string, e.what());
     return false;
   }
 }
@@ -144,7 +144,7 @@ void PrefetchAnalyzer::loadConfigurations(const std::string& ini_path) {
     }
 
     configs_[version] = cfg;
-    logger->debug(
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, 
         "Загружена конфигурация Prefetch для \"{}\": путь = \"{}\"", version,
         cfg.prefetch_path.empty() ? "по умолчанию" : cfg.prefetch_path);
   }
@@ -176,7 +176,7 @@ std::vector<ProcessInfo> PrefetchAnalyzer::collect(
   const auto& cfg = cfg_it->second;
   if (cfg.prefetch_path.empty()) {
     logger->warn("Путь к Prefetch не настроен");
-    logger->debug("Версия ОС без PrefetchPath: \"{}\"", os_version_);
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Версия ОС без PrefetchPath: \"{}\"", os_version_);
     return results;
   }
 

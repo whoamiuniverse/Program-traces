@@ -64,7 +64,7 @@ NativeHiberParseResult parseHiberNative(const fs::path& hiber_path,
   const auto logger = GlobalLogger::get();
   libhibr_error_t* error = nullptr;
   if (libhibr_check_file_signature(hiber_path.string().c_str(), &error) != 1) {
-    logger->debug("Hiber(native): сигнатура не распознана для \"{}\": {}",
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Hiber(native): сигнатура не распознана для \"{}\": {}",
                   hiber_path.string(), toLibhibrErrorMessage(error));
     libhibr_error_free(&error);
     return result;
@@ -73,7 +73,7 @@ NativeHiberParseResult parseHiberNative(const fs::path& hiber_path,
 
   libhibr_file_t* file = nullptr;
   if (libhibr_file_initialize(&file, &error) != 1 || file == nullptr) {
-    logger->debug("Hiber(native): инициализация не удалась: {}",
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Hiber(native): инициализация не удалась: {}",
                   toLibhibrErrorMessage(error));
     libhibr_error_free(&error);
     return result;
@@ -84,14 +84,14 @@ NativeHiberParseResult parseHiberNative(const fs::path& hiber_path,
     if (file == nullptr) return;
     libhibr_error_t* close_error = nullptr;
     if (libhibr_file_close(file, &close_error) != 0) {
-      logger->debug("Hiber(native): close завершился с ошибкой: {}",
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Hiber(native): close завершился с ошибкой: {}",
                     toLibhibrErrorMessage(close_error));
     }
     libhibr_error_free(&close_error);
 
     libhibr_error_t* free_error = nullptr;
     if (libhibr_file_free(&file, &free_error) != 1) {
-      logger->debug("Hiber(native): free завершился с ошибкой: {}",
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Hiber(native): free завершился с ошибкой: {}",
                     toLibhibrErrorMessage(free_error));
     }
     libhibr_error_free(&free_error);
@@ -101,7 +101,7 @@ NativeHiberParseResult parseHiberNative(const fs::path& hiber_path,
   error = nullptr;
   if (libhibr_file_open(file, hiber_path.string().c_str(), access_flags, &error) !=
       1) {
-    logger->debug("Hiber(native): не удалось открыть \"{}\": {}",
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Hiber(native): не удалось открыть \"{}\": {}",
                   hiber_path.string(), toLibhibrErrorMessage(error));
     libhibr_error_free(&error);
     close_and_free();
@@ -112,7 +112,7 @@ NativeHiberParseResult parseHiberNative(const fs::path& hiber_path,
 
   size64_t media_size = 0;
   if (libhibr_file_get_media_size(file, &media_size, &error) != 1) {
-    logger->debug("Hiber(native): не удалось определить размер: {}",
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Hiber(native): не удалось определить размер: {}",
                   toLibhibrErrorMessage(error));
     libhibr_error_free(&error);
     close_and_free();
@@ -141,7 +141,7 @@ NativeHiberParseResult parseHiberNative(const fs::path& hiber_path,
     const ssize_t read_size = libhibr_file_read_buffer_at_offset(
         file, chunk.data(), to_read, static_cast<off64_t>(offset), &error);
     if (read_size < 0) {
-      logger->debug("Hiber(native): ошибка чтения offset={}: {}", offset,
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Hiber(native): ошибка чтения offset={}: {}", offset,
                     toLibhibrErrorMessage(error));
       libhibr_error_free(&error);
       break;
@@ -194,7 +194,7 @@ void HibernationAnalyzer::loadConfiguration() {
     }
   } catch (const std::exception& e) {
     logger->warn("Не удалось загрузить настройки HibernationAnalyzer");
-    logger->debug("Ошибка чтения [Recovery] для Hiber: {}", e.what());
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Ошибка чтения [Recovery] для Hiber: {}", e.what());
   }
 }
 
@@ -202,7 +202,7 @@ std::vector<RecoveryEvidence> HibernationAnalyzer::collect(
     const std::string& disk_root) const {
   const auto logger = GlobalLogger::get();
   if (!enabled_) {
-    logger->debug("Hibernation-анализ отключен в конфигурации");
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Hibernation-анализ отключен в конфигурации");
     return {};
   }
 
@@ -234,7 +234,7 @@ std::vector<RecoveryEvidence> HibernationAnalyzer::collect(
     bool need_binary_fallback = true;
     if (enable_native_hiber_parser_) {
 #if defined(PROGRAM_TRACES_HAVE_LIBHIBR) && PROGRAM_TRACES_HAVE_LIBHIBR
-      logger->debug("Hiber(native): включен experimental режим libhibr");
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Hiber(native): включен experimental режим libhibr");
       NativeHiberParseResult native_result =
           parseHiberNative(*resolved, hiber_max_pages_, max_bytes,
                            max_candidates_per_source_);
@@ -244,7 +244,7 @@ std::vector<RecoveryEvidence> HibernationAnalyzer::collect(
           (!native_result.success || native_result.evidence.empty());
       appendUniqueEvidence(results, native_result.evidence, dedup);
 #else
-      logger->debug("Hiber(native): libhibr недоступен в текущей сборке");
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Hiber(native): libhibr недоступен в текущей сборке");
       need_binary_fallback = true;
 #endif
     }

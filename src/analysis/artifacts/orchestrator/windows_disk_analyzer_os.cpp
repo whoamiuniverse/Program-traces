@@ -71,16 +71,16 @@ void WindowsDiskAnalyzer::validateRegistryHivePresence(
     return;
   }
 
-  logger->debug("Проверка hive-файлов для корня \"{}\" не прошла", disk_root_);
+  logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Проверка hive-файлов для корня \"{}\" не прошла", disk_root_);
   if (!checked_paths.empty()) {
     std::ostringstream checked;
     for (size_t i = 0; i < checked_paths.size(); ++i) {
       if (i != 0) checked << ", ";
       checked << '"' << checked_paths[i] << '"';
     }
-    logger->debug("Проверенные пути hive: {}", checked.str());
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Проверенные пути hive: {}", checked.str());
   } else {
-    logger->debug("Проверенные пути hive отсутствуют в конфигурации");
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Проверенные пути hive отсутствуют в конфигурации");
   }
 
   if (!checked_errors.empty()) {
@@ -91,7 +91,7 @@ void WindowsDiskAnalyzer::validateRegistryHivePresence(
     if (first_access_error != checked_errors.end()) {
       logger->warn("Ошибка доступа к файловой системе при проверке hive");
     }
-    logger->debug("Ошибки проверки путей hive: {}",
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Ошибки проверки путей hive: {}",
                   checked_errors.front());
   }
 
@@ -125,7 +125,7 @@ bool WindowsDiskAnalyzer::hasRegistryHivePresence(
     std::string resolve_error;
     if (const auto resolved = findPathCaseInsensitive(full_path, &resolve_error);
         resolved.has_value()) {
-      logger->debug("Найден hive-файл для определения ОС ({}): \"{}\"",
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Найден hive-файл для определения ОС ({}): \"{}\"",
                     version_name, resolved->string());
       return true;
     }
@@ -142,7 +142,7 @@ bool WindowsDiskAnalyzer::tryAutoSelectWindowsRoot(
     const Config& config, const std::string& initial_check_error) {
   const auto logger = GlobalLogger::get();
   logger->warn("Выбранный корень анализа не подходит, запускается авто-поиск");
-  logger->debug("Причина переключения в режим авто-поиска: {}",
+  logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Причина переключения в режим авто-поиска: {}",
                 initial_check_error);
   logger->info("Запуск авто-поиска Windows-раздела...");
 
@@ -163,7 +163,7 @@ bool WindowsDiskAnalyzer::tryAutoSelectWindowsRoot(
   for (const auto& mount : mounted_roots) {
     if (!current_root.empty() && mount.mount_root == current_root) continue;
 
-    logger->debug("Проверка тома: \"{}\" ({})", mount.mount_root,
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Проверка тома: \"{}\" ({})", mount.mount_root,
                   formatDeviceLabel(mount.device_path));
 
     std::vector<std::string> mount_errors;
@@ -173,7 +173,7 @@ bool WindowsDiskAnalyzer::tryAutoSelectWindowsRoot(
             return containsAccessDenied(error);
           })) {
         access_denied_mounts++;
-        logger->debug("Том \"{}\" пропущен из-за ограничения доступа",
+        logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Том \"{}\" пропущен из-за ограничения доступа",
                       mount.mount_root);
       }
       continue;
@@ -186,7 +186,7 @@ bool WindowsDiskAnalyzer::tryAutoSelectWindowsRoot(
         summary.has_value()) {
       os_label = formatWindowsLabel(*summary);
     } else if (!summary_error.empty()) {
-      logger->debug("Не удалось определить версию ОС для \"{}\": {}",
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Не удалось определить версию ОС для \"{}\": {}",
                     mount.mount_root, summary_error);
     }
 
@@ -199,7 +199,7 @@ bool WindowsDiskAnalyzer::tryAutoSelectWindowsRoot(
       logger->warn("При авто-поиске нет доступа к {} томам",
                    access_denied_mounts);
     }
-    logger->debug("Авто-поиск проверил {} смонтированных томов",
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Авто-поиск проверил {} смонтированных томов",
                   mounted_roots.size());
     return false;
   }

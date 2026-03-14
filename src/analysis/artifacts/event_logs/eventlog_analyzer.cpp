@@ -40,7 +40,7 @@ std::vector<uint32_t> parseEventIds(const std::string& raw_ids,
     if (tryParseUInt32(id_str, event_id)) {
       ids.push_back(event_id);
     } else {
-      logger->debug("Некорректный {} ID события: \"{}\"", category, id_str);
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Некорректный {} ID события: \"{}\"", category, id_str);
     }
   }
 
@@ -415,7 +415,7 @@ EventLogFileParseResult parseLogFile(
     local_evtx_parser = std::make_unique<EventLogAnalysis::EvtxParser>();
     parser = local_evtx_parser.get();
   } else {
-    logger->debug("Неизвестный формат журнала: \"{}\"", file_path);
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Неизвестный формат журнала: \"{}\"", file_path);
     return result;
   }
 
@@ -445,7 +445,7 @@ EventLogFileParseResult parseLogFile(
       }
     } catch (const std::exception& e) {
       logger->error("Ошибка парсинга событий процессов");
-      logger->debug(
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, 
           "Ошибка парсинга process events: файл=\"{}\", event_id={}, {}",
           file_path, event_id, e.what());
     }
@@ -544,7 +544,7 @@ EventLogFileParseResult parseLogFile(
       }
     } catch (const std::exception& e) {
       logger->error("Ошибка парсинга сетевых событий");
-      logger->debug(
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, 
           "Ошибка парсинга network events: файл=\"{}\", event_id={}, {}",
           file_path, event_id, e.what());
     }
@@ -598,7 +598,7 @@ void EventLogAnalyzer::loadConfigurations(const std::string& ini_path) {
         "network", logger);
 
     configs_[version] = cfg;
-    logger->debug("Загружена конфигурация журналов для \"{}\"", version);
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Загружена конфигурация журналов для \"{}\"", version);
   }
 
   loadPerformanceOptions(config);
@@ -615,7 +615,7 @@ void EventLogAnalyzer::loadPerformanceOptions(const Config& config) {
                                       enable_parallel_eventlog_));
   } catch (const std::exception& e) {
     logger->warn("Некорректный параметр [Performance]/EnableParallelEventLog");
-    logger->debug("Ошибка чтения [Performance]/EnableParallelEventLog: {}",
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Ошибка чтения [Performance]/EnableParallelEventLog: {}",
                   e.what());
   }
 
@@ -627,7 +627,7 @@ void EventLogAnalyzer::loadPerformanceOptions(const Config& config) {
     }
   } catch (const std::exception& e) {
     logger->warn("Некорректный параметр [Performance]/WorkerThreads");
-    logger->debug("Ошибка чтения [Performance]/WorkerThreads: {}", e.what());
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Ошибка чтения [Performance]/WorkerThreads: {}", e.what());
   }
 
   worker_threads_ = std::max<std::size_t>(1, worker_threads_);
@@ -660,7 +660,7 @@ void EventLogAnalyzer::collect(
 
   if (!configs_.contains(os_version_)) {
     logger->warn("Конфигурация журналов событий не найдена");
-    logger->debug("Отсутствует EventLogs-конфигурация для версии \"{}\"",
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Отсутствует EventLogs-конфигурация для версии \"{}\"",
                   os_version_);
     return;
   }
@@ -672,7 +672,7 @@ void EventLogAnalyzer::collect(
   for (const auto& log_path : cfg.log_paths) {
     const std::string full_path = disk_root + log_path;
     if (!fs::exists(full_path)) {
-      logger->debug("Путь не существует: \"{}\"", full_path);
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Путь не существует: \"{}\"", full_path);
       continue;
     }
 
@@ -685,7 +685,7 @@ void EventLogAnalyzer::collect(
     } else if (fs::is_regular_file(full_path)) {
       files_to_parse.push_back(full_path);
     } else {
-      logger->debug("Путь не является ни файлом, ни директорией: \"{}\"",
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Путь не является ни файлом, ни директорией: \"{}\"",
                     full_path);
     }
   }
@@ -699,13 +699,13 @@ void EventLogAnalyzer::collect(
       enable_parallel_eventlog_ && worker_threads_ > 1 &&
       files_to_parse.size() > 1;
   if (use_parallel) {
-    logger->debug("EventLog: параллельный режим включен (workers={})",
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "EventLog: параллельный режим включен (workers={})",
                   std::min<std::size_t>(worker_threads_, files_to_parse.size()));
   }
   if (!use_parallel) {
     for (const auto& file_path : files_to_parse) {
       if (!fs::exists(file_path)) {
-        logger->debug("Файл был удалён: \"{}\"", file_path);
+        logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Файл был удалён: \"{}\"", file_path);
         continue;
       }
       auto parsed = parseLogFile(file_path, cfg, logger);

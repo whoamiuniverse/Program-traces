@@ -133,7 +133,7 @@ void OSDetection::loadConfiguration() {
         !cfg.registry_keys.empty()) {
       version_configs_.emplace(name, std::move(cfg));
       version_order_.push_back(name);
-      logger->debug("Загруженная конфигурация для ключей \"{}\": \"{}\"", name,
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Загруженная конфигурация для ключей \"{}\": \"{}\"", name,
                     version_configs_[name].registry_keys.size());
     }
   }
@@ -199,7 +199,7 @@ OSInfo OSDetection::detect() {
         break;
       }
     } catch (const std::exception& e) {
-      logger->debug("Не удалось выполнить проверку реестра для \"{}\". {}",
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Не удалось выполнить проверку реестра для \"{}\". {}",
                     version_name, e.what());
     }
   }
@@ -451,13 +451,13 @@ void OSDetection::enrichFromSystemHive(const std::string& system_hive_path,
             "CurrentControlSet/Control/ProductOptions/ProductType");
         product_type.has_value()) {
       info.system_product_type = *product_type;
-      logger->debug("ProductType из SYSTEM hive: {}", info.system_product_type);
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "ProductType из SYSTEM hive: {}", info.system_product_type);
       return;
     }
 
     const auto current_control_set = readCurrentControlSetIndex(system_hive_path);
     if (!current_control_set.has_value()) {
-      logger->debug(
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, 
           "Не удалось определить Select/Current в SYSTEM hive: \"{}\"",
           system_hive_path);
       return;
@@ -470,10 +470,10 @@ void OSDetection::enrichFromSystemHive(const std::string& system_hive_path,
     if (const auto product_type = read_product_type(control_set_path.str());
         product_type.has_value()) {
       info.system_product_type = *product_type;
-      logger->debug("ProductType из SYSTEM hive: {}", info.system_product_type);
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "ProductType из SYSTEM hive: {}", info.system_product_type);
     }
   } catch (const std::exception& e) {
-    logger->debug("Не удалось прочитать ProductType из SYSTEM hive \"{}\": {}",
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Не удалось прочитать ProductType из SYSTEM hive \"{}\": {}",
                   system_hive_path, e.what());
   }
 }

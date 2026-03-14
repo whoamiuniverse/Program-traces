@@ -32,7 +32,7 @@ void SecurityLogTamperDetector::detect(const ExecutionEvidenceContext& ctx,
       logger->warn("Обнаружены события очистки журнала Security (ID 1102)");
     }
   } catch (const std::exception& e) {
-    logger->debug("Проверка security_log_cleared пропущена: {}", e.what());
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Проверка security_log_cleared пропущена: {}", e.what());
   }
 }
 

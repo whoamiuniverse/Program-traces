@@ -88,7 +88,7 @@ void AutorunAnalyzer::loadConfigurations(const std::string& ini_path) {
     configs_[version] = cfg;
 
     // Логируем результат
-    logger->debug(
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, 
         "Загружена конфигурация для \"{}\": куст реестра \"{}\", {} ключей, {} "
         "путей ФС",
         version, cfg.registry_path.empty() ? "по умолчанию" : cfg.registry_path,
@@ -139,7 +139,7 @@ std::vector<AutorunEntry> AutorunAnalyzer::analyzeRegistry(
   const std::string full_reg_path = disk_root + cfg.registry_path;
   if (!std::filesystem::exists(full_reg_path)) {
     logger->warn("Файл куста реестра автозапуска не найден");
-    logger->debug("Путь к кусту реестра автозапуска: \"{}\"", full_reg_path);
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Путь к кусту реестра автозапуска: \"{}\"", full_reg_path);
     return entries;
   }
 
@@ -167,7 +167,7 @@ std::vector<AutorunEntry> AutorunAnalyzer::analyzeRegistry(
       }
     } catch (const std::exception& e) {
       logger->warn("Пропущен ключ автозапуска в реестре");
-      logger->debug("Ключ автозапуска \"{}\" пропущен: {}", location, e.what());
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Ключ автозапуска \"{}\" пропущен: {}", location, e.what());
     }
   }
 
@@ -203,7 +203,7 @@ std::vector<AutorunEntry> AutorunAnalyzer::analyzeFilesystem(
       }
     } catch (const std::exception& e) {
       logger->warn("Пропущен путь автозапуска в файловой системе");
-      logger->debug("Путь ФС \"{}\" пропущен: {}", path, e.what());
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Путь ФС \"{}\" пропущен: {}", path, e.what());
     }
   }
 

@@ -246,7 +246,7 @@ NativeVssParseResult parseVssVolumeNative(const fs::path& volume_path,
   libvshadow_error_t* error = nullptr;
 
   if (libvshadow_volume_initialize(&volume, &error) != 1 || volume == nullptr) {
-    logger->debug("VSS(native): инициализация libvshadow не удалась: {}",
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "VSS(native): инициализация libvshadow не удалась: {}",
                   toLibvshadowErrorMessage(error));
     libvshadow_error_free(&error);
     return result;
@@ -258,14 +258,14 @@ NativeVssParseResult parseVssVolumeNative(const fs::path& volume_path,
 
     libvshadow_error_t* close_error = nullptr;
     if (libvshadow_volume_close(volume, &close_error) != 0) {
-      logger->debug("VSS(native): close volume завершился с ошибкой: {}",
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "VSS(native): close volume завершился с ошибкой: {}",
                     toLibvshadowErrorMessage(close_error));
     }
     libvshadow_error_free(&close_error);
 
     libvshadow_error_t* free_error = nullptr;
     if (libvshadow_volume_free(&volume, &free_error) != 1) {
-      logger->debug("VSS(native): free volume завершился с ошибкой: {}",
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "VSS(native): free volume завершился с ошибкой: {}",
                     toLibvshadowErrorMessage(free_error));
     }
     libvshadow_error_free(&free_error);
@@ -275,7 +275,7 @@ NativeVssParseResult parseVssVolumeNative(const fs::path& volume_path,
   error = nullptr;
   if (libvshadow_volume_open(volume, volume_path.string().c_str(), access_flags,
                              &error) != 1) {
-    logger->debug("VSS(native): не удалось открыть \"{}\": {}",
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "VSS(native): не удалось открыть \"{}\": {}",
                   volume_path.string(), toLibvshadowErrorMessage(error));
     libvshadow_error_free(&error);
     free_volume();
@@ -288,7 +288,7 @@ NativeVssParseResult parseVssVolumeNative(const fs::path& volume_path,
   error = nullptr;
   if (libvshadow_volume_get_number_of_stores(volume, &store_count, &error) != 1 ||
       store_count <= 0) {
-    logger->debug("VSS(native): stores недоступны для \"{}\": {}",
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "VSS(native): stores недоступны для \"{}\": {}",
                   volume_path.string(), toLibvshadowErrorMessage(error));
     libvshadow_error_free(&error);
     free_volume();
@@ -305,7 +305,7 @@ NativeVssParseResult parseVssVolumeNative(const fs::path& volume_path,
     error = nullptr;
     if (libvshadow_volume_get_store(volume, store_index, &store, &error) != 1 ||
         store == nullptr) {
-      logger->debug("VSS(native): не удалось получить store #{}: {}",
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "VSS(native): не удалось получить store #{}: {}",
                     store_index, toLibvshadowErrorMessage(error));
       libvshadow_error_free(&error);
       continue;
@@ -316,7 +316,7 @@ NativeVssParseResult parseVssVolumeNative(const fs::path& volume_path,
       if (store == nullptr) return;
       libvshadow_error_t* free_error = nullptr;
       if (libvshadow_store_free(&store, &free_error) != 1) {
-        logger->debug("VSS(native): store free завершился с ошибкой: {}",
+        logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "VSS(native): store free завершился с ошибкой: {}",
                       toLibvshadowErrorMessage(free_error));
       }
       libvshadow_error_free(&free_error);
@@ -326,7 +326,7 @@ NativeVssParseResult parseVssVolumeNative(const fs::path& volume_path,
     const off64_t seek_result =
         libvshadow_store_seek_offset(store, 0, SEEK_SET, &seek_error);
     if (seek_result < 0) {
-      logger->debug("VSS(native): seek store #{} завершился с ошибкой: {}",
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "VSS(native): seek store #{} завершился с ошибкой: {}",
                     store_index, toLibvshadowErrorMessage(seek_error));
     }
     libvshadow_error_free(&seek_error);
@@ -411,7 +411,7 @@ void VSSAnalyzer::loadConfiguration() {
     }
   } catch (const std::exception& e) {
     logger->warn("Не удалось загрузить настройки VSS");
-    logger->debug("Ошибка чтения [Recovery]: {}", e.what());
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Ошибка чтения [Recovery]: {}", e.what());
   }
 }
 
@@ -419,7 +419,7 @@ std::vector<RecoveryEvidence> VSSAnalyzer::collect(
     const std::string& disk_root) const {
   const auto logger = GlobalLogger::get();
   if (!enabled_) {
-    logger->debug("VSS-анализ отключен в конфигурации");
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "VSS-анализ отключен в конфигурации");
     return {};
   }
 
@@ -458,7 +458,7 @@ std::vector<RecoveryEvidence> VSSAnalyzer::collect(
         volume_candidates.end());
 
     if (volume_candidates.empty()) {
-      logger->debug("VSS(native): не найден источник тома. Укажите "
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "VSS(native): не найден источник тома. Укажите "
                     "[Recovery]/VSSVolumePath (raw/device) для нативного парсинга.");
     }
 
@@ -474,7 +474,7 @@ std::vector<RecoveryEvidence> VSSAnalyzer::collect(
       appendUniqueEvidence(results, native_result.evidence, dedup);
     }
 #else
-    logger->debug("VSS(native): libvshadow недоступен в текущей сборке");
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "VSS(native): libvshadow недоступен в текущей сборке");
 #endif
   }
 

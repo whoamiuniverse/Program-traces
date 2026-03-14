@@ -44,7 +44,7 @@ PrefetchParser::PrefetchParser() {
   const auto logger = GlobalLogger::get();
 
   const char* version = libscca_get_version();
-  logger->debug("Инициализация парсера Prefetch-файлов (libscca: {})",
+  logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Инициализация парсера Prefetch-файлов (libscca: {})",
                 version == nullptr ? "unknown" : version);
 }
 
@@ -85,7 +85,7 @@ std::unique_ptr<IPrefetchData> PrefetchParser::parse(
     libscca_error_free(&close_error);
   });
 
-  logger->debug("Начало обработки файла: \"{}\"", path);
+  logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Начало обработки файла: \"{}\"", path);
 
   libscca_error = nullptr;
   if (libscca_file_open(scca_handle, path.c_str(), LIBSCCA_ACCESS_FLAG_READ,
@@ -119,7 +119,7 @@ std::unique_ptr<IPrefetchData> PrefetchParser::parse(
     logger->warn("Ошибка чтения метрик в файле \"{}\": {}", path, e.what());
   }
 
-  logger->debug("Файл успешно обработан");
+  logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Файл успешно обработан");
   return builder.build();
 }
 
@@ -127,7 +127,7 @@ void PrefetchParser::parseBasicInfo(libscca_file_t* scca_handle,
                                     PrefetchDataBuilder& builder) const {
   const auto logger = GlobalLogger::get();
 
-  logger->debug("Извлечение основной информации");
+  logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Извлечение основной информации");
 
   size_t name_length = 0;
   libscca_error_t* libscca_error = nullptr;
@@ -165,7 +165,7 @@ void PrefetchParser::parseBasicInfo(libscca_file_t* scca_handle,
   libscca_error = nullptr;
   if (libscca_file_get_prefetch_hash(scca_handle, &prefetch_hash,
                                      &libscca_error) != 1) {
-    logger->debug("Хэш prefetch недоступен: {}",
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Хэш prefetch недоступен: {}",
                   toLibsccaErrorMessage(libscca_error));
   }
   libscca_error_free(&libscca_error);
@@ -174,7 +174,7 @@ void PrefetchParser::parseBasicInfo(libscca_file_t* scca_handle,
   uint32_t run_count = 0;
   libscca_error = nullptr;
   if (libscca_file_get_run_count(scca_handle, &run_count, &libscca_error) != 1) {
-    logger->debug("Счётчик запусков недоступен: {}",
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Счётчик запусков недоступен: {}",
                   toLibsccaErrorMessage(libscca_error));
   }
   libscca_error_free(&libscca_error);
@@ -208,7 +208,7 @@ void PrefetchParser::parseRunTimes(libscca_file_t* scca_handle,
                                    PrefetchDataBuilder& builder) const {
   const auto logger = GlobalLogger::get();
 
-  logger->debug("Извлечение временных меток запусков");
+  logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Извлечение временных меток запусков");
 
   constexpr int kMaxRunTimes = 8;
   std::vector<uint64_t> valid_unix_times;
@@ -233,7 +233,7 @@ void PrefetchParser::parseRunTimes(libscca_file_t* scca_handle,
       builder.addRunTime(unix_time);
       valid_unix_times.push_back(unix_time);
     } catch (const InvalidTimestampException& e) {
-      logger->debug("Некорректная метка времени: \"{}\"", e.what());
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Некорректная метка времени: \"{}\"", e.what());
     }
   }
 
@@ -246,7 +246,7 @@ void PrefetchParser::parseVolumes(libscca_file_t* scca_handle,
                                   PrefetchDataBuilder& builder) const {
   const auto logger = GlobalLogger::get();
 
-  logger->debug("Извлечение информации о томах");
+  logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Извлечение информации о томах");
 
   int32_t volume_count = 0;
   libscca_error_t* libscca_error = nullptr;
@@ -263,7 +263,7 @@ void PrefetchParser::parseVolumes(libscca_file_t* scca_handle,
     libscca_error = nullptr;
     if (libscca_file_get_volume_information(scca_handle, i, &vol_info,
                                             &libscca_error) != 1) {
-      logger->debug("Ошибка чтения информации о томе \"{}\": {}", i,
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Ошибка чтения информации о томе \"{}\": {}", i,
                     toLibsccaErrorMessage(libscca_error));
       libscca_error_free(&libscca_error);
       continue;
@@ -274,7 +274,7 @@ void PrefetchParser::parseVolumes(libscca_file_t* scca_handle,
       if (vol_info == nullptr) return;
       libscca_error_t* free_error = nullptr;
       if (libscca_volume_information_free(&vol_info, &free_error) != 1) {
-        logger->debug("Не удалось освободить volume_information: {}",
+        logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Не удалось освободить volume_information: {}",
                       toLibsccaErrorMessage(free_error));
       }
       libscca_error_free(&free_error);
@@ -297,12 +297,12 @@ void PrefetchParser::parseVolumes(libscca_file_t* scca_handle,
             reinterpret_cast<const char*>(device_path_buffer.data()));
         std::ranges::replace(normalized_path, '\\', '/');
       } else {
-        logger->debug("Ошибка чтения пути устройства тома {}: {}", i,
+        logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Ошибка чтения пути устройства тома {}: {}", i,
                       toLibsccaErrorMessage(libscca_error));
       }
       libscca_error_free(&libscca_error);
     } else {
-      logger->debug("Путь устройства для тома {} недоступен: {}", i,
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Путь устройства для тома {} недоступен: {}", i,
                     toLibsccaErrorMessage(libscca_error));
       libscca_error_free(&libscca_error);
     }
@@ -312,7 +312,7 @@ void PrefetchParser::parseVolumes(libscca_file_t* scca_handle,
     libscca_error = nullptr;
     if (libscca_volume_information_get_serial_number(vol_info, &serial,
                                                      &libscca_error) != 1) {
-      logger->debug("Серийный номер тома {} недоступен: {}", i,
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Серийный номер тома {} недоступен: {}", i,
                     toLibsccaErrorMessage(libscca_error));
     }
     libscca_error_free(&libscca_error);
@@ -320,7 +320,7 @@ void PrefetchParser::parseVolumes(libscca_file_t* scca_handle,
     libscca_error = nullptr;
     if (libscca_volume_information_get_creation_time(vol_info, &creation_time,
                                                      &libscca_error) != 1) {
-      logger->debug("Время создания тома {} недоступно: {}", i,
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Время создания тома {} недоступно: {}", i,
                     toLibsccaErrorMessage(libscca_error));
     }
     libscca_error_free(&libscca_error);
@@ -328,7 +328,7 @@ void PrefetchParser::parseVolumes(libscca_file_t* scca_handle,
     try {
       builder.addVolume(VolumeInfo(normalized_path, serial, creation_time));
     } catch (const std::exception& e) {
-      logger->debug("Ошибка обработки тома \"{}\": {}", normalized_path,
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Ошибка обработки тома \"{}\": {}", normalized_path,
                     e.what());
     }
   }
@@ -338,7 +338,7 @@ void PrefetchParser::parseMetrics(libscca_file_t* scca_handle,
                                   PrefetchDataBuilder& builder) const {
   const auto logger = GlobalLogger::get();
 
-  logger->debug("Извлечение файловых метрик");
+  logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Извлечение файловых метрик");
 
   int metric_count = 0;
   libscca_error_t* libscca_error = nullptr;
@@ -355,7 +355,7 @@ void PrefetchParser::parseMetrics(libscca_file_t* scca_handle,
     libscca_error = nullptr;
     if (libscca_file_get_file_metrics_entry(scca_handle, i, &metric,
                                             &libscca_error) != 1) {
-      logger->debug("Ошибка чтения метрики \"{}\": {}", i,
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Ошибка чтения метрики \"{}\": {}", i,
                     toLibsccaErrorMessage(libscca_error));
       libscca_error_free(&libscca_error);
       continue;
@@ -366,7 +366,7 @@ void PrefetchParser::parseMetrics(libscca_file_t* scca_handle,
       if (metric == nullptr) return;
       libscca_error_t* free_error = nullptr;
       if (libscca_file_metrics_free(&metric, &free_error) != 1) {
-        logger->debug("Не удалось освободить file_metrics: {}",
+        logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Не удалось освободить file_metrics: {}",
                       toLibsccaErrorMessage(free_error));
       }
       libscca_error_free(&free_error);
@@ -377,7 +377,7 @@ void PrefetchParser::parseMetrics(libscca_file_t* scca_handle,
     if (libscca_file_metrics_get_utf8_filename_size(metric, &name_size,
                                                     &libscca_error) != 1 ||
         name_size <= 1) {
-      logger->debug("Имя файла для метрики {} недоступно: {}", i,
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Имя файла для метрики {} недоступно: {}", i,
                     toLibsccaErrorMessage(libscca_error));
       libscca_error_free(&libscca_error);
       continue;
@@ -389,7 +389,7 @@ void PrefetchParser::parseMetrics(libscca_file_t* scca_handle,
     if (libscca_file_metrics_get_utf8_filename(metric, filename_buffer.data(),
                                                filename_buffer.size(),
                                                &libscca_error) != 1) {
-      logger->debug("Ошибка чтения имени файла для метрики {}: {}", i,
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Ошибка чтения имени файла для метрики {}: {}", i,
                     toLibsccaErrorMessage(libscca_error));
       libscca_error_free(&libscca_error);
       continue;
@@ -407,7 +407,7 @@ void PrefetchParser::parseMetrics(libscca_file_t* scca_handle,
         libscca_file_metrics_get_file_reference(metric, &file_ref,
                                                 &libscca_error);
     if (file_ref_result == -1) {
-      logger->debug("Ошибка чтения MFT-ссылки для \"{}\": {}",
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Ошибка чтения MFT-ссылки для \"{}\": {}",
                     normalized_filename, toLibsccaErrorMessage(libscca_error));
     }
     libscca_error_free(&libscca_error);
@@ -415,7 +415,7 @@ void PrefetchParser::parseMetrics(libscca_file_t* scca_handle,
     try {
       builder.addMetric(FileMetric(normalized_filename, file_ref));
     } catch (const std::exception& e) {
-      logger->debug("Ошибка обработки метрики \"{}\": {}", normalized_filename,
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Ошибка обработки метрики \"{}\": {}", normalized_filename,
                     e.what());
     }
   }

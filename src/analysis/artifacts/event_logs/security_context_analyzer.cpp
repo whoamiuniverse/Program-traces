@@ -747,7 +747,7 @@ void SecurityContextAnalyzer::collect(
   std::error_code ec;
   if (!fs::exists(security_log_path, ec) || ec) {
     logger->warn("SecurityContext: Security log не найден");
-    logger->debug("SecurityContext: отсутствует файл \"{}\"",
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "SecurityContext: отсутствует файл \"{}\"",
                   security_log_path);
     return;
   }
@@ -755,7 +755,7 @@ void SecurityContextAnalyzer::collect(
   EventLogAnalysis::IEventLogParser* parser = getParserForFile(security_log_path);
   if (parser == nullptr) {
     logger->warn("SecurityContext: неподдерживаемый формат Security log");
-    logger->debug("SecurityContext: расширение файла \"{}\" не поддерживается",
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "SecurityContext: расширение файла \"{}\" не поддерживается",
                   security_log_path);
     return;
   }
@@ -765,7 +765,7 @@ void SecurityContextAnalyzer::collect(
     events = parser->parseEvents(security_log_path);
   } catch (const std::exception& exception) {
     logger->error("SecurityContext: ошибка разбора Security log");
-    logger->debug("SecurityContext: parseEvents(\"{}\") failed: {}",
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "SecurityContext: parseEvents(\"{}\") failed: {}",
                   security_log_path, exception.what());
     return;
   }

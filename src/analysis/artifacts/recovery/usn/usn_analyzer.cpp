@@ -293,7 +293,7 @@ NativeUsnParseResult parseUsnFileNative(const fs::path& file_path,
   libfusn_record_t* record = nullptr;
   libfusn_error_t* error = nullptr;
   if (libfusn_record_initialize(&record, &error) != 1 || record == nullptr) {
-    logger->debug("USN(native): инициализация libfusn не удалась: {}",
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "USN(native): инициализация libfusn не удалась: {}",
                   toLibfusnErrorMessage(error));
     libfusn_error_free(&error);
     return result;
@@ -304,7 +304,7 @@ NativeUsnParseResult parseUsnFileNative(const fs::path& file_path,
     if (record == nullptr) return;
     libfusn_error_t* free_error = nullptr;
     if (libfusn_record_free(&record, &free_error) != 1) {
-      logger->debug("USN(native): ошибка освобождения record: {}",
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "USN(native): ошибка освобождения record: {}",
                     toLibfusnErrorMessage(free_error));
     }
     libfusn_error_free(&free_error);
@@ -478,7 +478,7 @@ void USNAnalyzer::loadConfiguration() {
     }
   } catch (const std::exception& e) {
     logger->warn("Не удалось загрузить настройки USN");
-    logger->debug("Ошибка чтения [Recovery]: {}", e.what());
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Ошибка чтения [Recovery]: {}", e.what());
   }
 }
 
@@ -486,7 +486,7 @@ std::vector<RecoveryEvidence> USNAnalyzer::collect(
     const std::string& disk_root) const {
   const auto logger = GlobalLogger::get();
   if (!enabled_) {
-    logger->debug("USN-анализ отключен в конфигурации");
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "USN-анализ отключен в конфигурации");
     return {};
   }
 
@@ -529,7 +529,7 @@ std::vector<RecoveryEvidence> USNAnalyzer::collect(
           (!native_result.success || native_result.evidence.empty());
       appendUniqueEvidence(results, native_result.evidence, dedup);
 #else
-      logger->debug("USN(native): libfusn недоступен в текущей сборке");
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "USN(native): libfusn недоступен в текущей сборке");
       need_binary_fallback = true;
 #endif
     }
@@ -560,7 +560,7 @@ std::vector<RecoveryEvidence> USNAnalyzer::collect(
   }
 
   if (enable_native_usn_parser_ && native_count == 0 && binary_count == 0) {
-    logger->debug("USN(native): источник не найден. Укажите [Recovery]/USNJournalPath "
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "USN(native): источник не найден. Укажите [Recovery]/USNJournalPath "
                   "или предоставьте доступ к $Extend/$UsnJrnl.");
   }
 

@@ -96,7 +96,7 @@ void UserAssistRunMruCollector::collect(const ExecutionEvidenceContext& ctx,
               }
             }
           } catch (const std::exception& e) {
-            logger->debug("UserAssist пропущен для {}: {}", hive, e.what());
+            logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "UserAssist пропущен для {}: {}", hive, e.what());
           }
         }
 
@@ -120,7 +120,7 @@ void UserAssistRunMruCollector::collect(const ExecutionEvidenceContext& ctx,
               result.runmru_count++;
             }
           } catch (const std::exception& e) {
-            logger->debug("RunMRU пропущен для {}: {}", hive, e.what());
+            logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "RunMRU пропущен для {}: {}", hive, e.what());
           }
         }
       };
@@ -130,7 +130,7 @@ void UserAssistRunMruCollector::collect(const ExecutionEvidenceContext& ctx,
   const bool use_parallel = ctx.enable_parallel_user_hives &&
                             ctx.worker_threads > 1 && user_hives.size() > 1;
   if (use_parallel) {
-    logger->debug("Execution(UserAssist/RunMRU): параллельный режим (workers={})",
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Execution(UserAssist/RunMRU): параллельный режим (workers={})",
                   std::min<std::size_t>(ctx.worker_threads, user_hives.size()));
   }
   if (!use_parallel) {

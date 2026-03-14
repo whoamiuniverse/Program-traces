@@ -17,7 +17,7 @@ constexpr uint64_t EPOCH_DIFFERENCE =
 
 EvtParser::EvtParser() {
   const auto logger = GlobalLogger::get();
-  logger->debug("Инициализация EvtParser");
+  logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Инициализация EvtParser");
 
   libevt_error_t* error = nullptr;
   if (libevt_file_initialize(&evt_file_, &error) != 1) {
@@ -45,14 +45,14 @@ void EvtParser::OpenLogFile(const std::string& file_path) {
   const auto logger = GlobalLogger::get();
 
   if (file_opened_) {
-    logger->debug("Закрытие предыдущего открытого EVT файла");
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Закрытие предыдущего открытого EVT файла");
     CloseLogFile();
   }
 
   libevt_error_t* error = nullptr;
   int access_flags = libevt_get_access_flags_read();
 
-  logger->debug("Открытие EVT файла: \"{}\"", file_path);
+  logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Открытие EVT файла: \"{}\"", file_path);
   if (libevt_file_open(evt_file_, file_path.c_str(), access_flags, &error) !=
       1) {
     std::string error_msg = "Не удалось открыть файл: "s + file_path;
@@ -72,7 +72,7 @@ void EvtParser::CloseLogFile() {
   const auto logger = GlobalLogger::get();
 
   if (file_opened_ && evt_file_) {
-    logger->debug("Закрытие EVT файла");
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Закрытие EVT файла");
     libevt_file_close(evt_file_, nullptr);
     file_opened_ = false;
   }
@@ -235,7 +235,7 @@ std::unique_ptr<EventData> EvtParser::ParseRecord(libevt_record_t* record) {
 std::vector<std::unique_ptr<IEventData>> EvtParser::parseEvents(
     const std::string& file_path) {
   const auto logger = GlobalLogger::get();
-  logger->debug("Разбор событий из EVT файла: \"{}\"", file_path);
+  logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Разбор событий из EVT файла: \"{}\"", file_path);
 
   try {
     OpenLogFile(file_path);
@@ -258,7 +258,7 @@ std::vector<std::unique_ptr<IEventData>> EvtParser::parseEvents(
       throw DataReadException(error_msg);
     }
 
-    logger->debug("Найдено \"{}\" записей в EVT файле", record_count);
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Найдено \"{}\" записей в EVT файле", record_count);
 
     // Получение всех записей
     for (int i = 0; i < record_count; i++) {
@@ -271,7 +271,7 @@ std::vector<std::unique_ptr<IEventData>> EvtParser::parseEvents(
       }
     }
 
-    logger->debug("Успешно разобрано \"{}\" событий", events.size());
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Успешно разобрано \"{}\" событий", events.size());
     return events;
   } catch (...) {
     CloseLogFile();
@@ -282,7 +282,7 @@ std::vector<std::unique_ptr<IEventData>> EvtParser::parseEvents(
 std::vector<std::unique_ptr<IEventData>> EvtParser::getEventsByType(
     const std::string& file_path, uint32_t event_id) {
   const auto logger = GlobalLogger::get();
-  logger->debug("Фильтрация событий по ID \"{}\" из EVT файла: \"{}\"", event_id,
+  logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Фильтрация событий по ID \"{}\" из EVT файла: \"{}\"", event_id,
                file_path);
 
   try {
@@ -306,7 +306,7 @@ std::vector<std::unique_ptr<IEventData>> EvtParser::getEventsByType(
       throw DataReadException(error_msg);
     }
 
-    logger->debug("Найдено \"{}\" записей в EVT файле", record_count);
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Найдено \"{}\" записей в EVT файле", record_count);
 
     // Фильтрация записей по ID события
     for (int i = 0; i < record_count; i++) {
@@ -324,7 +324,7 @@ std::vector<std::unique_ptr<IEventData>> EvtParser::getEventsByType(
       }
     }
 
-    logger->debug("Найдено \"{}\" событий с ID \"{}\"", filtered_events.size(),
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Найдено \"{}\" событий с ID \"{}\"", filtered_events.size(),
                  event_id);
     return filtered_events;
   } catch (...) {

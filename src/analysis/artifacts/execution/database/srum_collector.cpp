@@ -102,7 +102,7 @@ std::size_t collectSrumNative(
     const std::string details = toLibesedbErrorMessage(error);
     free_error();
     close_file();
-    logger->debug("SRUM(native): не удалось инициализировать libesedb: {}",
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "SRUM(native): не удалось инициализировать libesedb: {}",
                   details);
     return 0;
   }
@@ -123,7 +123,7 @@ std::size_t collectSrumNative(
     const std::string details = toLibesedbErrorMessage(error);
     free_error();
     close_file();
-    logger->debug("SRUM(native): не удалось получить список таблиц: {}",
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "SRUM(native): не удалось получить список таблиц: {}",
                   details);
     return 0;
   }
@@ -395,7 +395,7 @@ void SrumCollector::collect(const ExecutionEvidenceContext& ctx,
 
   if (!ctx.config.srum_fallback_to_binary_on_native_failure &&
       native_attempted) {
-    logger->debug(
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, 
         "SRUM fallback отключен, бинарный режим не используется после "
         "неуспеха native-парсера");
     return;

@@ -59,7 +59,7 @@ std::vector<MountedRootInfo> listMountedRoots() {
     std::error_code ec;
     if (!fs::is_directory(root_path, ec) || ec) {
       if (ec) {
-        logger->debug("Пропуск точки монтирования \"{}\": {}", root_path_raw,
+        logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Пропуск точки монтирования \"{}\": {}", root_path_raw,
                       formatFilesystemError(ec));
       }
       return;

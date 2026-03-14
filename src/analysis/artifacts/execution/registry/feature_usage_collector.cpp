@@ -56,7 +56,7 @@ void FeatureUsageCollector::collect(const ExecutionEvidenceContext& ctx,
           try {
             values = parser.getKeyValues(hive, key_path);
           } catch (const std::exception& e) {
-            logger->debug("FeatureUsage {} пропущен для {}: {}", key_tag, hive,
+            logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "FeatureUsage {} пропущен для {}: {}", key_tag, hive,
                           e.what());
             continue;
           }
@@ -126,7 +126,7 @@ void FeatureUsageCollector::collect(const ExecutionEvidenceContext& ctx,
                             ctx.worker_threads > 1 && user_hives.size() > 1;
   std::size_t collected = 0;
   if (use_parallel) {
-    logger->debug("Execution(FeatureUsage): параллельный режим (workers={})",
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Execution(FeatureUsage): параллельный режим (workers={})",
                   std::min<std::size_t>(ctx.worker_threads, user_hives.size()));
   }
   if (!use_parallel) {
