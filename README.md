@@ -21,10 +21,10 @@ cmake --build build -j
 
 ```bash
 ./build/program_traces <disk_root|auto> <config.ini> <output.csv>
-./build/program_traces --log ./logs/program-traces.log <config.ini> <output.csv>
+./build/program_traces -l ./logs/program-traces.log <config.ini> <output.csv>
 ./build/program_traces -d auto -c ./config.ini -o ~/Desktop/result.csv
 ./build/program_traces -c ./config.ini -o ~/Desktop/result.csv --recovery-csv
-./build/program_traces -c ./config.ini -o ~/Desktop/result.csv --recovery-output ~/Desktop/recovery.csv
+./build/program_traces -c ./config.ini -o ~/Desktop/result.csv -R ~/Desktop/recovery.csv
 ```
 
 Примеры:
@@ -34,6 +34,8 @@ cmake --build build -j
 ./build/program_traces ./config.ini ~/Desktop/result.csv
 ./build/program_traces --disk-root /Volumes/Untitled --config ./config.ini --output ~/Desktop/result.csv
 ```
+
+`auto` для `disk_root` означает автоматический поиск Windows-тома среди смонтированных дисков.
 
 ## CLI
 
