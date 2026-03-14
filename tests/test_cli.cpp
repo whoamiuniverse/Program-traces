@@ -32,6 +32,11 @@ TEST(CliIntegrationTest, HelpAndVersionReturnExpectedText) {
   const std::string help_output = runCommand(binary + " --help 2>&1");
   EXPECT_NE(help_output.find("Использование:"), std::string::npos);
   EXPECT_NE(help_output.find("--log <path>"), std::string::npos);
+  EXPECT_NE(help_output.find("--recovery-csv"), std::string::npos);
+  EXPECT_NE(help_output.find("--recovery-output <path>"), std::string::npos);
+  EXPECT_NE(help_output.find("--disk-root"), std::string::npos);
+  EXPECT_NE(help_output.find("--config"), std::string::npos);
+  EXPECT_NE(help_output.find("--output"), std::string::npos);
 
   const std::string version_output = runCommand(binary + " --version 2>&1");
   EXPECT_NE(version_output.find("Program traces"), std::string::npos);

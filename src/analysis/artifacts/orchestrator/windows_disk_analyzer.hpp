@@ -26,6 +26,13 @@ namespace WindowsDiskAnalysis {
 /// @brief Координирует запуск всех анализаторов артефактов и экспорт результата
 class WindowsDiskAnalyzer {
  public:
+  /// @struct AnalyzeOutputOptions
+  /// @brief Параметры формирования выходных файлов анализа.
+  struct AnalyzeOutputOptions {
+    bool export_recovery_csv = false;  ///< Создавать `<output_base>_recovery.csv`.
+    std::string recovery_output_path;  ///< Явный путь recovery CSV (опционально).
+  };
+
   /// @brief Создаёт оркестратор анализа диска
   /// @param disk_root   Корневой путь подключённого диска Windows
   /// @param config_path Путь к основному конфигурационному INI-файлу
@@ -33,12 +40,19 @@ class WindowsDiskAnalyzer {
 
   /// @brief Выполняет полный анализ и сохраняет итоговый CSV-отчёт
   /// @param output_path Путь к каталогу или файлу для результатов
+  /// @param options Дополнительные параметры выходных файлов.
   /// @throws ConfigException           При ошибках загрузки конфигурации
   /// @throws OSDetectionException      При ошибках определения версии ОС
   /// @throws DiskAnalyzerException     При ошибках выбора/валидации диска
   /// @throws ParsingException          При ошибках разбора артефактов
   /// @throws CsvExportException        При ошибках экспорта отчёта
   void analyze(const std::string& output_path);
+
+  /// @brief Выполняет полный анализ с расширенными параметрами выхода.
+  /// @param output_path Путь к основному output CSV.
+  /// @param options Параметры формирования выходных файлов.
+  void analyze(const std::string& output_path,
+               const AnalyzeOutputOptions& options);
 
  private:
   // ------------------------------------------------------------------ types
@@ -152,7 +166,8 @@ class WindowsDiskAnalyzer {
   void applyTamperRules();
 
   /// @brief Экспортирует агрегированные данные в CSV
-  void exportCsv(const std::string& output_path);
+  void exportCsv(const std::string& output_path,
+                 const AnalyzeOutputOptions& options);
 
   // -------------------------------------------------------------- state
 

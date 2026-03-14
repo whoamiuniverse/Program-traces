@@ -363,7 +363,12 @@ void writeAggregatedRow(std::ofstream& file, const std::string& aggregation_key,
   file << escapeCsvField(tamper_flags_str) << '\n';
 }
 
-std::filesystem::path buildRecoveryOutputPath(const std::string& output_path) {
+std::filesystem::path buildRecoveryOutputPath(
+    const std::string& output_path, const std::string& explicit_recovery_path) {
+  if (!explicit_recovery_path.empty()) {
+    return explicit_recovery_path;
+  }
+
   const std::filesystem::path base_path(output_path);
   const std::filesystem::path parent = base_path.parent_path();
   const std::string stem = base_path.stem().empty()
@@ -387,6 +392,22 @@ void writeRecoveryRows(std::ofstream& file,
   }
 }
 
+void exportRecoveryCsv(
+    const std::string& output_path,
+    const std::vector<WindowsDiskAnalysis::RecoveryEvidence>& recovery_evidence,
+    const WindowsDiskAnalysis::CSVExportOptions& options) {
+  const std::filesystem::path recovery_output_path =
+      buildRecoveryOutputPath(output_path, options.recovery_output_path);
+  std::ofstream recovery_file(recovery_output_path, std::ios::binary);
+  if (!recovery_file.is_open()) {
+    throw WindowsDiskAnalysis::FileOpenException(recovery_output_path.string());
+  }
+
+  recovery_file.write("\xEF\xBB\xBF", 3);
+  writeRecoveryCsvHeader(recovery_file);
+  writeRecoveryRows(recovery_file, recovery_evidence);
+}
+
 }  // namespace
 
 namespace WindowsDiskAnalysis {
@@ -397,7 +418,8 @@ void CSVExporter::exportToCSV(
     const std::unordered_map<std::string, ProcessInfo>& process_data,
     const std::vector<NetworkConnection>& network_connections,
     const std::vector<AmcacheEntry>& amcache_entries,
-    const std::vector<RecoveryEvidence>& recovery_evidence) {
+    const std::vector<RecoveryEvidence>& recovery_evidence,
+    const CSVExportOptions& options) {
   std::ofstream file(output_path, std::ios::binary);
   if (!file.is_open()) {
     throw FileOpenException(output_path);
@@ -602,15 +624,9 @@ void CSVExporter::exportToCSV(
                              e.what());
   }
 
-  const std::filesystem::path recovery_output_path =
-      buildRecoveryOutputPath(output_path);
-  std::ofstream recovery_file(recovery_output_path, std::ios::binary);
-  if (!recovery_file.is_open()) {
-    throw FileOpenException(recovery_output_path.string());
+  if (options.export_recovery_csv) {
+    exportRecoveryCsv(output_path, recovery_evidence, options);
   }
-  recovery_file.write("\xEF\xBB\xBF", 3);
-  writeRecoveryCsvHeader(recovery_file);
-  writeRecoveryRows(recovery_file, recovery_evidence);
 }
 
 }  // namespace WindowsDiskAnalysis
