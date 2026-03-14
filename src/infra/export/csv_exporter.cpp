@@ -4,7 +4,6 @@
 #include "csv_exporter.hpp"
 
 #include <algorithm>
-#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <set>
@@ -13,6 +12,7 @@
 #include <vector>
 
 #include "analysis/artifacts/data/analysis_data.hpp"
+#include "common/path_utils.hpp"
 #include "csv_exporter_filtering.hpp"
 #include "csv_exporter_utils.hpp"
 #include "errors/csv_export_exception.hpp"
@@ -35,7 +35,7 @@ constexpr std::string_view kCsvHeader =
     "LogonTypes;ElevationType;ElevatedToken;IntegrityLevel;Privileges;"
     "Автозагрузка;СледыУдаления;КоличествоЗапусков;Тома(серийный:тип);"
     "СетевыеПодключения;NetworkTimelineArtifacts;NetworkContextSources;"
-    "NetworkProfiles;FirewallRules;ФайловыеМетрики;EvidenceSources;"
+    "NetworkProfiles;ФайловыеМетрики;EvidenceSources;"
     "TamperFlags\n";
 
 constexpr std::string_view kRecoveryCsvHeader =
@@ -244,6 +244,29 @@ std::string serializeNetworkSummary(
       /*include_prefix=*/false);
 }
 
+std::string selectExecutablePathForAmcache(
+    const WindowsDiskAnalysis::AmcacheEntry& entry) {
+  const auto pick_if_valid = [](const std::string& raw_path) -> std::string {
+    if (raw_path.empty()) {
+      return {};
+    }
+    const std::string normalized = normalizePath(raw_path);
+    if (normalized.empty() ||
+        !PathUtils::isExecutionPathCandidate(normalized)) {
+      return {};
+    }
+    return raw_path;
+  };
+
+  if (std::string path = pick_if_valid(entry.file_path); !path.empty()) {
+    return path;
+  }
+  if (std::string path = pick_if_valid(entry.alternate_path); !path.empty()) {
+    return path;
+  }
+  return {};
+}
+
 void writeAggregatedRow(std::ofstream& file, const std::string& aggregation_key,
                         const WindowsDiskAnalysis::AggregatedData& row) {
   const std::string_view filename =
@@ -285,7 +308,6 @@ void writeAggregatedRow(std::ofstream& file, const std::string& aggregation_key,
       joinStrings(row.network_context_sources);
   const std::string network_profiles_str =
       joinStrings(row.network_profile_artifacts);
-  const std::string firewall_rules_str = joinStrings(row.firewall_rule_artifacts);
 
   std::vector<std::string> volume_values;
   volume_values.reserve(row.volumes.size());
@@ -336,7 +358,6 @@ void writeAggregatedRow(std::ofstream& file, const std::string& aggregation_key,
   writeEscapedField(network_timeline_artifacts_str);
   writeEscapedField(network_context_sources_str);
   writeEscapedField(network_profiles_str);
-  writeEscapedField(firewall_rules_str);
   writeEscapedField(metrics_str);
   writeEscapedField(evidence_sources_str);
   file << escapeCsvField(tamper_flags_str) << '\n';
@@ -405,13 +426,7 @@ void CSVExporter::exportToCSV(
       std::string filename = getFilenameFromPath(norm_path);
       if (filename.empty()) return;
 
-      const bool has_explicit_path =
-          norm_path.find('\\') != std::string::npos ||
-          norm_path.find('/') != std::string::npos ||
-          (norm_path.size() >= 3 &&
-           std::isalpha(static_cast<unsigned char>(norm_path[0])) != 0 &&
-           norm_path[1] == ':' &&
-           (norm_path[2] == '\\' || norm_path[2] == '/'));
+      const bool has_explicit_path = PathUtils::hasPathContext(norm_path);
       const std::string aggregation_key =
           toLowerAscii(has_explicit_path ? norm_path : filename);
 
@@ -482,9 +497,6 @@ void CSVExporter::exportToCSV(
                   if (lowered.find("[networkprofile]") != std::string::npos) {
                     data.network_profile_artifacts.insert(timeline);
                   }
-                  if (lowered.find("[firewallrule]") != std::string::npos) {
-                    data.firewall_rule_artifacts.insert(timeline);
-                  }
                 }
               }
             }
@@ -539,12 +551,11 @@ void CSVExporter::exportToCSV(
     // 4. Обрабатываем данные Amcache - добавляем версии, хэши, размеры и время
     // изменения
     for (const auto& entry : amcache_entries) {
-      // Используем file_path как основной идентификатор
-      std::string path = entry.file_path;
-      if (path.empty() && !entry.name.empty()) {
-        path = entry.name;  // fallback на имя файла
-      }
-      if (path.empty()) continue;  // пропускаем если нет идентификатора
+      // Принимаем только записи, где известен путь к исполняемому файлу.
+      // Приложения/пакеты из InventoryApplication без пути к exe
+      // не должны создавать отдельные process-строки в CSV.
+      const std::string path = selectExecutablePathForAmcache(entry);
+      if (path.empty()) continue;
 
       processEntry(path,
                    [&](AggregatedData& data, const std::string& norm_path) {

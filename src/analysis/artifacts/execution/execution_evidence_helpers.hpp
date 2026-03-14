@@ -268,21 +268,6 @@ std::vector<std::string> extractSidCandidatesFromLine(const std::string& line);
 /// @return Formatted UTC timestamp string, or an empty string if out of range.
 std::string formatReasonableFiletime(uint64_t filetime);
 
-/// @brief Normalizes a raw firewall rule direction string to a canonical label.
-/// @param raw_direction Raw direction string from the registry.
-/// @return Normalized direction string (e.g., @c "Inbound" or @c "Outbound").
-std::string normalizeFirewallDirection(std::string raw_direction);
-
-/// @brief Normalizes a raw firewall rule action string to a canonical label.
-/// @param raw_action Raw action string from the registry.
-/// @return Normalized action string (e.g., @c "Allow" or @c "Block").
-std::string normalizeFirewallAction(std::string raw_action);
-
-/// @brief Normalizes a raw firewall rule protocol string to a canonical label.
-/// @param raw_protocol Raw protocol string from the registry.
-/// @return Normalized protocol string (e.g., @c "TCP", @c "UDP", @c "Any").
-std::string normalizeFirewallProtocol(std::string raw_protocol);
-
 /// @brief Parses a @c SYSTEMTIME structure from a registry binary blob.
 /// @param binary Binary data blob containing the @c SYSTEMTIME structure.
 /// @return Formatted UTC timestamp string on success, or @c std::nullopt on failure.
@@ -293,12 +278,6 @@ std::optional<std::string> parseRegistrySystemTime(
 /// @param raw_category Raw category string or integer from the registry.
 /// @return Normalized category string (e.g., @c "Public", @c "Private", @c "Domain").
 std::string normalizeNetworkProfileCategory(std::string raw_category);
-
-/// @brief Parses a firewall rule data string in @c "k=v|..." format into a key-value map.
-/// @param raw_rule Raw firewall rule string from the registry.
-/// @return Map of parsed key-value pairs.
-std::unordered_map<std::string, std::string> parseFirewallRuleData(
-    std::string raw_rule);
 
 /// @brief Returns the synthetic process map key used for global network context entries.
 /// @return Synthetic process key string.

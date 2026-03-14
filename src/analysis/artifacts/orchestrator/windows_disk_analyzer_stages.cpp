@@ -76,6 +76,28 @@ std::string buildNetworkTimelineArtifact(const NetworkConnection& connection) {
   return artifact;
 }
 
+std::string selectExecutablePathForAmcacheEntry(const AmcacheEntry& entry) {
+  const auto pick_if_valid = [](std::string raw_path) -> std::string {
+    trim(raw_path);
+    if (raw_path.empty()) {
+      return {};
+    }
+    std::ranges::replace(raw_path, '/', '\\');
+    if (!PathUtils::isExecutionPathCandidate(raw_path)) {
+      return {};
+    }
+    return raw_path;
+  };
+
+  if (std::string path = pick_if_valid(entry.file_path); !path.empty()) {
+    return path;
+  }
+  if (std::string path = pick_if_valid(entry.alternate_path); !path.empty()) {
+    return path;
+  }
+  return {};
+}
+
 template <typename T>
 void appendMovedVector(std::vector<T>& destination, std::vector<T>& source) {
   if (source.empty()) {
@@ -229,8 +251,7 @@ void WindowsDiskAnalyzer::runAmcacheStage() {
   }
 
   for (const auto& entry : amcache_entries_) {
-    std::string path = entry.file_path.empty() ? entry.name : entry.file_path;
-    trim(path);
+    const std::string path = selectExecutablePathForAmcacheEntry(entry);
     if (path.empty()) {
       continue;
     }

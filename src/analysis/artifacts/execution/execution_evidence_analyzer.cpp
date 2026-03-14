@@ -19,7 +19,6 @@
 #include "analysis/artifacts/execution/registry/bam_dam_collector.hpp"
 #include "analysis/artifacts/execution/registry/services_collector.hpp"
 #include "analysis/artifacts/execution/registry/network_profiles_collector.hpp"
-#include "analysis/artifacts/execution/registry/firewall_rules_collector.hpp"
 #include "analysis/artifacts/execution/registry/user_assist_runmru_collector.hpp"
 #include "analysis/artifacts/execution/registry/feature_usage_collector.hpp"
 #include "analysis/artifacts/execution/registry/recent_apps_collector.hpp"
@@ -90,7 +89,6 @@ void appendRegistryCollectors(
   system_collectors.push_back(std::make_unique<ShimCacheCollector>());
   system_collectors.push_back(std::make_unique<BamDamCollector>());
   system_collectors.push_back(std::make_unique<ServicesCollector>());
-  system_collectors.push_back(std::make_unique<FirewallRulesCollector>());
 }
 
 void appendFilesystemCollectors(
@@ -151,7 +149,7 @@ void ExecutionEvidenceAnalyzer::loadConfiguration() {
     Config config(ini_path_, false, false);
 
     if (!config.hasSection("ExecutionArtifacts")) {
-      logger->debug("Секция [ExecutionArtifacts] не найдена, используются "
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Секция [ExecutionArtifacts] не найдена, используются "
                     "значения по умолчанию");
       return;
     }
@@ -161,7 +159,7 @@ void ExecutionEvidenceAnalyzer::loadConfiguration() {
         return config.getBool("ExecutionArtifacts", key, default_value);
       } catch (const std::exception& e) {
         logger->warn("Некорректный параметр [ExecutionArtifacts]/{}", key);
-        logger->debug("Ошибка чтения [ExecutionArtifacts]/{}: {}", key, e.what());
+        logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Ошибка чтения [ExecutionArtifacts]/{}: {}", key, e.what());
         return default_value;
       }
     };
@@ -217,11 +215,6 @@ void ExecutionEvidenceAnalyzer::loadConfiguration() {
         readBool("EnableHostsFile", config_.enable_hosts_file);
     config_.enable_network_profiles =
         readBool("EnableNetworkProfiles", config_.enable_network_profiles);
-    config_.enable_firewall_rules =
-        readBool("EnableFirewallRules", config_.enable_firewall_rules);
-    config_.include_inactive_firewall_rules = readBool(
-        "IncludeInactiveFirewallRules",
-        config_.include_inactive_firewall_rules);
     config_.enable_jump_lists =
         readBool("EnableJumpLists", config_.enable_jump_lists);
     config_.enable_lnk_recent =
@@ -343,8 +336,6 @@ void ExecutionEvidenceAnalyzer::loadConfiguration() {
     config_.srum_path = readString("SRUMPath", config_.srum_path);
     config_.security_log_path =
         readString("SecurityLogPath", config_.security_log_path);
-    config_.firewall_rules_keys =
-        readList("FirewallRulesKeys", config_.firewall_rules_keys);
     config_.network_signature_roots =
         readList("NetworkSignatureRoots", config_.network_signature_roots);
     config_.srum_table_allowlist =
@@ -358,7 +349,7 @@ void ExecutionEvidenceAnalyzer::loadConfiguration() {
             "Performance", "EnableParallelStages", enable_parallel_groups_);
       } catch (const std::exception& e) {
         logger->warn("Некорректный параметр [Performance]/EnableParallelStages");
-        logger->debug("Ошибка чтения [Performance]/EnableParallelStages: {}",
+        logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Ошибка чтения [Performance]/EnableParallelStages: {}",
                       e.what());
       }
 
@@ -369,7 +360,7 @@ void ExecutionEvidenceAnalyzer::loadConfiguration() {
                            enable_parallel_user_hive_analysis_));
       } catch (const std::exception& e) {
         logger->warn("Некорректный параметр [Performance]/EnableParallelUserHives");
-        logger->debug(
+        logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, 
             "Ошибка чтения [Performance]/EnableParallelUserHives: {}",
             e.what());
       }
@@ -382,13 +373,13 @@ void ExecutionEvidenceAnalyzer::loadConfiguration() {
         }
       } catch (const std::exception& e) {
         logger->warn("Некорректный параметр [Performance]/WorkerThreads");
-        logger->debug("Ошибка чтения [Performance]/WorkerThreads: {}", e.what());
+        logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Ошибка чтения [Performance]/WorkerThreads: {}", e.what());
       }
       worker_threads_ = std::max<std::size_t>(1, worker_threads_);
     }
   } catch (const std::exception& e) {
     logger->warn("Не удалось загрузить [ExecutionArtifacts]");
-    logger->debug("Ошибка чтения конфигурации ExecutionArtifacts: {}", e.what());
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Ошибка чтения конфигурации ExecutionArtifacts: {}", e.what());
   }
 }
 

@@ -37,8 +37,6 @@ struct AggregatedData {
       network_context_sources;  ///< Источники сетевого контекста (EventLog/SRUM/...).
   std::set<std::string>
       network_profile_artifacts;  ///< Артефакты профилей сети/интерфейсов.
-  std::set<std::string>
-      firewall_rule_artifacts;  ///< Артефакты правил firewall, относящиеся к процессу.
   std::vector<PrefetchAnalysis::VolumeInfo>
       volumes;  ///< Список томов из Prefetch, связанных с запуском.
   std::vector<PrefetchAnalysis::FileMetric>

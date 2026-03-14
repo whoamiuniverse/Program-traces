@@ -53,8 +53,7 @@ void addTamperFlag(AggregatedData& data, std::string flag) {
 
 bool isNetworkContextSource(const std::string& source) {
   return source == "NetworkEvent" || source == "NetworkProfile" ||
-         source == "FirewallRule" || source == "BITS" || source == "SRUM" ||
-         source == "Hosts";
+         source == "BITS" || source == "SRUM" || source == "Hosts";
 }
 
 bool isNetworkTimelineArtifact(const std::string& timeline) {
@@ -62,7 +61,6 @@ bool isNetworkTimelineArtifact(const std::string& timeline) {
   const std::string lowered = toLowerAscii(timeline);
   return lowered.find("[networkevent]") != std::string::npos ||
          lowered.find("[networkprofile]") != std::string::npos ||
-         lowered.find("[firewallrule]") != std::string::npos ||
          lowered.find("[bits]") != std::string::npos ||
          lowered.find("[hosts]") != std::string::npos;
 }

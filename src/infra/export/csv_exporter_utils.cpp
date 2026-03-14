@@ -108,8 +108,6 @@ std::string normalizeEvidenceSource(std::string source) {
           {"network event", "NetworkEvent"},
           {"networkprofile", "NetworkProfile"},
           {"network profile", "NetworkProfile"},
-          {"firewallrule", "FirewallRule"},
-          {"firewall rule", "FirewallRule"},
           {"service", "Service"},
           {"services", "Service"},
           {"hosts", "Hosts"},

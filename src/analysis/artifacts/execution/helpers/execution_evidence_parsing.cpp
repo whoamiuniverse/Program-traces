@@ -245,63 +245,6 @@ std::vector<std::string> extractSidCandidatesFromLine(const std::string& line) {
   return sid_candidates;
 }
 
-std::string normalizeFirewallDirection(std::string raw_direction) {
-  trim(raw_direction);
-  if (raw_direction.empty()) {
-    return {};
-  }
-
-  const std::string lowered = toLowerAscii(raw_direction);
-  if (lowered == "in" || lowered == "inbound") {
-    return "inbound";
-  }
-  if (lowered == "out" || lowered == "outbound") {
-    return "outbound";
-  }
-  return raw_direction;
-}
-
-std::string normalizeFirewallAction(std::string raw_action) {
-  trim(raw_action);
-  if (raw_action.empty()) {
-    return {};
-  }
-
-  const std::string lowered = toLowerAscii(raw_action);
-  if (lowered == "allow" || lowered == "allowed") {
-    return "allow";
-  }
-  if (lowered == "block" || lowered == "deny" || lowered == "denied") {
-    return "block";
-  }
-  return raw_action;
-}
-
-std::string normalizeFirewallProtocol(std::string raw_protocol) {
-  trim(raw_protocol);
-  if (raw_protocol.empty()) {
-    return {};
-  }
-
-  const std::string lowered = toLowerAscii(raw_protocol);
-  if (lowered == "6" || lowered == "tcp") {
-    return "TCP";
-  }
-  if (lowered == "17" || lowered == "udp") {
-    return "UDP";
-  }
-  if (lowered == "1" || lowered == "icmp") {
-    return "ICMP";
-  }
-  if (lowered == "58" || lowered == "icmpv6") {
-    return "ICMPv6";
-  }
-  if (lowered == "256" || lowered == "any") {
-    return "ANY";
-  }
-  return raw_protocol;
-}
-
 uint16_t readLeUInt16Raw(const std::vector<uint8_t>& bytes,
                          const std::size_t offset) {
   if (offset + 2 > bytes.size()) {
@@ -368,38 +311,6 @@ std::string normalizeNetworkProfileCategory(std::string raw_category) {
     default:
       return std::to_string(category);
   }
-}
-
-std::unordered_map<std::string, std::string> parseFirewallRuleData(
-    std::string raw_rule) {
-  std::unordered_map<std::string, std::string> fields;
-  trim(raw_rule);
-  if (raw_rule.empty()) {
-    return fields;
-  }
-
-  for (std::string token : split(raw_rule, '|')) {
-    trim(token);
-    if (token.empty()) {
-      continue;
-    }
-
-    const std::size_t delimiter_pos = token.find('=');
-    if (delimiter_pos == std::string::npos || delimiter_pos == 0) {
-      continue;
-    }
-
-    std::string key = token.substr(0, delimiter_pos);
-    std::string value = token.substr(delimiter_pos + 1);
-    trim(key);
-    trim(value);
-    key = toLowerAscii(std::move(key));
-    if (!key.empty()) {
-      fields[key] = std::move(value);
-    }
-  }
-
-  return fields;
 }
 
 std::string networkContextProcessKey() {

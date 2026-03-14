@@ -24,8 +24,6 @@ struct ExecutionEvidenceConfig {
   bool enable_services = true;              ///< Enable Windows Services collection from SYSTEM hive.
   bool enable_hosts_file = true;            ///< Enable hosts file scanning.
   bool enable_network_profiles = true;      ///< Enable NetworkList profile collection from SOFTWARE hive.
-  bool enable_firewall_rules = true;        ///< Enable firewall rules collection from SYSTEM hive.
-  bool include_inactive_firewall_rules = false;  ///< Whether to include disabled firewall rules.
   bool enable_jump_lists = true;            ///< Enable Jump Lists artifact collection.
   bool enable_lnk_recent = true;            ///< Enable LNK file collection from Recent folders.
   bool enable_task_scheduler = true;        ///< Enable Task Scheduler artifact collection.
@@ -82,15 +80,6 @@ struct ExecutionEvidenceConfig {
   std::vector<std::string> network_signature_roots = {
       "Microsoft/Windows NT/CurrentVersion/NetworkList/Signatures/Managed",
       "Microsoft/Windows NT/CurrentVersion/NetworkList/Signatures/Unmanaged"};  ///< Registry paths for NetworkList signatures.
-  std::vector<std::string> firewall_rules_keys = {
-      "CurrentControlSet/Services/SharedAccess/Parameters/FirewallPolicy/"
-      "FirewallRules",
-      "CurrentControlSet/Services/SharedAccess/Parameters/FirewallPolicy/"
-      "DomainProfile/FirewallRules",
-      "CurrentControlSet/Services/SharedAccess/Parameters/FirewallPolicy/"
-      "PublicProfile/FirewallRules",
-      "CurrentControlSet/Services/SharedAccess/Parameters/FirewallPolicy/"
-      "StandardProfile/FirewallRules"};  ///< Registry keys containing firewall rules for each profile.
 
   std::string recent_lnk_suffix = "AppData/Roaming/Microsoft/Windows/Recent";  ///< User-relative path to the Recent LNK directory.
   std::string jump_auto_suffix =

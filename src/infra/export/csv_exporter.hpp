@@ -46,7 +46,7 @@ class CSVExporter {
   ///    - Сводка сетевых подключений процесса
   ///    - Отдельный network context блок
   ///      (NetworkTimelineArtifacts/NetworkContextSources/
-  ///       NetworkProfiles/FirewallRules)
+  ///       NetworkProfiles)
   ///    - Количество запусков
   ///    - Источники доказательств (EvidenceSources)
   ///    - Флаги подозрительности (TamperFlags)
