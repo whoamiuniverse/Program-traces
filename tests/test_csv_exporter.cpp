@@ -1,3 +1,4 @@
+#include <filesystem>
 #include <fstream>
 #include <string>
 #include <unordered_map>
@@ -59,7 +60,7 @@ break)"};
 
   WindowsDiskAnalysis::CSVExporter::exportToCSV(
       output_path.string(), autorun_entries, process_data, {}, amcache_entries,
-      recovery_evidence);
+      recovery_evidence, {.export_recovery_csv = true});
 
   const std::string main_csv = readTextFile(output_path);
   const std::string recovery_csv =
@@ -72,4 +73,15 @@ break)"};
   EXPECT_NE(recovery_csv.find("mft_si_fn_divergence"), std::string::npos);
   EXPECT_NE(recovery_csv.find("details with \"\"quotes\"\" and newline"),
             std::string::npos);
+}
+
+TEST(CSVExporterTest, DoesNotWriteRecoveryCsvByDefault) {
+  TestSupport::TempDir temp_dir("csv_export_no_recovery");
+  const auto output_path = temp_dir.path() / "result.csv";
+
+  WindowsDiskAnalysis::CSVExporter::exportToCSV(output_path.string(), {}, {}, {},
+                                                {}, {});
+
+  EXPECT_TRUE(std::filesystem::exists(output_path));
+  EXPECT_FALSE(std::filesystem::exists(temp_dir.path() / "result_recovery.csv"));
 }

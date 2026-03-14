@@ -22,6 +22,9 @@ cmake --build build -j
 ```bash
 ./build/program_traces <disk_root|auto> <config.ini> <output.csv>
 ./build/program_traces --log ./logs/program-traces.log <config.ini> <output.csv>
+./build/program_traces -d auto -c ./config.ini -o ~/Desktop/result.csv
+./build/program_traces -c ./config.ini -o ~/Desktop/result.csv --recovery-csv
+./build/program_traces -c ./config.ini -o ~/Desktop/result.csv --recovery-output ~/Desktop/recovery.csv
 ```
 
 Примеры:
@@ -29,6 +32,7 @@ cmake --build build -j
 ```bash
 ./build/program_traces /Volumes/Untitled/ ./config.ini ~/Desktop/result.csv
 ./build/program_traces ./config.ini ~/Desktop/result.csv
+./build/program_traces --disk-root /Volumes/Untitled --config ./config.ini --output ~/Desktop/result.csv
 ```
 
 ## CLI
@@ -41,4 +45,6 @@ cmake --build build -j
 ## Output
 
 Основной результат: CSV-файл с агрегированными следами запуска программ.  
-Дополнительно: `<output_base>_recovery.csv` с recovery-находками (если включены соответствующие источники).
+Recovery-CSV создается только по запросу пользователя:
+- `--recovery-csv` -> `<output_base>_recovery.csv`
+- `--recovery-output <path>` -> в указанный путь
