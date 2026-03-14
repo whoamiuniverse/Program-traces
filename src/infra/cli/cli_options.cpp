@@ -13,23 +13,29 @@ void printUsage(const char* program_name) {
   std::cout
       << "Использование:\n"
       << "  " << program_name
-      << " [--log <logfile>] [--recovery-csv|--recovery-output <path>] "
+      << " [-l <logfile>] [-r|-R <path>] "
          "<корень_диска|auto> <config.ini> <output.csv>\n"
       << "  " << program_name
-      << " [--log <logfile>] [--recovery-csv|--recovery-output <path>] "
+      << " [-l <logfile>] [-r|-R <path>] "
          "<config.ini> <output.csv>\n"
       << "  " << program_name
       << " [-d <корень_диска|auto>] -c <config.ini> -o <output.csv> "
-         "[--log <logfile>] [--recovery-csv|--recovery-output <path>]\n\n"
+         "[-l <logfile>] [-r|-R <path>]\n\n"
       << "Опции:\n"
       << "  -h, --help       Показать эту справку\n"
-      << "  --version        Показать версию программы\n"
+      << "  -v, --version    Показать версию программы\n"
       << "  -d, --disk-root  Корень Windows-диска или auto\n"
       << "  -c, --config     Путь к config.ini\n"
       << "  -o, --output     Путь к основному output CSV\n"
-      << "  --log <path>     Путь к лог-файлу\n"
-      << "  --recovery-csv   Дополнительно создать <output_base>_recovery.csv\n"
-      << "  --recovery-output <path> Сохранить recovery CSV в указанный файл\n\n"
+      << "  -l, --log <path> Путь к лог-файлу\n"
+      << "  -r, --recovery-csv\n"
+      << "                   Дополнительно создать <output_base>_recovery.csv\n"
+      << "  -R, --recovery-output <path>\n"
+      << "                   Сохранить recovery CSV в указанный файл\n\n"
+      << "Режим auto:\n"
+      << "  Если disk-root не указан, используется auto.\n"
+      << "  В этом режиме программа ищет Windows-том среди смонтированных.\n"
+      << "  Для явного выбора тома используйте -d/--disk-root.\n\n"
       << "Коды выхода:\n"
       << "  0  Успешное завершение\n"
       << "  1  Ошибка аргументов командной строки\n"
@@ -44,6 +50,12 @@ void printVersion() {
 
 std::optional<CliOptions> parseArguments(int argc, char* argv[],
                                          std::string& error_message) {
+  if (argc <= 1) {
+    CliOptions options;
+    options.show_help = true;
+    return options;
+  }
+
   const auto readOptionValue =
       [&](const std::string& option_name, int& index,
           std::string& output_value) -> bool {
@@ -64,22 +76,22 @@ std::optional<CliOptions> parseArguments(int argc, char* argv[],
       options.show_help = true;
       continue;
     }
-    if (argument == "--version") {
+    if (argument == "-v" || argument == "--version") {
       options.show_version = true;
       continue;
     }
-    if (argument == "--recovery-csv") {
+    if (argument == "-r" || argument == "--recovery-csv") {
       options.export_recovery_csv = true;
       continue;
     }
-    if (argument == "--recovery-output") {
+    if (argument == "-R" || argument == "--recovery-output") {
       if (!readOptionValue(argument, index, options.recovery_output_path)) {
         return std::nullopt;
       }
       options.export_recovery_csv = true;
       continue;
     }
-    if (argument == "--log") {
+    if (argument == "-l" || argument == "--log") {
       if (!readOptionValue(argument, index, options.log_path)) {
         return std::nullopt;
       }
@@ -151,4 +163,3 @@ std::optional<CliOptions> parseArguments(int argc, char* argv[],
 }
 
 }  // namespace ProgramTraces::Cli
-
