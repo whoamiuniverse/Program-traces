@@ -247,7 +247,8 @@ std::vector<DirectoryEntry> parseDirectoryEntries(
     }
 
     std::string name;
-    for (std::size_t index = 0; index + 1 < name_size - 2; index += 2) {
+    for (std::size_t index = 0;
+         index + 1 < static_cast<std::size_t>(name_size - 2); index += 2) {
       const uint8_t low = bytes[offset + index];
       const uint8_t high = bytes[offset + index + 1];
       if (high != 0) {
