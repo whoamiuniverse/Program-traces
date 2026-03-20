@@ -3,6 +3,7 @@
 
 #include "windows_disk_analyzer.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <iostream>

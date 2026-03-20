@@ -2,10 +2,11 @@
 /// @brief Реализация IfeoCollector.
 #include "ifeo_collector.hpp"
 
+#include <algorithm>
 #include <filesystem>
-#include <unordered_map>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 
 #include "analysis/artifacts/common/evidence_utils.hpp"

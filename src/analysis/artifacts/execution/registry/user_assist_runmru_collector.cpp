@@ -3,6 +3,7 @@
 #include "user_assist_runmru_collector.hpp"
 
 #include <atomic>
+#include <filesystem>
 #include <future>
 #include <unordered_map>
 #include <utility>

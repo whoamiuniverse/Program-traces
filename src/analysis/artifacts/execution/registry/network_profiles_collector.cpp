@@ -2,9 +2,10 @@
 /// @brief Реализация NetworkProfilesCollector.
 #include "network_profiles_collector.hpp"
 
+#include <algorithm>
 #include <iomanip>
-#include <unordered_map>
 #include <sstream>
+#include <unordered_map>
 
 #include "analysis/artifacts/common/evidence_utils.hpp"
 #include "analysis/artifacts/execution/execution_evidence_helpers.hpp"

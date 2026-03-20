@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20)
 
 project(ProgramTraces VERSION 0.1.0 LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -116,7 +116,7 @@ endif()
 if ((APPLE OR UNIX) AND NOT EXISTS "${LIBS_BASE_PATH}/libregf/libregf.a")
     message(FATAL_ERROR
         "Missing prebuilt libs for ${CMAKE_SYSTEM_NAME}.\n"
-        "Run: bash scripts/install_deps.sh --install-system-deps\n"
+        "Run: bash scripts/install_deps.sh\n"
         "Expected: ${LIBS_BASE_PATH}/")
 endif()
 

@@ -1,5 +1,7 @@
 #include "autorun_analyzer.hpp"
 
+#include <algorithm>
+#include <filesystem>
 #include <string_view>
 #include <utility>
 
