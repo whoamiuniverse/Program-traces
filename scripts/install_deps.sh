@@ -34,6 +34,33 @@ detect_jobs() {
 
 JOBS="${JOBS:-$(detect_jobs)}"
 
+detect_build_workers() {
+  local jobs="$1"
+  local workers=4
+
+  if ((jobs < workers)); then
+    workers="${jobs}"
+  fi
+  if ((workers < 1)); then
+    workers=1
+  fi
+
+  printf '%s\n' "${workers}"
+}
+
+BUILD_WORKERS="${BUILD_WORKERS:-$(detect_build_workers "${JOBS}")}"
+if ((BUILD_WORKERS > JOBS)); then
+  BUILD_WORKERS="${JOBS}"
+fi
+if ((BUILD_WORKERS < 1)); then
+  BUILD_WORKERS=1
+fi
+
+BUILD_JOBS=$((JOBS / BUILD_WORKERS))
+if ((BUILD_JOBS < 1)); then
+  BUILD_JOBS=1
+fi
+
 case "${HOST_OS}" in
   Darwin)
     PLATFORM_ID="macos"
@@ -96,6 +123,7 @@ Options:
 
 Environment:
   JOBS=<n>               Parallel build jobs. Default: auto-detected
+  BUILD_WORKERS=<n>      Number of libraries to build in parallel. Default: auto
 EOF
 }
 
@@ -171,14 +199,18 @@ run_quiet() {
 
   local log_file
   log_file="$(mktemp "${LOG_ROOT}/cmd.XXXXXX.log")"
-  status "${description}"
+  if [[ "${SUPPRESS_STATUS:-0}" != "1" ]]; then
+    status "${description}"
+  fi
 
   if "$@" >"${log_file}" 2>&1; then
     rm -f "${log_file}"
     return 0
   fi
 
-  ui_break
+  if [[ "${SUPPRESS_STATUS:-0}" != "1" ]]; then
+    ui_break
+  fi
   printf 'Error while %s\n' "${description}" >&2
   cat "${log_file}" >&2
   rm -f "${log_file}"
@@ -414,7 +446,7 @@ on_exit_cleanup() {
 
 prepare_host() {
   stage "Detect host platform and output layout"
-  status "Preparing directories for ${PLATFORM_ID} (${JOBS} jobs)"
+  status "Preparing directories for ${PLATFORM_ID} (${JOBS} jobs, ${BUILD_WORKERS} parallel builds)"
 
   if ((CLEAN_BUILD_ROOT)); then
     status "Cleaning previous build directory"
@@ -549,7 +581,7 @@ build_libyal() {
     --prefix="${prefix_dir}" \
     --enable-static \
     --disable-shared
-  run_quiet "Compiling ${repo_name}" "${MAKE_BIN}" -j"${JOBS}"
+  run_quiet "Compiling ${repo_name}" "${MAKE_BIN}" -j"${BUILD_JOBS}"
   run_quiet "Installing ${repo_name}" "${MAKE_BIN}" install
   popd >/dev/null
 
@@ -580,7 +612,7 @@ build_spdlog() {
     -DSPDLOG_BUILD_WARNINGS=OFF \
     -DSPDLOG_BUILD_PIC=ON \
     -DSPDLOG_FMT_EXTERNAL=OFF
-  run_quiet "Compiling spdlog" cmake --build "${build_dir}" -j"${JOBS}"
+  run_quiet "Compiling spdlog" cmake --build "${build_dir}" -j"${BUILD_JOBS}"
   run_quiet "Installing spdlog" cmake --install "${build_dir}"
 
   status "Finalizing spdlog artifacts"
@@ -594,6 +626,61 @@ verify_layout() {
       echo "Missing expected output archive: ${archive}" >&2
       exit 1
     fi
+  done
+}
+
+build_lib_group() {
+  local group_label="$1"
+  shift
+  local libs=("$@")
+  local total="${#libs[@]}"
+  local start=0
+  local end
+  local lib
+  local failed=0
+  local -a batch=()
+  local -a pids=()
+
+  if ((total == 0)); then
+    return 0
+  fi
+
+  while ((start < total)); do
+    batch=()
+    pids=()
+    end=$((start + BUILD_WORKERS))
+    if ((end > total)); then
+      end="${total}"
+    fi
+
+    local index
+    for ((index = start; index < end; ++index)); do
+      batch+=("${libs[index]}")
+    done
+
+    status "${group_label}: ${batch[*]}"
+    for lib in "${batch[@]}"; do
+      (
+        SUPPRESS_STATUS=1
+        build_libyal "${lib}"
+      ) &
+      pids+=("$!")
+    done
+
+    failed=0
+    for pid in "${pids[@]}"; do
+      if ! wait "${pid}"; then
+        failed=1
+      fi
+    done
+
+    if ((failed)); then
+      ui_break
+      echo "One or more library builds failed in batch: ${batch[*]}" >&2
+      exit 1
+    fi
+
+    start="${end}"
   done
 }
 
@@ -628,15 +715,11 @@ stage "Clone/update dependency sources"
 status "Dependency sources are cached under ${BUILD_ROOT}"
 
 stage "Build required static libraries"
-for lib in "${required_libs[@]}"; do
-  build_libyal "${lib}"
-done
+build_lib_group "Building required libraries" "${required_libs[@]}"
 
 if ((REQUIRED_ONLY == 0)); then
   stage "Build optional forensic libraries"
-  for lib in "${optional_libs[@]}"; do
-    build_libyal "${lib}"
-  done
+  build_lib_group "Building optional libraries" "${optional_libs[@]}"
 else
   stage "Skip optional forensic libraries"
   status "Optional forensic libraries were skipped."
