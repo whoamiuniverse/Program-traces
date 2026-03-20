@@ -229,6 +229,7 @@ pkg_name_for() {
   case "${PKG_MANAGER}:${tool}" in
     brew:pkg-config)   echo "pkg-config" ;;
     brew:make)         echo "make" ;;
+    brew:autopoint)    echo "gettext" ;;
     brew:*)            echo "${tool}" ;;
     pacman:pkg-config) echo "pkgconf" ;;
     pacman:python3)    echo "python" ;;
@@ -243,7 +244,7 @@ pkg_name_for() {
 # to install via the detected package manager.
 check_and_offer_install() {
   local -a check_tools=()
-  check_tools+=(git:git cmake:cmake autoconf:autoconf automake:automake)
+  check_tools+=(git:git cmake:cmake autoconf:autoconf automake:automake autopoint:autopoint)
 
   if [[ "${PLATFORM_ID}" == "linux" ]]; then
     check_tools+=(python3:python3)
@@ -379,6 +380,14 @@ prepare_host() {
     elif [[ -x "/usr/local/bin/brew" ]]; then
       export PATH="/usr/local/bin:${PATH}"
     fi
+
+    if command -v brew >/dev/null 2>&1; then
+      local gettext_prefix
+      gettext_prefix="$(brew --prefix gettext 2>/dev/null || true)"
+      if [[ -n "${gettext_prefix}" ]]; then
+        export PATH="${gettext_prefix}/bin:${PATH}"
+      fi
+    fi
   else
     require_command python3
   fi
@@ -390,6 +399,7 @@ prepare_host() {
   require_command cmake
   require_command autoconf
   require_command automake
+  require_command autopoint
 
   local libtoolize_bin
   libtoolize_bin="$(require_one_of "GNU libtoolize helper" libtoolize glibtoolize)"
@@ -420,14 +430,6 @@ prepare_host() {
     MAKE_BIN="make"
   fi
   require_command "${MAKE_BIN}"
-
-  if [[ "${PLATFORM_ID}" == "macos" ]] && command -v brew >/dev/null 2>&1; then
-    local gettext_prefix
-    gettext_prefix="$(brew --prefix gettext 2>/dev/null || true)"
-    if [[ -n "${gettext_prefix}" ]]; then
-      export PATH="${gettext_prefix}/bin:${PATH}"
-    fi
-  fi
 }
 
 prepare_checkout() {
@@ -473,6 +475,10 @@ build_libyal() {
     ./synclibs.sh
   fi
   ./autogen.sh
+  if [[ ! -x "./configure" ]]; then
+    echo "autogen.sh did not generate ./configure in ${checkout_dir}" >&2
+    exit 1
+  fi
   CFLAGS="-fPIC" CXXFLAGS="-fPIC" ./configure \
     --prefix="${prefix_dir}" \
     --enable-static \
