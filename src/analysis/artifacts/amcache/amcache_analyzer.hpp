@@ -19,8 +19,11 @@ struct AmcacheConfig {
       "Root/InventoryApplication";  ///< Путь к ключу InventoryApplication.
   std::string inventory_shortcut_key =
       "Root/InventoryApplicationShortcut";  ///< Путь к ключу InventoryApplicationShortcut.
+  std::string inventory_driver_key =
+      "Root/InventoryApplicationDriver";  ///< Путь к ключу InventoryApplicationDriver (Windows 11 24H2+).
   bool enable_inventory_application = true;  ///< Включает сбор записей приложений.
   bool enable_inventory_shortcut    = true;  ///< Включает сбор записей shortcut.
+  bool enable_inventory_driver      = true;  ///< Включает сбор записей драйверов (Windows 11 24H2+).
 };
 
 /// @class AmcacheAnalyzer
@@ -60,6 +63,10 @@ class AmcacheAnalyzer {
 
   /// @brief Парсит Root/InventoryApplicationShortcut (ярлыки приложений).
   std::vector<AmcacheEntry> collectInventoryShortcut(
+      const std::string& hive_path) const;
+
+  /// @brief Парсит Root/InventoryApplicationDriver (Windows 11 24H2+).
+  std::vector<AmcacheEntry> collectInventoryApplicationDriver(
       const std::string& hive_path) const;
 
   /// @brief Собирает записи из RecentFileCache.bcf (Windows 7 fallback).

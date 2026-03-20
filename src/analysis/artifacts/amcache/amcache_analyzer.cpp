@@ -75,6 +75,11 @@ void AmcacheAnalyzer::loadConfiguration() {
         std::string(kDefaults), "EnableInventoryShortcut",
         config_.enable_inventory_shortcut);
   } catch (...) {}
+  try {
+    config_.enable_inventory_driver = config.getBool(
+        std::string(kDefaults), "EnableInventoryApplicationDriver",
+        config_.enable_inventory_driver);
+  } catch (...) {}
   {
     const std::string app_key = ConfigUtils::getWithVersionFallback(
         config, os_version_, "AmcacheInventoryApplicationKey");
@@ -171,6 +176,18 @@ std::vector<AmcacheEntry> AmcacheAnalyzer::collect(
           const std::string key = to_lower(entry.file_path);
           if (seen_paths.insert(key).second) {
             entry.source = "Amcache";
+            results.push_back(std::move(entry));
+          }
+        }
+      }
+
+      // Добавляем записи из Root/InventoryApplicationDriver (Windows 11 24H2+)
+      if (config_.enable_inventory_driver) {
+        auto drv_entries = collectInventoryApplicationDriver(full_path);
+        for (auto& entry : drv_entries) {
+          const std::string key = to_lower(entry.file_path);
+          if (seen_paths.insert(key).second) {
+            entry.source = "Amcache(Driver)";
             results.push_back(std::move(entry));
           }
         }
@@ -394,6 +411,61 @@ std::vector<AmcacheEntry> AmcacheAnalyzer::collectInventoryApplication(
     }
   } catch (const std::exception& e) {
     logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "InventoryApplication пропущен: {}", e.what());
+  }
+  return results;
+}
+
+std::vector<AmcacheEntry> AmcacheAnalyzer::collectInventoryApplicationDriver(
+    const std::string& hive_path) const {
+  std::vector<AmcacheEntry> results;
+  const auto logger = GlobalLogger::get();
+  try {
+    const std::vector<std::string> driver_subkeys =
+        parser_->listSubkeys(hive_path, config_.inventory_driver_key);
+
+    for (const auto& subkey : driver_subkeys) {
+      const std::string driver_key = config_.inventory_driver_key + "/" + subkey;
+      std::vector<std::unique_ptr<RegistryAnalysis::IRegistryData>> values;
+      try {
+        values = parser_->getKeyValues(hive_path, driver_key);
+      } catch (...) {
+        continue;
+      }
+
+      AmcacheEntry entry;
+      entry.name = subkey;  // DriverId как запасное имя
+
+      for (const auto& value : values) {
+        const std::string val_name =
+            to_lower(getLastPathComponent(value->getName(), '/'));
+        try {
+          if (val_name == "drivername") {
+            const std::string name = trim_copy(value->getDataAsString());
+            if (!name.empty()) entry.name = name;
+          } else if (val_name == "driverversion") {
+            entry.version = trim_copy(value->getDataAsString());
+          } else if (val_name == "driverinfpath") {
+            // .inf путь — сохраняем как file_path (следствие загрузки драйвера)
+            entry.file_path = trim_copy(value->getDataAsString());
+          } else if (val_name == "driverid") {
+            entry.file_hash = trim_copy(value->getDataAsString());
+          } else if (val_name == "driverdate" || val_name == "installdate") {
+            entry.modification_time_str = trim_copy(value->getDataAsString());
+          }
+        } catch (...) {}
+      }
+
+      // Нормализуем разделители пути
+      std::ranges::replace(entry.file_path, '\\', '/');
+
+      if (!entry.file_path.empty()) {
+        results.push_back(std::move(entry));
+      }
+    }
+  } catch (const std::exception& e) {
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION},
+                spdlog::level::debug,
+                "InventoryApplicationDriver пропущен: {}", e.what());
   }
   return results;
 }
