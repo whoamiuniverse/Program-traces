@@ -1,0 +1,12 @@
+prefix=/home/user/Desktop/Program-traces/libs/linux/libfsntfs
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: libfsntfs
+Description: Library to access the New Technology File System (NTFS) format
+Version: 20260208
+Libs: -L${libdir} -lfsntfs
+Libs.private:                
+Cflags: -I${includedir}
+

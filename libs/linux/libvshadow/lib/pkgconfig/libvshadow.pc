@@ -1,0 +1,12 @@
+prefix=/home/user/Desktop/Program-traces/libs/linux/libvshadow
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: libvshadow
+Description: Library to access the Windows NT Volume Shadow Snapshot (VSS) format
+Version: 20251220
+Libs: -L${libdir} -lvshadow
+Libs.private:             
+Cflags: -I${includedir}
+

@@ -1,0 +1,12 @@
+prefix=/home/user/Desktop/Program-traces/libs/linux/libregf
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: libregf
+Description: Library to access the Windows NT Registry File (REGF) format
+Version: 20251219
+Libs: -L${libdir} -lregf
+Libs.private:               
+Cflags: -I${includedir}
+

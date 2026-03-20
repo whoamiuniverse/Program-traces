@@ -1,0 +1,12 @@
+prefix=/home/user/Desktop/Program-traces/libs/linux/libhibr
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: libhibr
+Description: Library to access the Windows Hibernation File (hiberfil.sys) format
+Version: 20251220
+Libs: -L${libdir} -lhibr
+Libs.private:             
+Cflags: -I${includedir}
+
