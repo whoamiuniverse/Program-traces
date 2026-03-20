@@ -70,7 +70,8 @@ Usage:
 
 Stages performed by this script:
   1. Detect host OS and select libs output directory (${LIBS_DIR})
-  2. Validate that required local build tools are already installed
+  2. Check for required build tools; offer to install any that are missing
+     via the detected package manager (brew / apt / dnf / yum / pacman)
   3. Clone or update third-party dependency sources
   4. Build required static libraries (libregf, libscca, libevtx, libevt, libspdlog)
   5. Build optional forensic libraries when --required-only is not used
@@ -192,6 +193,134 @@ require_one_of() {
   exit 1
 }
 
+# ---------------------------------------------------------------------------
+# System package manager detection and optional dependency installation
+# ---------------------------------------------------------------------------
+
+detect_pkg_manager() {
+  PKG_MANAGER=""
+  PKG_INSTALL_CMD=""
+
+  if [[ "${PLATFORM_ID}" == "macos" ]]; then
+    if command -v brew >/dev/null 2>&1; then
+      PKG_MANAGER="brew"
+      PKG_INSTALL_CMD="brew install"
+    fi
+    return
+  fi
+
+  if command -v apt-get >/dev/null 2>&1; then
+    PKG_MANAGER="apt"
+    PKG_INSTALL_CMD="sudo apt-get install -y"
+  elif command -v dnf >/dev/null 2>&1; then
+    PKG_MANAGER="dnf"
+    PKG_INSTALL_CMD="sudo dnf install -y"
+  elif command -v yum >/dev/null 2>&1; then
+    PKG_MANAGER="yum"
+    PKG_INSTALL_CMD="sudo yum install -y"
+  elif command -v pacman >/dev/null 2>&1; then
+    PKG_MANAGER="pacman"
+    PKG_INSTALL_CMD="sudo pacman -S --noconfirm"
+  fi
+}
+
+pkg_name_for() {
+  local tool="$1"
+  case "${PKG_MANAGER}:${tool}" in
+    brew:pkg-config)   echo "pkg-config" ;;
+    brew:make)         echo "make" ;;
+    brew:*)            echo "${tool}" ;;
+    pacman:pkg-config) echo "pkgconf" ;;
+    pacman:python3)    echo "python" ;;
+    pacman:*)          echo "${tool}" ;;
+    dnf:pkg-config)    echo "pkgconf" ;;
+    yum:pkg-config)    echo "pkgconf" ;;
+    *:*)               echo "${tool}" ;;
+  esac
+}
+
+# Collect all missing required tools, show them, then offer a single prompt
+# to install via the detected package manager.
+check_and_offer_install() {
+  local -a check_tools=()
+  check_tools+=(git:git cmake:cmake autoconf:autoconf automake:automake)
+
+  if [[ "${PLATFORM_ID}" == "linux" ]]; then
+    check_tools+=(python3:python3)
+  fi
+
+  # libtool: ships as glibtoolize on macOS/brew, libtoolize on Linux
+  if [[ "${PLATFORM_ID}" == "macos" ]]; then
+    command -v glibtoolize >/dev/null 2>&1 || check_tools+=(glibtoolize:libtool)
+  else
+    command -v libtoolize >/dev/null 2>&1 || check_tools+=(libtoolize:libtool)
+  fi
+
+  # pkg-config — either binary is acceptable
+  if ! command -v pkg-config >/dev/null 2>&1 && ! command -v pkgconf >/dev/null 2>&1; then
+    check_tools+=(pkg-config:pkg-config)
+  fi
+
+  # make — gmake or make
+  if ! command -v gmake >/dev/null 2>&1 && ! command -v make >/dev/null 2>&1; then
+    check_tools+=(make:make)
+  fi
+
+  local -a missing_bins=()
+  local -a missing_pkgs=()
+  local entry binary canonical pkg already p
+
+  for entry in "${check_tools[@]}"; do
+    binary="${entry%%:*}"
+    canonical="${entry##*:}"
+    if ! command -v "${binary}" >/dev/null 2>&1; then
+      pkg="$(pkg_name_for "${canonical}")"
+      missing_bins+=("${binary}")
+      # Avoid duplicate packages (e.g. libtool listed twice)
+      already=0
+      for p in "${missing_pkgs[@]+"${missing_pkgs[@]}"}"; do
+        [[ "${p}" == "${pkg}" ]] && already=1 && break
+      done
+      ((already)) || missing_pkgs+=("${pkg}")
+    fi
+  done
+
+  if ((${#missing_bins[@]} == 0)); then
+    log "All required build tools are present."
+    return 0
+  fi
+
+  printf '\n'
+  log "The following required build tools are missing:"
+  for b in "${missing_bins[@]}"; do
+    printf '  - %s\n' "${b}"
+  done
+  printf '\n'
+
+  if [[ -z "${PKG_MANAGER}" ]]; then
+    echo "No supported package manager detected (brew / apt / dnf / yum / pacman)." >&2
+    echo "Install the tools listed above manually, then rerun this script." >&2
+    exit 1
+  fi
+
+  log "Detected package manager: ${PKG_MANAGER}"
+  printf 'Proposed install command:\n  %s %s\n\n' "${PKG_INSTALL_CMD}" "${missing_pkgs[*]}"
+  printf 'Install missing tools now? [y/N] '
+
+  local answer
+  read -r answer </dev/tty
+  case "${answer}" in
+    [yY]|[yY][eE][sS])
+      log "Installing: ${missing_pkgs[*]}"
+      ${PKG_INSTALL_CMD} "${missing_pkgs[@]}"
+      ;;
+    *)
+      log "Installation declined. Install the tools manually and rerun."
+      exit 1
+      ;;
+  esac
+}
+
 cleanup_outputs() {
   rm -rf "${BUILD_ROOT}"
 
@@ -231,9 +360,9 @@ prepare_host() {
     return
   fi
 
-  stage "Validate local toolchain (no OS package installation)"
+  stage "Validate local toolchain"
   log "This script builds libraries only under ${LIBS_DIR}."
-  log "System packages must be installed manually beforehand."
+  log "Missing system tools will be listed and you will be asked to confirm installation."
 
   if [[ "${PLATFORM_ID}" == "macos" ]]; then
     if ! xcode-select -p >/dev/null 2>&1; then
@@ -249,6 +378,9 @@ prepare_host() {
   else
     require_command python3
   fi
+
+  detect_pkg_manager
+  check_and_offer_install
 
   require_command git
   require_command cmake
