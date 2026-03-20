@@ -40,6 +40,9 @@ set(PROGRAM_TRACES_TEST_SOURCES
     test_pipeline_win10.cpp
     test_registry_parser.cpp
     test_shimcache_decoder.cpp
+    test_recovery_analyzers.cpp
+    test_signature_scanner.cpp
+    test_tamper_detectors.cpp
     test_time_utils.cpp
 )
 
