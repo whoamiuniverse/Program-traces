@@ -46,6 +46,9 @@
 
 // Tamper detectors
 #include "analysis/artifacts/execution/tamper/security_log_tamper_detector.hpp"
+#include "analysis/artifacts/execution/tamper/system_log_tamper_detector.hpp"
+#include "analysis/artifacts/execution/tamper/registry_state_tamper_detector.hpp"
+#include "analysis/artifacts/execution/tamper/artifact_presence_tamper_detector.hpp"
 
 namespace fs = std::filesystem;
 
@@ -55,7 +58,7 @@ using namespace ExecutionEvidenceDetail;
 
 namespace {
 
-constexpr std::size_t kTamperDetectorCount = 1;
+constexpr std::size_t kTamperDetectorCount = 4;
 
 std::string resolveHivePath(const Config& config, const std::string& disk_root,
                             const std::string& os_version,
@@ -112,6 +115,9 @@ void appendDatabaseCollectors(
 void appendTamperDetectors(
     std::vector<std::unique_ptr<ITamperSignalDetector>>& tamper_detectors) {
   tamper_detectors.push_back(std::make_unique<SecurityLogTamperDetector>());
+  tamper_detectors.push_back(std::make_unique<SystemLogTamperDetector>());
+  tamper_detectors.push_back(std::make_unique<RegistryStateTamperDetector>());
+  tamper_detectors.push_back(std::make_unique<ArtifactPresenceTamperDetector>());
 }
 
 }  // namespace
@@ -243,6 +249,12 @@ void ExecutionEvidenceAnalyzer::loadConfiguration() {
         config_.srum_fallback_to_binary_on_native_failure);
     config_.enable_security_log_tamper_check = readBool(
         "EnableSecurityLogTamperCheck", config_.enable_security_log_tamper_check);
+    config_.enable_system_log_tamper_check = readBool(
+        "EnableSystemLogTamperCheck", config_.enable_system_log_tamper_check);
+    config_.enable_registry_state_tamper_check = readBool(
+        "EnableRegistryStateTamperCheck", config_.enable_registry_state_tamper_check);
+    config_.enable_artifact_presence_tamper_check = readBool(
+        "EnableArtifactPresenceTamperCheck", config_.enable_artifact_presence_tamper_check);
     config_.enable_muicache = readBool("EnableMuiCache", config_.enable_muicache);
     config_.enable_appcompat_flags =
         readBool("EnableAppCompatFlags", config_.enable_appcompat_flags);
@@ -336,6 +348,8 @@ void ExecutionEvidenceAnalyzer::loadConfiguration() {
     config_.srum_path = readString("SRUMPath", config_.srum_path);
     config_.security_log_path =
         readString("SecurityLogPath", config_.security_log_path);
+    config_.system_log_path =
+        readString("SystemLogPath", config_.system_log_path);
     config_.network_signature_roots =
         readList("NetworkSignatureRoots", config_.network_signature_roots);
     config_.srum_table_allowlist =

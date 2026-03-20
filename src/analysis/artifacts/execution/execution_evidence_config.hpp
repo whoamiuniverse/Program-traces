@@ -38,7 +38,10 @@ struct ExecutionEvidenceConfig {
   bool enable_srum = true;                  ///< Enable SRUM (SRUDB.dat) collection.
   bool enable_srum_native_parser = true;    ///< Use native ESE parser for SRUM.
   bool srum_fallback_to_binary_on_native_failure = true;  ///< Fall back to binary scan when native SRUM parsing fails.
-  bool enable_security_log_tamper_check = true;  ///< Enable Security log tamper detection.
+  bool enable_security_log_tamper_check = true;        ///< Enable Security log tamper detection (Event ID 1102).
+  bool enable_system_log_tamper_check = true;          ///< Enable System log tamper detection (Event ID 104).
+  bool enable_registry_state_tamper_check = true;      ///< Enable registry-state tamper checks (prefetch disabled, EventLog service stopped).
+  bool enable_artifact_presence_tamper_check = true;   ///< Enable artifact presence checks (Amcache, USN, VSS).
   bool enable_muicache = true;              ///< Enable MuiCache collection from NTUSER.DAT.
   bool enable_appcompat_flags = true;       ///< Enable AppCompatFlags collection from SOFTWARE and NTUSER.DAT.
   bool enable_typed_paths = true;           ///< Enable TypedPaths collection from NTUSER.DAT.
@@ -108,6 +111,7 @@ struct ExecutionEvidenceConfig {
   std::vector<std::string> windows_search_table_allowlist;  ///< Allowlist of ESE table names for Windows Search; empty means all tables.
   std::string srum_path = "Windows/System32/sru/SRUDB.dat";  ///< Disk-relative path to the SRUM database.
   std::string security_log_path = "Windows/System32/winevt/Logs/Security.evtx";  ///< Disk-relative path to the Security Event Log.
+  std::string system_log_path = "Windows/System32/winevt/Logs/System.evtx";      ///< Disk-relative path to the System Event Log.
   std::vector<std::string> srum_table_allowlist;  ///< Allowlist of ESE table names for SRUM; empty means all tables.
 
   std::string muicache_key =
