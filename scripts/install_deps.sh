@@ -249,9 +249,13 @@ check_and_offer_install() {
     check_tools+=(python3:python3)
   fi
 
-  # libtool: ships as glibtoolize on macOS/brew, libtoolize on Linux
+  # GNU libtool helpers differ by platform.
+  # On macOS (Homebrew), both helpers are usually exposed as glibtoolize/glibtool.
+  # On Debian/Ubuntu, the libtool package reliably provides libtoolize, while a
+  # standalone libtool binary may be absent from PATH and is not required here.
   if [[ "${PLATFORM_ID}" == "macos" ]]; then
     command -v glibtoolize >/dev/null 2>&1 || check_tools+=(glibtoolize:libtool)
+    command -v glibtool    >/dev/null 2>&1 || check_tools+=(glibtool:libtool)
   else
     command -v libtoolize >/dev/null 2>&1 || check_tools+=(libtoolize:libtool)
   fi
@@ -393,10 +397,12 @@ prepare_host() {
     export LIBTOOLIZE="${libtoolize_bin}"
   fi
 
-  local libtool_bin
-  libtool_bin="$(require_one_of "GNU libtool helper" libtool glibtool)"
-  if [[ "${libtool_bin}" != "libtool" ]]; then
-    export LIBTOOL="${libtool_bin}"
+  if [[ "${PLATFORM_ID}" == "macos" ]]; then
+    local libtool_bin
+    libtool_bin="$(require_one_of "GNU libtool helper" glibtool libtool)"
+    if [[ "${libtool_bin}" != "libtool" ]]; then
+      export LIBTOOL="${libtool_bin}"
+    fi
   fi
 
   if command -v pkg-config >/dev/null 2>&1; then
