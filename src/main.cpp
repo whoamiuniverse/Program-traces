@@ -61,13 +61,17 @@ int main(int argc, char* argv[]) {
       }
     }
     std::cout << "\n";
+    if (!options->image_path.empty()) {
+      std::cout << "\tОбраз диска (сигнатурный скан): " << options->image_path << "\n";
+    }
     if (!options->log_path.empty()) {
       std::cout << "\tЛог-файл: " << options->log_path << "\n";
     }
     std::cout << '\n';
 
     WindowsDiskAnalysis::WindowsDiskAnalyzer analyzer(options->disk_root,
-                                                      options->config_path);
+                                                      options->config_path,
+                                                      options->image_path);
     analyzer.analyze(
         options->output_path,
         {.export_recovery_csv = options->export_recovery_csv,

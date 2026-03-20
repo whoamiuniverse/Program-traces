@@ -17,6 +17,7 @@ struct CliOptions {
   std::string log_path;             ///< Путь к лог-файлу (опционально).
   bool export_recovery_csv = false;  ///< Создавать recovery CSV.
   std::string recovery_output_path;   ///< Явный путь recovery CSV (опционально).
+  std::string image_path;             ///< Путь к образу диска для сигнатурного сканирования.
   bool show_help = false;             ///< Печатать help и завершиться.
   bool show_version = false;          ///< Печатать версию и завершиться.
 };

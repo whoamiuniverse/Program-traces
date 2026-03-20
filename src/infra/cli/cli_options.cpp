@@ -31,7 +31,9 @@ void printUsage(const char* program_name) {
       << "  -r, --recovery-csv\n"
       << "                   Дополнительно создать <output_base>_recovery.csv\n"
       << "  -R, --recovery-output <path>\n"
-      << "                   Сохранить recovery CSV в указанный файл\n\n"
+      << "                   Сохранить recovery CSV в указанный файл\n"
+      << "  -i, --image <path>\n"
+      << "                   Путь к образу диска для сигнатурного сканирования\n\n"
       << "Режим auto:\n"
       << "  Если disk-root не указан, используется auto.\n"
       << "  В этом режиме программа ищет Windows-том среди смонтированных.\n"
@@ -111,6 +113,12 @@ std::optional<CliOptions> parseArguments(int argc, char* argv[],
     }
     if (argument == "-o" || argument == "--output") {
       if (!readOptionValue(argument, index, options.output_path)) {
+        return std::nullopt;
+      }
+      continue;
+    }
+    if (argument == "-i" || argument == "--image") {
+      if (!readOptionValue(argument, index, options.image_path)) {
         return std::nullopt;
       }
       continue;
