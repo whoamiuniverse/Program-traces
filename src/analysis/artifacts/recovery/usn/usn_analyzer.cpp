@@ -89,7 +89,8 @@ bool hasExecutableSuffix(std::string value) {
   value = toLowerAscii(std::move(value));
 
   for (const std::string extension :
-       {".exe", ".dll", ".com", ".bat", ".cmd", ".ps1", ".msi"}) {
+       {".exe", ".dll", ".sys", ".com", ".bat", ".cmd",
+        ".ps1", ".vbs", ".js",  ".msi", ".scr", ".pif"}) {
     if (value.size() >= extension.size() &&
         value.rfind(extension) == value.size() - extension.size()) {
       return true;
