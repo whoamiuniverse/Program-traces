@@ -34,9 +34,12 @@ class WindowsDiskAnalyzer {
   };
 
   /// @brief Создаёт оркестратор анализа диска
-  /// @param disk_root   Корневой путь подключённого диска Windows
-  /// @param config_path Путь к основному конфигурационному INI-файлу
-  WindowsDiskAnalyzer(std::string disk_root, const std::string& config_path);
+  /// @param disk_root         Корневой путь подключённого диска Windows
+  /// @param config_path       Путь к основному конфигурационному INI-файлу
+  /// @param cli_image_path    Если непустой — передаётся в SignatureScanner как
+  ///                          переопределение [Recovery]/SignatureScanPath из конфига.
+  WindowsDiskAnalyzer(std::string disk_root, const std::string& config_path,
+                      std::string cli_image_path = {});
 
   /// @brief Выполняет полный анализ и сохраняет итоговый CSV-отчёт
   /// @param output_path Путь к каталогу или файлу для результатов
@@ -166,9 +169,10 @@ class WindowsDiskAnalyzer {
 
   // -------------------------------------------------------------- state
 
-  std::string disk_root_;    ///< Корневой путь подключённого диска
-  std::string config_path_;  ///< Путь к конфигурационному файлу
-  OSInfo      os_info_;      ///< Определённая информация о версии ОС
+  std::string disk_root_;        ///< Корневой путь подключённого диска
+  std::string config_path_;      ///< Путь к конфигурационному файлу
+  std::string cli_image_path_;   ///< Образ диска из CLI (override для SignatureScanner).
+  OSInfo      os_info_;          ///< Определённая информация о версии ОС
 
   ArtifactDebugOptions debug_options_;       ///< Настройки debug-логирования
   PerformanceOptions   performance_options_; ///< Настройки производительности

@@ -14,6 +14,7 @@
 #include "analysis/artifacts/recovery/registry/registry_log_analyzer.hpp"
 #include "analysis/artifacts/recovery/usn/usn_analyzer.hpp"
 #include "analysis/artifacts/recovery/vss/vss_analyzer.hpp"
+#include "analysis/artifacts/recovery/signature/signature_scanner.hpp"
 #include "infra/logging/logger.hpp"
 #include "parsers/event_log/evt/parser/parser.hpp"
 #include "parsers/event_log/evtx/parser/parser.hpp"
@@ -27,9 +28,11 @@ namespace WindowsDiskAnalysis {
 using namespace Orchestrator::Detail;
 
 WindowsDiskAnalyzer::WindowsDiskAnalyzer(std::string disk_root,
-                                         const std::string& config_path)
+                                         const std::string& config_path,
+                                         std::string cli_image_path)
     : disk_root_(normalizeDiskRoot(std::move(disk_root))),
-      config_path_(config_path) {
+      config_path_(config_path),
+      cli_image_path_(std::move(cli_image_path)) {
   const auto logger = GlobalLogger::get();
 
   if (disk_root_.empty()) {
@@ -97,6 +100,8 @@ void WindowsDiskAnalyzer::initializeComponents() {
         {"NTFS", std::make_unique<NTFSMetadataAnalyzer>(config_path_)});
     recovery_analyzers_.push_back(
         {"Registry", std::make_unique<RegistryLogAnalyzer>(config_path_)});
+    recovery_analyzers_.push_back(
+        {"SigScan", std::make_unique<SignatureScanner>(config_path_, cli_image_path_)});
   }
 }
 
