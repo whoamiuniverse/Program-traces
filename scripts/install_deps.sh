@@ -10,6 +10,15 @@ CLEANUP_AFTER=0
 CLEANUP_ONLY=0
 CLEANUP_DONE=0
 STAGE_INDEX=0
+UI_ACTIVE=0
+UI_IS_TTY=0
+CURRENT_STAGE_TITLE=""
+CURRENT_STATUS_TEXT=""
+LOG_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/program-traces-deps.XXXXXX")"
+
+if [[ -t 1 ]]; then
+  UI_IS_TTY=1
+fi
 
 detect_jobs() {
   if command -v nproc >/dev/null 2>&1; then
@@ -103,7 +112,6 @@ repeat_char() {
 
 render_stage() {
   local index="$1"
-  local title="$2"
   local width=36
   local percent=$((index * 100 / TOTAL_STAGES))
   local filled=$((percent * width / 100))
@@ -113,17 +121,68 @@ render_stage() {
   filled_bar="$(repeat_char "#" "${filled}")"
   empty_bar="$(repeat_char "-" "${empty}")"
 
-  printf '\n\033[1;36m[%s%s]\033[0m %3d%%  \033[1m(%d/%d)\033[0m %s\n' \
-    "${filled_bar}" "${empty_bar}" "${percent}" "${index}" "${TOTAL_STAGES}" "${title}"
+  printf '\033[1;36m[%s%s]\033[0m %3d%%  \033[1m(%d/%d)\033[0m' \
+    "${filled_bar}" "${empty_bar}" "${percent}" "${index}" "${TOTAL_STAGES}"
+}
+
+render_ui() {
+  local progress_line
+  progress_line="$(render_stage "${STAGE_INDEX}")"
+
+  if ((UI_IS_TTY)); then
+    if ((UI_ACTIVE)); then
+      printf '\033[1A\r\033[2K%s\n\033[2K%s' "${progress_line}" "${CURRENT_STATUS_TEXT}"
+    else
+      printf '%s\n%s' "${progress_line}" "${CURRENT_STATUS_TEXT}"
+      UI_ACTIVE=1
+    fi
+    return
+  fi
+
+  printf '%s\n%s\n' "${progress_line}" "${CURRENT_STATUS_TEXT}"
+}
+
+ui_break() {
+  if ((UI_ACTIVE)); then
+    printf '\n'
+    UI_ACTIVE=0
+  fi
+}
+
+status() {
+  CURRENT_STATUS_TEXT="$*"
+  render_ui
 }
 
 stage() {
   STAGE_INDEX=$((STAGE_INDEX + 1))
-  render_stage "${STAGE_INDEX}" "$*"
+  CURRENT_STAGE_TITLE="$*"
+  CURRENT_STATUS_TEXT="$*"
+  render_ui
 }
 
 log() {
-  printf '[deps-%s] %s\n' "${PLATFORM_ID}" "$*"
+  status "$*"
+}
+
+run_quiet() {
+  local description="$1"
+  shift
+
+  local log_file
+  log_file="$(mktemp "${LOG_ROOT}/cmd.XXXXXX.log")"
+  status "${description}"
+
+  if "$@" >"${log_file}" 2>&1; then
+    rm -f "${log_file}"
+    return 0
+  fi
+
+  ui_break
+  printf 'Error while %s\n' "${description}" >&2
+  cat "${log_file}" >&2
+  rm -f "${log_file}"
+  exit 1
 }
 
 while (($# > 0)); do
@@ -172,6 +231,7 @@ fi
 require_command() {
   local binary="$1"
   if ! command -v "${binary}" >/dev/null 2>&1; then
+    ui_break
     echo "Required command not found: ${binary}" >&2
     exit 1
   fi
@@ -189,6 +249,7 @@ require_one_of() {
     fi
   done
 
+  ui_break
   echo "Required command not found (${label}): $*" >&2
   exit 1
 }
@@ -291,24 +352,25 @@ check_and_offer_install() {
   done
 
   if ((${#missing_bins[@]} == 0)); then
-    log "All required build tools are present."
+    status "All required build tools are available."
     return 0
   fi
 
-  printf '\n'
-  log "The following required build tools are missing:"
+  ui_break
+  printf 'Missing required build tools:\n'
   for b in "${missing_bins[@]}"; do
     printf '  - %s\n' "${b}"
   done
   printf '\n'
 
   if [[ -z "${PKG_MANAGER}" ]]; then
+    ui_break
     echo "No supported package manager detected (brew / apt / dnf / yum / pacman)." >&2
     echo "Install the tools listed above manually, then rerun this script." >&2
     exit 1
   fi
 
-  log "Detected package manager: ${PKG_MANAGER}"
+  printf 'Detected package manager: %s\n' "${PKG_MANAGER}"
   printf 'Proposed install command:\n  %s %s\n\n' "${PKG_INSTALL_CMD}" "${missing_pkgs[*]}"
   printf 'Install missing tools now? [y/N] '
 
@@ -316,17 +378,18 @@ check_and_offer_install() {
   read -r answer </dev/tty
   case "${answer}" in
     [yY]|[yY][eE][sS])
-      log "Installing: ${missing_pkgs[*]}"
-      ${PKG_INSTALL_CMD} "${missing_pkgs[@]}"
+      run_quiet "Installing missing system packages" ${PKG_INSTALL_CMD} "${missing_pkgs[@]}"
       ;;
     *)
-      log "Installation declined. Install the tools manually and rerun."
+      ui_break
+      echo "Installation declined. Install the tools manually and rerun." >&2
       exit 1
       ;;
   esac
 }
 
 cleanup_outputs() {
+  status "Removing temporary build artifacts"
   rm -rf "${BUILD_ROOT}"
 
   local dep
@@ -335,27 +398,26 @@ cleanup_outputs() {
   done
 
   CLEANUP_DONE=1
-  log "Removed ${BUILD_ROOT} and dependency directories in ${LIBS_DIR}"
 }
 
 on_exit_cleanup() {
   local exit_code="$1"
   if ((exit_code != 0)) && ((CLEANUP_AFTER)) && ((CLEANUP_DONE == 0)); then
     set +e
-    log "Build failed (${exit_code}), running mandatory cleanup-after."
+    status "Build failed, removing temporary build artifacts"
     cleanup_outputs
   fi
+  rm -rf "${LOG_ROOT}"
+  ui_break
   exit "${exit_code}"
 }
 
 prepare_host() {
   stage "Detect host platform and output layout"
-  log "Host OS: ${HOST_OS}"
-  log "Target libs dir: ${LIBS_DIR}"
-  log "Parallel jobs: ${JOBS}"
+  status "Preparing directories for ${PLATFORM_ID} (${JOBS} jobs)"
 
   if ((CLEAN_BUILD_ROOT)); then
-    log "Cleaning ${BUILD_ROOT}"
+    status "Cleaning previous build directory"
     rm -rf "${BUILD_ROOT}"
   fi
 
@@ -366,11 +428,11 @@ prepare_host() {
   fi
 
   stage "Validate local toolchain"
-  log "This script builds libraries only under ${LIBS_DIR}."
-  log "Missing system tools will be listed and you will be asked to confirm installation."
+  status "Checking required build tools"
 
   if [[ "${PLATFORM_ID}" == "macos" ]]; then
     if ! xcode-select -p >/dev/null 2>&1; then
+      ui_break
       echo "Xcode Command Line Tools are required. Run: xcode-select --install" >&2
       exit 1
     fi
@@ -394,6 +456,7 @@ prepare_host() {
 
   detect_pkg_manager
   check_and_offer_install
+  status "Validating toolchain"
 
   require_command git
   require_command cmake
@@ -420,6 +483,7 @@ prepare_host() {
   elif command -v pkgconf >/dev/null 2>&1; then
     export PKG_CONFIG="pkgconf"
   else
+    ui_break
     echo "Required command not found: pkg-config (or pkgconf)" >&2
     exit 1
   fi
@@ -435,15 +499,15 @@ prepare_host() {
 prepare_checkout() {
   local repo_url="$1"
   local checkout_dir="$2"
+  local repo_name
+  repo_name="$(basename "${checkout_dir}")"
 
   if [[ -d "${checkout_dir}/.git" ]]; then
-    log "Updating $(basename "${checkout_dir}")"
-    git -C "${checkout_dir}" fetch --depth=1 origin
-    git -C "${checkout_dir}" reset --hard origin/HEAD
-    git -C "${checkout_dir}" clean -fdx
+    run_quiet "Updating ${repo_name} source" git -C "${checkout_dir}" fetch --depth=1 origin
+    run_quiet "Resetting ${repo_name} source tree" git -C "${checkout_dir}" reset --hard origin/HEAD
+    run_quiet "Cleaning ${repo_name} source tree" git -C "${checkout_dir}" clean -fdx
   else
-    log "Cloning ${repo_url}"
-    git clone --depth=1 "${repo_url}" "${checkout_dir}"
+    run_quiet "Cloning ${repo_name} source" git clone --depth=1 "${repo_url}" "${checkout_dir}"
   fi
 }
 
@@ -453,6 +517,7 @@ flatten_static_layout() {
   local archive_path="${prefix_dir}/lib/${lib_name}.a"
 
   if [[ ! -f "${archive_path}" ]]; then
+    ui_break
     echo "Expected archive not found: ${archive_path}" >&2
     exit 1
   fi
@@ -472,21 +537,23 @@ build_libyal() {
 
   pushd "${checkout_dir}" >/dev/null
   if [[ -x "./synclibs.sh" ]]; then
-    ./synclibs.sh
+    run_quiet "Syncing bundled sources for ${repo_name}" ./synclibs.sh
   fi
-  ./autogen.sh
+  run_quiet "Bootstrapping ${repo_name}" ./autogen.sh
   if [[ ! -x "./configure" ]]; then
+    ui_break
     echo "autogen.sh did not generate ./configure in ${checkout_dir}" >&2
     exit 1
   fi
-  CFLAGS="-fPIC" CXXFLAGS="-fPIC" ./configure \
+  run_quiet "Configuring ${repo_name}" env CFLAGS="-fPIC" CXXFLAGS="-fPIC" ./configure \
     --prefix="${prefix_dir}" \
     --enable-static \
     --disable-shared
-  "${MAKE_BIN}" -j"${JOBS}"
-  "${MAKE_BIN}" install
+  run_quiet "Compiling ${repo_name}" "${MAKE_BIN}" -j"${JOBS}"
+  run_quiet "Installing ${repo_name}" "${MAKE_BIN}" install
   popd >/dev/null
 
+  status "Finalizing ${repo_name} artifacts"
   flatten_static_layout "${prefix_dir}" "${repo_name}"
 }
 
@@ -500,7 +567,7 @@ build_spdlog() {
   rm -rf "${prefix_dir}" "${build_dir}"
   mkdir -p "${build_dir}"
 
-  cmake -S "${checkout_dir}" -B "${build_dir}" \
+  run_quiet "Configuring spdlog" cmake -S "${checkout_dir}" -B "${build_dir}" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="${prefix_dir}" \
     -DBUILD_SHARED_LIBS=OFF \
@@ -513,15 +580,17 @@ build_spdlog() {
     -DSPDLOG_BUILD_WARNINGS=OFF \
     -DSPDLOG_BUILD_PIC=ON \
     -DSPDLOG_FMT_EXTERNAL=OFF
-  cmake --build "${build_dir}" -j"${JOBS}"
-  cmake --install "${build_dir}"
+  run_quiet "Compiling spdlog" cmake --build "${build_dir}" -j"${JOBS}"
+  run_quiet "Installing spdlog" cmake --install "${build_dir}"
 
+  status "Finalizing spdlog artifacts"
   flatten_static_layout "${prefix_dir}" "libspdlog"
 }
 
 verify_layout() {
   for archive in "${required_archives[@]}"; do
     if [[ ! -f "${archive}" ]]; then
+      ui_break
       echo "Missing expected output archive: ${archive}" >&2
       exit 1
     fi
@@ -543,9 +612,7 @@ optional_libs=(
   libfsntfs
 )
 
-if ((CLEANUP_AFTER)); then
-  trap 'on_exit_cleanup $?' EXIT
-fi
+trap 'on_exit_cleanup $?' EXIT
 
 prepare_host
 
@@ -553,12 +620,12 @@ if ((CLEANUP_ONLY)); then
   stage "Cleanup downloaded/build artifacts"
   cleanup_outputs
   stage "Done"
-  log "Cleanup-only completed."
+  status "Cleanup completed."
   exit 0
 fi
 
 stage "Clone/update dependency sources"
-log "Dependency sources will be cached under ${BUILD_ROOT}"
+status "Dependency sources are cached under ${BUILD_ROOT}"
 
 stage "Build required static libraries"
 for lib in "${required_libs[@]}"; do
@@ -572,7 +639,7 @@ if ((REQUIRED_ONLY == 0)); then
   done
 else
   stage "Skip optional forensic libraries"
-  log "--required-only was provided"
+  status "Optional forensic libraries were skipped."
 fi
 
 stage "Build spdlog and verify output layout"
@@ -586,7 +653,7 @@ fi
 
 stage "Done"
 if ((CLEANUP_AFTER)); then
-  log "Finished. Dependencies were built and then removed."
+  status "Finished. Dependencies were built and then removed."
 else
-  log "Finished. Static libraries are available under ${LIBS_DIR}"
+  status "Finished. Static libraries are available under ${LIBS_DIR}"
 fi
