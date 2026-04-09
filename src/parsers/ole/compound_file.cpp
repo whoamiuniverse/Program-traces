@@ -97,7 +97,8 @@ std::optional<std::vector<uint8_t>> readBinaryFile(const std::string& path) {
 }
 
 std::size_t sectorOffset(const Header& header, const uint32_t sector_index) {
-  return kHeaderSize + static_cast<std::size_t>(sector_index) * header.sector_size;
+  return kHeaderSize +
+         static_cast<std::size_t>(sector_index) * header.sector_size;
 }
 
 bool isChainTerminator(const uint32_t sector) {
@@ -197,11 +198,11 @@ std::optional<std::vector<uint8_t>> readRegularStream(
 
     const std::size_t copy_size = std::min<std::size_t>(
         header.sector_size,
-        static_cast<std::size_t>(stream_size > stream.size()
-                                     ? stream_size - stream.size()
-                                     : 0));
-    stream.insert(stream.end(), data.begin() + static_cast<std::ptrdiff_t>(offset),
-                  data.begin() + static_cast<std::ptrdiff_t>(offset + copy_size));
+        static_cast<std::size_t>(
+            stream_size > stream.size() ? stream_size - stream.size() : 0));
+    stream.insert(
+        stream.end(), data.begin() + static_cast<std::ptrdiff_t>(offset),
+        data.begin() + static_cast<std::ptrdiff_t>(offset + copy_size));
     if (stream.size() >= stream_size) {
       break;
     }
@@ -299,13 +300,13 @@ std::optional<std::vector<uint8_t>> readMiniStream(
 
     const std::size_t copy_size = std::min<std::size_t>(
         header.mini_sector_size,
-        static_cast<std::size_t>(stream_size > stream.size()
-                                     ? stream_size - stream.size()
-                                     : 0));
-    stream.insert(stream.end(),
-                  mini_stream_bytes.begin() + static_cast<std::ptrdiff_t>(offset),
-                  mini_stream_bytes.begin() +
-                      static_cast<std::ptrdiff_t>(offset + copy_size));
+        static_cast<std::size_t>(
+            stream_size > stream.size() ? stream_size - stream.size() : 0));
+    stream.insert(
+        stream.end(),
+        mini_stream_bytes.begin() + static_cast<std::ptrdiff_t>(offset),
+        mini_stream_bytes.begin() +
+            static_cast<std::ptrdiff_t>(offset + copy_size));
     if (stream.size() >= stream_size) {
       break;
     }
@@ -327,7 +328,8 @@ std::optional<std::vector<Stream>> readStreams(const std::string& path) {
   return parseStreams(*bytes);
 }
 
-std::optional<std::vector<Stream>> parseStreams(const std::vector<uint8_t>& bytes) {
+std::optional<std::vector<Stream>> parseStreams(
+    const std::vector<uint8_t>& bytes) {
   const auto header = parseHeader(bytes);
   if (!header.has_value()) {
     return std::nullopt;

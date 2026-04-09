@@ -66,9 +66,16 @@ break)"};
   const std::string recovery_csv =
       readTextFile(temp_dir.path() / "result_recovery.csv");
 
+  EXPECT_NE(main_csv.find("record_id;source;artifact_type;path_or_key"),
+            std::string::npos);
+  EXPECT_NE(main_csv.find("\"rec-1\";"), std::string::npos);
+  EXPECT_NE(main_csv.find("Autorun"), std::string::npos);
+  EXPECT_NE(main_csv.find("EventLog"), std::string::npos);
   EXPECT_NE(main_csv.find("Amcache(BCF)"), std::string::npos);
-  EXPECT_NE(main_csv.find("\"1.0 \"\"beta\"\"\""), std::string::npos);
-  EXPECT_NE(main_csv.find("quoted"), std::string::npos);
+  EXPECT_NE(main_csv.find("NTFSMetadata"), std::string::npos);
+  EXPECT_NE(main_csv.find("recovery_evidence"), std::string::npos);
+  EXPECT_NE(main_csv.find("version=1.0 \"\"beta\"\""), std::string::npos);
+  EXPECT_NE(main_csv.find("line break"), std::string::npos);
 
   EXPECT_NE(recovery_csv.find("mft_si_fn_divergence"), std::string::npos);
   EXPECT_NE(recovery_csv.find("details with \"\"quotes\"\" and newline"),
@@ -84,4 +91,179 @@ TEST(CSVExporterTest, DoesNotWriteRecoveryCsvByDefault) {
 
   EXPECT_TRUE(std::filesystem::exists(output_path));
   EXPECT_FALSE(std::filesystem::exists(temp_dir.path() / "result_recovery.csv"));
+}
+
+TEST(CSVExporterTest, WritesExpectedSourceForSingleRecord) {
+  TestSupport::TempDir temp_dir("csv_export_source");
+  const auto output_path = temp_dir.path() / "result.csv";
+
+  WindowsDiskAnalysis::ProcessInfo process_info;
+  process_info.filename = R"(C:\Tools\only.exe)";
+  process_info.evidence_sources = {"EventLog"};
+
+  std::unordered_map<std::string, WindowsDiskAnalysis::ProcessInfo> process_data = {
+      {R"(C:\Tools\only.exe)", process_info}};
+
+  WindowsDiskAnalysis::CSVExporter::exportToCSV(output_path.string(), {}, process_data,
+                                                {}, {}, {});
+
+  const std::string main_csv = readTextFile(output_path);
+  EXPECT_NE(main_csv.find("\"rec-1\";\"EventLog\";\"eventlog_execution\""),
+            std::string::npos);
+}
+
+TEST(CSVExporterTest, WritesExpectedPathOrKeyForSingleRecord) {
+  TestSupport::TempDir temp_dir("csv_export_path_or_key");
+  const auto output_path = temp_dir.path() / "result.csv";
+
+  WindowsDiskAnalysis::ProcessInfo process_info;
+  process_info.filename = R"(C:\Tools\pathkey.exe)";
+  process_info.evidence_sources = {"EventLog"};
+
+  std::unordered_map<std::string, WindowsDiskAnalysis::ProcessInfo> process_data = {
+      {R"(C:\Tools\pathkey.exe)", process_info}};
+
+  WindowsDiskAnalysis::CSVExporter::exportToCSV(output_path.string(), {}, process_data,
+                                                {}, {}, {});
+
+  const std::string main_csv = readTextFile(output_path);
+  EXPECT_NE(
+      main_csv.find("\"rec-1\";\"EventLog\";\"eventlog_execution\";\"C:\\\\Tools\\\\pathkey.exe\";"),
+      std::string::npos);
+}
+
+TEST(CSVExporterTest, WritesExpectedTimestampUtcForSingleRecord) {
+  TestSupport::TempDir temp_dir("csv_export_timestamp");
+  const auto output_path = temp_dir.path() / "result.csv";
+
+  WindowsDiskAnalysis::ProcessInfo process_info;
+  process_info.filename = R"(C:\Tools\time.exe)";
+  process_info.evidence_sources = {"EventLog"};
+  process_info.run_times = {"2026-04-08 10:11:12"};
+
+  std::unordered_map<std::string, WindowsDiskAnalysis::ProcessInfo> process_data = {
+      {R"(C:\Tools\time.exe)", process_info}};
+
+  WindowsDiskAnalysis::CSVExporter::exportToCSV(output_path.string(), {}, process_data,
+                                                {}, {}, {});
+
+  const std::string main_csv = readTextFile(output_path);
+  EXPECT_NE(
+      main_csv.find(
+          "\"rec-1\";\"EventLog\";\"eventlog_execution\";\"C:\\\\Tools\\\\time.exe\";\"2026-04-08 10:11:12\";"),
+      std::string::npos);
+}
+
+TEST(CSVExporterTest, WritesExpectedIsRecoveredForExtractionAndRecovery) {
+  TestSupport::TempDir temp_dir("csv_export_is_recovered");
+  const auto output_path = temp_dir.path() / "result.csv";
+
+  WindowsDiskAnalysis::ProcessInfo process_info;
+  process_info.filename = R"(C:\Tools\flag.exe)";
+  process_info.evidence_sources = {"EventLog"};
+
+  std::unordered_map<std::string, WindowsDiskAnalysis::ProcessInfo> process_data = {
+      {R"(C:\Tools\flag.exe)", process_info}};
+
+  std::vector<WindowsDiskAnalysis::RecoveryEvidence> recovery_evidence = {{
+      .executable_path = R"(C:\Tools\flag.exe)",
+      .source = "NTFSMetadata",
+      .recovered_from = "$MFT(binary)",
+      .timestamp = "2026-04-08 10:20:00",
+      .details = "deleted record",
+  }};
+
+  WindowsDiskAnalysis::CSVExporter::exportToCSV(output_path.string(), {}, process_data,
+                                                {}, {}, recovery_evidence);
+
+  const std::string main_csv = readTextFile(output_path);
+  EXPECT_NE(main_csv.find("\"eventlog_execution\";\"C:\\\\Tools\\\\flag.exe\";;\"0\";"),
+            std::string::npos);
+  EXPECT_NE(
+      main_csv.find(
+          "\"recovery_evidence\";\"C:\\\\Tools\\\\flag.exe\";\"2026-04-08 10:20:00\";\"1\";"),
+      std::string::npos);
+}
+
+TEST(CSVExporterTest, WritesExpectedRecoveredFromForRecoveryRecord) {
+  TestSupport::TempDir temp_dir("csv_export_recovered_from");
+  const auto output_path = temp_dir.path() / "result.csv";
+
+  std::vector<WindowsDiskAnalysis::RecoveryEvidence> recovery_evidence = {{
+      .executable_path = R"(C:\Tools\rf.exe)",
+      .source = "NTFSMetadata",
+      .recovered_from = "$MFT(binary)",
+      .timestamp = "2026-04-08 10:30:00",
+      .details = "deleted record",
+  }};
+
+  WindowsDiskAnalysis::CSVExporter::exportToCSV(output_path.string(), {}, {}, {},
+                                                {}, recovery_evidence);
+
+  const std::string main_csv = readTextFile(output_path);
+  EXPECT_NE(
+      main_csv.find(
+          "\"rec-1\";\"NTFSMetadata\";\"recovery_evidence\";\"C:\\\\Tools\\\\rf.exe\";\"2026-04-08 10:30:00\";\"1\";\"$MFT(binary)\";"),
+      std::string::npos);
+}
+
+TEST(CSVExporterTest, WritesHostHintWhenUncPathIsAvailable) {
+  TestSupport::TempDir temp_dir("csv_export_host_hint");
+  const auto output_path = temp_dir.path() / "result.csv";
+
+  WindowsDiskAnalysis::ProcessInfo process_info;
+  process_info.filename = R"(\\HOST01\Share\tool.exe)";
+  process_info.evidence_sources = {"EventLog"};
+
+  std::unordered_map<std::string, WindowsDiskAnalysis::ProcessInfo> process_data = {
+      {R"(\\HOST01\Share\tool.exe)", process_info}};
+
+  WindowsDiskAnalysis::CSVExporter::exportToCSV(output_path.string(), {}, process_data,
+                                                {}, {}, {});
+
+  const std::string main_csv = readTextFile(output_path);
+  EXPECT_NE(main_csv.find(";\"HOST01\";;\"run_count=0"),
+            std::string::npos);
+}
+
+TEST(CSVExporterTest, WritesUserHintWhenUsersAvailable) {
+  TestSupport::TempDir temp_dir("csv_export_user_hint");
+  const auto output_path = temp_dir.path() / "result.csv";
+
+  WindowsDiskAnalysis::ProcessInfo process_info;
+  process_info.filename = R"(C:\Tools\user.exe)";
+  process_info.evidence_sources = {"EventLog"};
+  process_info.run_times = {"2026-04-08 11:00:00"};
+  process_info.users = {"bob", "alice"};
+
+  std::unordered_map<std::string, WindowsDiskAnalysis::ProcessInfo> process_data = {
+      {R"(C:\Tools\user.exe)", process_info}};
+
+  WindowsDiskAnalysis::CSVExporter::exportToCSV(output_path.string(), {}, process_data,
+                                                {}, {}, {});
+
+  const std::string main_csv = readTextFile(output_path);
+  EXPECT_NE(
+      main_csv.find(
+          "\"rec-1\";\"EventLog\";\"eventlog_execution\";\"C:\\\\Tools\\\\user.exe\";\"2026-04-08 11:00:00\";\"0\";;;\"alice | bob\";"),
+      std::string::npos);
+}
+
+TEST(CSVExporterTest, WritesRawDetailsForSingleRecord) {
+  TestSupport::TempDir temp_dir("csv_export_raw_details");
+  const auto output_path = temp_dir.path() / "result.csv";
+
+  WindowsDiskAnalysis::ProcessInfo process_info;
+  process_info.filename = R"(C:\Tools\raw.exe)";
+  process_info.evidence_sources = {"EventLog"};
+
+  std::unordered_map<std::string, WindowsDiskAnalysis::ProcessInfo> process_data = {
+      {R"(C:\Tools\raw.exe)", process_info}};
+
+  WindowsDiskAnalysis::CSVExporter::exportToCSV(output_path.string(), {}, process_data,
+                                                {}, {}, {});
+
+  const std::string main_csv = readTextFile(output_path);
+  EXPECT_NE(main_csv.find(";\"run_count=0 | evidence_source=EventLog\""),
+            std::string::npos);
 }

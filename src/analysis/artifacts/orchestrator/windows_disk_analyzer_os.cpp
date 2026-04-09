@@ -25,11 +25,84 @@ namespace WindowsDiskAnalysis {
 
 using namespace Orchestrator::Detail;
 
+namespace {
+
+struct BestEffortRunConfig {
+  bool enable = false;
+  std::string fallback_ini_version = "Windows10";
+};
+
+std::string resolveFirstConfiguredVersion(const Config& config) {
+  std::string versions = config.getString("General", "Versions", "");
+  for (auto& version : split(versions, ',')) {
+    trim(version);
+    if (!version.empty()) {
+      return version;
+    }
+  }
+  return {};
+}
+
+BestEffortRunConfig loadBestEffortRunConfig(const Config& config) {
+  BestEffortRunConfig options;
+
+  try {
+    options.enable =
+        config.getBool("General", "EnableBestEffortRun", options.enable);
+  } catch (...) {
+  }
+
+  try {
+    options.fallback_ini_version = config.getString(
+        "General", "FallbackOSVersion", options.fallback_ini_version);
+    trim(options.fallback_ini_version);
+  } catch (...) {
+  }
+
+  if (options.fallback_ini_version.empty()) {
+    options.fallback_ini_version = resolveFirstConfiguredVersion(config);
+    if (options.fallback_ini_version.empty()) {
+      options.fallback_ini_version = "Windows10";
+    }
+  }
+
+  return options;
+}
+
+bool canUseBestEffortFallback(const std::string& disk_root) {
+  if (disk_root.empty()) {
+    return false;
+  }
+
+  std::error_code ec;
+  return fs::exists(fs::path(disk_root), ec) && !ec;
+}
+
+void applyBestEffortFallback(OSInfo& os_info,
+                             const BestEffortRunConfig& options,
+                             const std::string& reason) {
+  const auto logger = GlobalLogger::get();
+
+  os_info = {};
+  os_info.ini_version = options.fallback_ini_version;
+  os_info.product_name = "Windows (best-effort)";
+  os_info.fullname_os = "Windows (best-effort, ini=" + os_info.ini_version + ")";
+
+  logger->warn("OS detection недоступен, используется best-effort профиль \"{}\"",
+               os_info.ini_version);
+  logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION},
+              spdlog::level::debug,
+              "Best-effort fallback reason: {}", reason);
+}
+
+}  // namespace
+
 void WindowsDiskAnalyzer::detectOSVersion() {
   Config config(config_path_);
   loadLoggingOptions(config);
   loadPerformanceOptions(config);
   loadTamperOptions(config);
+  const BestEffortRunConfig best_effort = loadBestEffortRunConfig(config);
   std::string initial_validation_error;
 
   if (disk_root_.empty()) {
@@ -47,6 +120,12 @@ void WindowsDiskAnalyzer::detectOSVersion() {
   if (!initial_validation_error.empty()) {
     ScopedDebugLevelOverride scoped_debug(debug_options_.os_detection);
     if (!tryAutoSelectWindowsRoot(config, initial_validation_error)) {
+      if (best_effort.enable && canUseBestEffortFallback(disk_root_)) {
+        applyBestEffortFallback(os_info_, best_effort,
+                                "auto-select failed: " +
+                                    initial_validation_error);
+        return;
+      }
       throw WindowsVolumeSelectionException(initial_validation_error);
     }
   }
@@ -56,9 +135,16 @@ void WindowsDiskAnalyzer::detectOSVersion() {
 
   WindowsVersion::OSDetection detector((std::move(registry_parser)),
                                        (std::move(config)), disk_root_);
-  {
+  try {
     ScopedDebugLevelOverride scoped_debug(debug_options_.os_detection);
     os_info_ = detector.detect();
+  } catch (const std::exception& e) {
+    if (best_effort.enable && canUseBestEffortFallback(disk_root_)) {
+      applyBestEffortFallback(os_info_, best_effort,
+                              std::string("os detection failed: ") + e.what());
+      return;
+    }
+    throw;
   }
 }
 

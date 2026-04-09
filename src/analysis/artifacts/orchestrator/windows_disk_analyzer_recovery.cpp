@@ -3,6 +3,7 @@
 
 #include "windows_disk_analyzer.hpp"
 
+#include <array>
 #include <future>
 #include <iterator>
 #include <string_view>
@@ -39,6 +40,39 @@ struct RecoveryStageSlot {
   std::string_view label;
   std::vector<RecoveryEvidence> evidence;
 };
+
+bool hasRecoveryAnalyzer(const std::vector<RecoveryAnalyzerRef>& analyzers,
+                         const std::string_view label) {
+  for (const auto& analyzer : analyzers) {
+    if (analyzer.label == label) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void ensureMandatoryRecoveryAnalyzersRegistered(
+    const std::vector<RecoveryAnalyzerRef>& analyzers) {
+  static constexpr std::array<std::string_view, 2> kMandatoryAnalyzers = {
+      "NTFS", "SigScan"};
+
+  std::string missing;
+  for (const auto label : kMandatoryAnalyzers) {
+    if (hasRecoveryAnalyzer(analyzers, label)) {
+      continue;
+    }
+    if (!missing.empty()) {
+      missing += ", ";
+    }
+    missing.append(label);
+  }
+
+  if (!missing.empty()) {
+    throw DiskAnalyzerException(
+        "Recovery pipeline не покрывает обязательный минимум: отсутствуют " +
+        missing);
+  }
+}
 
 std::vector<RecoveryStageSlot> createRecoveryStageSlots(
     const std::vector<RecoveryAnalyzerRef>& analyzers) {
@@ -136,6 +170,7 @@ void WindowsDiskAnalyzer::runRecoveryStage() {
   for (const auto& analyzer : recovery_analyzers_) {
     analyzers.push_back({analyzer.label, analyzer.analyzer.get()});
   }
+  ensureMandatoryRecoveryAnalyzersRegistered(analyzers);
 
   auto per_analyzer = createRecoveryStageSlots(analyzers);
 

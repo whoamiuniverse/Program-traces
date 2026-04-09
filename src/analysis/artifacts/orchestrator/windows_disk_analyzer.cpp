@@ -146,8 +146,6 @@ void WindowsDiskAnalyzer::analyze(const std::string& output_path,
   runEventLogStage();
   runExecutionStage();
   runRecoveryStage();
-  applyTamperRules();
-  applyGlobalTamperFlags();
   exportCsv(output_path, options);
 
   logger->info("Анализ завершен: процессов={}, сетевых событий={}",

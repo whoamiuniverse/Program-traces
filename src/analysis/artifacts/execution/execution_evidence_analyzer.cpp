@@ -44,12 +44,6 @@
 #include "analysis/artifacts/execution/database/windows_search_collector.hpp"
 #include "analysis/artifacts/execution/database/srum_collector.hpp"
 
-// Tamper detectors
-#include "analysis/artifacts/execution/tamper/security_log_tamper_detector.hpp"
-#include "analysis/artifacts/execution/tamper/system_log_tamper_detector.hpp"
-#include "analysis/artifacts/execution/tamper/registry_state_tamper_detector.hpp"
-#include "analysis/artifacts/execution/tamper/artifact_presence_tamper_detector.hpp"
-
 namespace fs = std::filesystem;
 
 namespace WindowsDiskAnalysis {
@@ -57,8 +51,6 @@ namespace WindowsDiskAnalysis {
 using namespace ExecutionEvidenceDetail;
 
 namespace {
-
-constexpr std::size_t kTamperDetectorCount = 4;
 
 std::string resolveHivePath(const Config& config, const std::string& disk_root,
                             const std::string& os_version,
@@ -112,14 +104,6 @@ void appendDatabaseCollectors(
   collectors.push_back(std::make_unique<SrumCollector>());
 }
 
-void appendTamperDetectors(
-    std::vector<std::unique_ptr<ITamperSignalDetector>>& tamper_detectors) {
-  tamper_detectors.push_back(std::make_unique<SecurityLogTamperDetector>());
-  tamper_detectors.push_back(std::make_unique<SystemLogTamperDetector>());
-  tamper_detectors.push_back(std::make_unique<RegistryStateTamperDetector>());
-  tamper_detectors.push_back(std::make_unique<ArtifactPresenceTamperDetector>());
-}
-
 }  // namespace
 
 ExecutionEvidenceAnalyzer::ExecutionEvidenceAnalyzer(
@@ -136,17 +120,14 @@ void ExecutionEvidenceAnalyzer::initializeCollectors() {
   system_collectors_.clear();
   filesystem_collectors_.clear();
   database_collectors_.clear();
-  tamper_detectors_.clear();
   software_collectors_.reserve(11);
   system_collectors_.reserve(4);
   filesystem_collectors_.reserve(8);
   database_collectors_.reserve(2);
-  tamper_detectors_.reserve(kTamperDetectorCount);
 
   appendRegistryCollectors(software_collectors_, system_collectors_);
   appendFilesystemCollectors(filesystem_collectors_);
   appendDatabaseCollectors(database_collectors_);
-  appendTamperDetectors(tamper_detectors_);
 }
 
 void ExecutionEvidenceAnalyzer::loadConfiguration() {
@@ -400,7 +381,7 @@ void ExecutionEvidenceAnalyzer::loadConfiguration() {
 /// @brief Оркестрирует все этапы расширенного сбора execution evidence.
 /// @param disk_root Корень Windows-раздела.
 /// @param process_data Карта процессов для обогащения.
-/// @param global_tamper_flags Глобальные tamper-флаги.
+/// @param global_tamper_flags Legacy-параметр (не используется в production pipeline).
 void ExecutionEvidenceAnalyzer::collect(
     const std::string& disk_root,
     std::unordered_map<std::string, ProcessInfo>& process_data,
@@ -449,9 +430,7 @@ void ExecutionEvidenceAnalyzer::collect(
     mergeProcessDataMaps(process_data, run_group(database_collectors_));
   }
 
-  for (auto& detector : tamper_detectors_) {
-    detector->detect(ctx, global_tamper_flags);
-  }
+  (void)global_tamper_flags;
 }
 
 }  // namespace WindowsDiskAnalysis

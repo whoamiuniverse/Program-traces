@@ -110,8 +110,7 @@ std::optional<uint64_t> parseUInt64Flexible(std::string raw_value) {
 
   try {
     std::size_t parsed_length = 0;
-    const unsigned long long parsed =
-        std::stoull(raw_value, &parsed_length, 0);
+    const unsigned long long parsed = std::stoull(raw_value, &parsed_length, 0);
     if (parsed_length == raw_value.size()) {
       return static_cast<uint64_t>(parsed);
     }
@@ -329,9 +328,9 @@ std::optional<LogonSessionRecord> buildLogonSessionRecord(
     record.logon_id = parseUInt64Flexible(record.logon_id_text);
   }
 
-  record.user = buildUser(
-      findDataValue(data, {"TargetDomainName", "UserDomain"}),
-      findDataValue(data, {"TargetUserName", "UserName"}));
+  record.user =
+      buildUser(findDataValue(data, {"TargetDomainName", "UserDomain"}),
+                findDataValue(data, {"TargetUserName", "UserName"}));
 
   if (const auto* sid = findDataValue(data, {"TargetUserSid", "UserSid"});
       sid != nullptr) {
@@ -360,8 +359,7 @@ std::optional<PrivilegedLogonRecord> buildPrivilegedLogonRecord(
   record.timestamp = formatEventTimestamp(event.getTimestamp());
   record.epoch_seconds = parseTimestampToEpoch(record.timestamp);
 
-  if (const auto* value =
-          findDataValue(data, {"SubjectLogonId", "LogonId"});
+  if (const auto* value = findDataValue(data, {"SubjectLogonId", "LogonId"});
       value != nullptr) {
     record.logon_id_text = trim_copy(*value);
     record.logon_id = parseUInt64Flexible(record.logon_id_text);
@@ -399,23 +397,25 @@ std::optional<ProcessCreationRecord> buildProcessCreationRecord(
     record.command_line = trim_copy(*command_line);
   }
 
-  if (const auto* pid = findDataValue(
-          data, {"NewProcessId", "NewProcessID", "ProcessId", "ProcessID", "PID"});
+  if (const auto* pid = findDataValue(data, {"NewProcessId", "NewProcessID",
+                                             "ProcessId", "ProcessID", "PID"});
       pid != nullptr) {
-    if (const auto parsed_pid = parseUInt32Flexible(*pid); parsed_pid.has_value()) {
+    if (const auto parsed_pid = parseUInt32Flexible(*pid);
+        parsed_pid.has_value()) {
       record.pid = *parsed_pid;
     }
   }
 
-  if (const auto* value = findDataValue(
-          data, {"SubjectLogonId", "TargetLogonId", "LogonId"});
+  if (const auto* value =
+          findDataValue(data, {"SubjectLogonId", "TargetLogonId", "LogonId"});
       value != nullptr) {
     record.logon_id_text = trim_copy(*value);
     record.logon_id = parseUInt64Flexible(record.logon_id_text);
   }
 
   record.user = buildUser(
-      findDataValue(data, {"SubjectDomainName", "TargetDomainName", "UserDomain"}),
+      findDataValue(data,
+                    {"SubjectDomainName", "TargetDomainName", "UserDomain"}),
       findDataValue(data, {"SubjectUserName", "TargetUserName", "UserName"}));
 
   if (const auto* sid = findDataValue(
@@ -446,8 +446,8 @@ std::optional<ProcessCreationRecord> buildProcessCreationRecord(
 }
 
 std::optional<std::string> findProcessKeyByPid(
-    const std::vector<NetworkConnection>& network_connections, const uint32_t pid,
-    const std::optional<int64_t>& process_epoch,
+    const std::vector<NetworkConnection>& network_connections,
+    const uint32_t pid, const std::optional<int64_t>& process_epoch,
     const uint32_t correlation_window_seconds) {
   if (pid == 0) return std::nullopt;
 
@@ -481,8 +481,9 @@ std::optional<std::string> findProcessKeyByPid(
   return best_key;
 }
 
-/// @brief Предварительно вычисленный индекс для O(1)-поиска канонического ключа.
-/// Строится один раз перед основным циклом корреляции — вместо O(n) скана на каждый запрос.
+/// @brief Предварительно вычисленный индекс для O(1)-поиска канонического
+/// ключа. Строится один раз перед основным циклом корреляции — вместо O(n)
+/// скана на каждый запрос.
 struct ProcessKeyIndex {
   /// lowercase(full_path) → оригинальный ключ
   std::unordered_map<std::string, std::string> by_path;
@@ -514,9 +515,11 @@ std::string findCanonicalProcessKey(const ProcessKeyIndex& index,
     return it->second;
   }
 
-  const std::string fname = to_lower(fs::path(candidate_key).filename().string());
+  const std::string fname =
+      to_lower(fs::path(candidate_key).filename().string());
   if (!fname.empty()) {
-    if (const auto it = index.by_filename.find(fname); it != index.by_filename.end()) {
+    if (const auto it = index.by_filename.find(fname);
+        it != index.by_filename.end()) {
       return it->second;
     }
   }
@@ -578,7 +581,8 @@ void appendProcessSecurityContext(const ProcessCreationRecord& record,
   appendTimelineArtifact(info, timeline);
 }
 
-void appendLogonSessionContext(const LogonSessionRecord& record, ProcessInfo& info) {
+void appendLogonSessionContext(const LogonSessionRecord& record,
+                               ProcessInfo& info) {
   if (!record.user.empty()) {
     EvidenceUtils::appendUniqueToken(info.users, record.user);
   }
@@ -640,14 +644,14 @@ void SecurityContextAnalyzer::loadConfig(const std::string& ini_path) {
   }
 
   if (config.hasKey(std::string(kSecurityContextSection), "SecurityLogPath")) {
-    config_.security_log_path = config.getString(
-        std::string(kSecurityContextSection), "SecurityLogPath",
-        config_.security_log_path);
+    config_.security_log_path =
+        config.getString(std::string(kSecurityContextSection),
+                         "SecurityLogPath", config_.security_log_path);
   } else if (config.hasKey(std::string(kExecutionArtifactsSection),
                            "SecurityLogPath")) {
-    config_.security_log_path = config.getString(
-        std::string(kExecutionArtifactsSection), "SecurityLogPath",
-        config_.security_log_path);
+    config_.security_log_path =
+        config.getString(std::string(kExecutionArtifactsSection),
+                         "SecurityLogPath", config_.security_log_path);
   }
 
   if (config.hasKey(std::string(kSecurityContextSection),
@@ -658,12 +662,13 @@ void SecurityContextAnalyzer::loadConfig(const std::string& ini_path) {
   }
 
   if (config.hasKey(std::string(kSecurityContextSection), "LogonEventIDs")) {
-    const auto ids = parseEventIds(
-        config.getString(std::string(kSecurityContextSection), "LogonEventIDs", ""));
+    const auto ids = parseEventIds(config.getString(
+        std::string(kSecurityContextSection), "LogonEventIDs", ""));
     if (!ids.empty()) config_.logon_event_ids = ids;
   }
 
-  if (config.hasKey(std::string(kSecurityContextSection), "PrivilegeEventIDs")) {
+  if (config.hasKey(std::string(kSecurityContextSection),
+                    "PrivilegeEventIDs")) {
     const auto ids = parseEventIds(config.getString(
         std::string(kSecurityContextSection), "PrivilegeEventIDs", ""));
     if (!ids.empty()) config_.privilege_event_ids = ids;
@@ -701,14 +706,15 @@ std::string SecurityContextAnalyzer::resolveSecurityLogPath(
 
   if (configured_path.has_extension()) {
     fs::path alternative_path = configured_path;
-    const std::string extension = to_lower(configured_path.extension().string());
+    const std::string extension =
+        to_lower(configured_path.extension().string());
     if (extension == ".evtx") {
       alternative_path.replace_extension(".evt");
     } else if (extension == ".evt") {
       alternative_path.replace_extension(".evtx");
     }
-    if (alternative_path != configured_path && fs::exists(alternative_path, ec) &&
-        !ec) {
+    if (alternative_path != configured_path &&
+        fs::exists(alternative_path, ec) && !ec) {
       return alternative_path.string();
     }
   }
@@ -719,8 +725,9 @@ std::string SecurityContextAnalyzer::resolveSecurityLogPath(
 EventLogAnalysis::IEventLogParser* SecurityContextAnalyzer::getParserForFile(
     const std::string& file_path) const {
   std::string ext = fs::path(file_path).extension().string();
-  std::ranges::transform(ext, ext.begin(),
-                         [](const unsigned char ch) { return std::tolower(ch); });
+  std::ranges::transform(ext, ext.begin(), [](const unsigned char ch) {
+    return std::tolower(ch);
+  });
 
   if (ext == ".evt") return evt_parser_.get();
   if (ext == ".evtx") return evtx_parser_.get();
@@ -747,16 +754,20 @@ void SecurityContextAnalyzer::collect(
   std::error_code ec;
   if (!fs::exists(security_log_path, ec) || ec) {
     logger->warn("SecurityContext: Security log не найден");
-    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "SecurityContext: отсутствует файл \"{}\"",
-                  security_log_path);
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION},
+                spdlog::level::debug,
+                "SecurityContext: отсутствует файл \"{}\"", security_log_path);
     return;
   }
 
-  EventLogAnalysis::IEventLogParser* parser = getParserForFile(security_log_path);
+  EventLogAnalysis::IEventLogParser* parser =
+      getParserForFile(security_log_path);
   if (parser == nullptr) {
     logger->warn("SecurityContext: неподдерживаемый формат Security log");
-    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "SecurityContext: расширение файла \"{}\" не поддерживается",
-                  security_log_path);
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION},
+                spdlog::level::debug,
+                "SecurityContext: расширение файла \"{}\" не поддерживается",
+                security_log_path);
     return;
   }
 
@@ -765,8 +776,10 @@ void SecurityContextAnalyzer::collect(
     events = parser->parseEvents(security_log_path);
   } catch (const std::exception& exception) {
     logger->error("SecurityContext: ошибка разбора Security log");
-    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "SecurityContext: parseEvents(\"{}\") failed: {}",
-                  security_log_path, exception.what());
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION},
+                spdlog::level::debug,
+                "SecurityContext: parseEvents(\"{}\") failed: {}",
+                security_log_path, exception.what());
     return;
   }
 
@@ -795,7 +808,8 @@ void SecurityContextAnalyzer::collect(
     const uint32_t event_id = event->getEventID();
 
     if (process_event_ids.contains(event_id)) {
-      if (auto record = buildProcessCreationRecord(*event); record.has_value()) {
+      if (auto record = buildProcessCreationRecord(*event);
+          record.has_value()) {
         process_records.push_back(std::move(*record));
       }
       continue;
@@ -809,7 +823,8 @@ void SecurityContextAnalyzer::collect(
     }
 
     if (privilege_event_ids.contains(event_id)) {
-      if (auto record = buildPrivilegedLogonRecord(*event); record.has_value()) {
+      if (auto record = buildPrivilegedLogonRecord(*event);
+          record.has_value()) {
         privilege_records.push_back(std::move(*record));
       }
     }
@@ -847,8 +862,9 @@ void SecurityContextAnalyzer::collect(
     sort_by_timestamp(records);
   }
 
-  // Строим индекс один раз — O(m), после чего каждый вызов findCanonicalProcessKey O(1)
-  // вместо O(m) на каждый из n process_records → итого O(n+m) вместо O(n*m).
+  // Строим индекс один раз — O(m), после чего каждый вызов
+  // findCanonicalProcessKey O(1) вместо O(m) на каждый из n process_records →
+  // итого O(n+m) вместо O(n*m).
   const ProcessKeyIndex key_index = buildProcessKeyIndex(process_data);
 
   std::size_t correlated_processes = 0;
@@ -866,9 +882,9 @@ void SecurityContextAnalyzer::collect(
 
     bool resolved_by_pid = false;
     if (process_key.empty()) {
-      if (auto pid_key = findProcessKeyByPid(network_connections, record.pid,
-                                             record.epoch_seconds,
-                                             config_.pid_correlation_window_seconds);
+      if (auto pid_key = findProcessKeyByPid(
+              network_connections, record.pid, record.epoch_seconds,
+              config_.pid_correlation_window_seconds);
           pid_key.has_value()) {
         process_key = normalizeProcessPath(*pid_key);
         resolved_by_pid = true;
@@ -889,9 +905,9 @@ void SecurityContextAnalyzer::collect(
     if (record.logon_id.has_value()) {
       if (const auto it = logons_by_id.find(*record.logon_id);
           it != logons_by_id.end()) {
-        if (const LogonSessionRecord* best_match = findNearestByTime(
-                it->second, record.epoch_seconds,
-                config_.logon_correlation_window_seconds);
+        if (const LogonSessionRecord* best_match =
+                findNearestByTime(it->second, record.epoch_seconds,
+                                  config_.logon_correlation_window_seconds);
             best_match != nullptr) {
           appendLogonSessionContext(*best_match, info);
           correlated = true;
@@ -900,9 +916,9 @@ void SecurityContextAnalyzer::collect(
 
       if (const auto it = privileges_by_id.find(*record.logon_id);
           it != privileges_by_id.end()) {
-        if (const PrivilegedLogonRecord* best_match = findNearestByTime(
-                it->second, record.epoch_seconds,
-                config_.logon_correlation_window_seconds);
+        if (const PrivilegedLogonRecord* best_match =
+                findNearestByTime(it->second, record.epoch_seconds,
+                                  config_.logon_correlation_window_seconds);
             best_match != nullptr) {
           appendPrivilegedContext(*best_match, info);
           correlated = true;
@@ -915,7 +931,8 @@ void SecurityContextAnalyzer::collect(
     }
     if (resolved_by_pid) {
       pid_resolved_processes++;
-      appendTimelineArtifact(info, "[SecurityCorrelation] process_resolved_by_pid");
+      appendTimelineArtifact(info,
+                             "[SecurityCorrelation] process_resolved_by_pid");
     }
   }
 

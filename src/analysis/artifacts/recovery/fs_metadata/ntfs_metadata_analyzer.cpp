@@ -40,9 +40,8 @@ using RecoveryUtils::toByteLimit;
 uint16_t readLeUInt16(const std::vector<uint8_t>& bytes,
                       const std::size_t offset) {
   if (offset + 2 > bytes.size()) return 0;
-  return static_cast<uint16_t>(
-      static_cast<uint16_t>(bytes[offset]) |
-      static_cast<uint16_t>(bytes[offset + 1]) << 8);
+  return static_cast<uint16_t>(static_cast<uint16_t>(bytes[offset]) |
+                               static_cast<uint16_t>(bytes[offset + 1]) << 8);
 }
 
 uint64_t readLeUInt64(const std::vector<uint8_t>& bytes,
@@ -83,8 +82,7 @@ MftCreationTimes parseMftCreationTimes(const std::vector<uint8_t>& record) {
       break;
     }
 
-    const uint32_t attribute_size =
-        readLeUInt32(record, attribute_offset + 4);
+    const uint32_t attribute_size = readLeUInt32(record, attribute_offset + 4);
     if (attribute_size < 24 ||
         attribute_offset + attribute_size > record.size()) {
       break;
@@ -92,8 +90,7 @@ MftCreationTimes parseMftCreationTimes(const std::vector<uint8_t>& record) {
 
     const bool non_resident = record[attribute_offset + 8] != 0;
     if (!non_resident) {
-      const uint32_t content_size =
-          readLeUInt32(record, attribute_offset + 16);
+      const uint32_t content_size = readLeUInt32(record, attribute_offset + 16);
       const uint16_t content_offset =
           readLeUInt16(record, attribute_offset + 20);
       const std::size_t content_start = attribute_offset + content_offset;
@@ -158,16 +155,16 @@ std::vector<RecoveryEvidence> parseMftFallback(
     const auto record_begin_it =
         data.begin() + static_cast<std::ptrdiff_t>(offset);
     const auto record_end_it =
-        data.begin() +
-        static_cast<std::ptrdiff_t>(offset + record_size);
+        data.begin() + static_cast<std::ptrdiff_t>(offset + record_size);
     record_buffer.insert(record_buffer.end(), record_begin_it, record_end_it);
 
     auto record_evidence = scanRecoveryBufferBinary(
-        record_buffer, "NTFSMetadata", "$MFT(binary)", mft_path.filename().string(),
-        timestamp, max_candidates - results.size(), offset, "mft_record",
-        data.size());
+        record_buffer, "NTFSMetadata", "$MFT(binary)",
+        mft_path.filename().string(), timestamp,
+        max_candidates - results.size(), offset, "mft_record", data.size());
 
-    const MftCreationTimes creation_times = parseMftCreationTimes(record_buffer);
+    const MftCreationTimes creation_times =
+        parseMftCreationTimes(record_buffer);
     const bool has_divergence =
         enable_si_fn_divergence_check && creation_times.si_creation > 0 &&
         creation_times.fn_creation > 0 &&
@@ -182,8 +179,8 @@ std::vector<RecoveryEvidence> parseMftFallback(
       if (!evidence.details.empty()) {
         details << evidence.details << ", ";
       }
-      details << "record_offset=" << formatOffsetHex(offset) << ", flags="
-              << (in_use ? "in_use" : "deleted");
+      details << "record_offset=" << formatOffsetHex(offset)
+              << ", flags=" << (in_use ? "in_use" : "deleted");
       if (directory) {
         details << "|directory";
       }
@@ -219,42 +216,41 @@ void NTFSMetadataAnalyzer::loadConfiguration() {
   try {
     Config config(config_path_, false, false);
     if (config.hasSection("Recovery")) {
-      enabled_ =
-          config.getBool("Recovery", "EnableNTFSMetadata", enabled_);
+      enabled_ = config.getBool("Recovery", "EnableNTFSMetadata", enabled_);
       enable_native_fsntfs_parser_ = config.getBool(
           "Recovery", "EnableNativeFsntfsParser", enable_native_fsntfs_parser_);
       fsntfs_fallback_to_binary_on_native_failure_ =
           config.getBool("Recovery", "FsntfsFallbackToBinaryOnNativeFailure",
                          fsntfs_fallback_to_binary_on_native_failure_);
-      binary_scan_max_mb_ = static_cast<std::size_t>(std::max(
-          1, config.getInt("Recovery", "BinaryScanMaxMB",
-                           static_cast<int>(binary_scan_max_mb_))));
+      binary_scan_max_mb_ = static_cast<std::size_t>(
+          std::max(1, config.getInt("Recovery", "BinaryScanMaxMB",
+                                    static_cast<int>(binary_scan_max_mb_))));
       max_candidates_per_source_ = static_cast<std::size_t>(std::max(
           1, config.getInt("Recovery", "MaxCandidatesPerSource",
                            static_cast<int>(max_candidates_per_source_))));
-      mft_record_size_ = static_cast<std::size_t>(std::max(
-          256, config.getInt("Recovery", "MFTRecordSize",
-                             static_cast<int>(mft_record_size_))));
-      mft_max_records_ = static_cast<std::size_t>(std::max(
-          1000, config.getInt("Recovery", "MFTMaxRecords",
-                              static_cast<int>(mft_max_records_))));
+      mft_record_size_ = static_cast<std::size_t>(
+          std::max(256, config.getInt("Recovery", "MFTRecordSize",
+                                      static_cast<int>(mft_record_size_))));
+      mft_max_records_ = static_cast<std::size_t>(
+          std::max(1000, config.getInt("Recovery", "MFTMaxRecords",
+                                       static_cast<int>(mft_max_records_))));
       mft_path_ = config.getString("Recovery", "MFTPath", mft_path_);
       bitmap_path_ = config.getString("Recovery", "BitmapPath", bitmap_path_);
     }
     if (config.hasSection("TamperRules")) {
-      enable_si_fn_divergence_check_ = config.getBool(
-          "TamperRules", "EnableSIFNDivergenceCheck",
-          enable_si_fn_divergence_check_);
-      timestamp_divergence_threshold_sec_ =
-          static_cast<std::size_t>(std::max(
-              1, config.getInt("TamperRules",
-                               "TimestampDivergenceThresholdSec",
-                               static_cast<int>(
-                                   timestamp_divergence_threshold_sec_))));
+      enable_si_fn_divergence_check_ =
+          config.getBool("TamperRules", "EnableSIFNDivergenceCheck",
+                         enable_si_fn_divergence_check_);
+      timestamp_divergence_threshold_sec_ = static_cast<std::size_t>(std::max(
+          1, config.getInt(
+                 "TamperRules", "TimestampDivergenceThresholdSec",
+                 static_cast<int>(timestamp_divergence_threshold_sec_))));
     }
   } catch (const std::exception& e) {
     logger->warn("Не удалось загрузить настройки NTFSMetadataAnalyzer");
-    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Ошибка чтения [Recovery] для NTFSMetadata: {}", e.what());
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION},
+                spdlog::level::debug,
+                "Ошибка чтения [Recovery] для NTFSMetadata: {}", e.what());
   }
 }
 
@@ -262,7 +258,9 @@ std::vector<RecoveryEvidence> NTFSMetadataAnalyzer::collect(
     const std::string& disk_root) const {
   const auto logger = GlobalLogger::get();
   if (!enabled_) {
-    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "NTFSMetadata-анализ отключен в конфигурации");
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION},
+                spdlog::level::debug,
+                "NTFSMetadata-анализ отключен в конфигурации");
     return {};
   }
 
@@ -278,21 +276,25 @@ std::vector<RecoveryEvidence> NTFSMetadataAnalyzer::collect(
     bool need_binary_fallback = true;
     if (enable_native_fsntfs_parser_) {
 #if defined(PROGRAM_TRACES_HAVE_LIBFSNTFS) && PROGRAM_TRACES_HAVE_LIBFSNTFS
-      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "NTFSMetadata(native): libfsntfs подключен, но native "
-                    "парсер пока experimental и использует fallback");
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION},
+                  spdlog::level::debug,
+                  "NTFSMetadata(native): libfsntfs подключен, но native "
+                  "парсер пока experimental и использует fallback");
       need_binary_fallback = fsntfs_fallback_to_binary_on_native_failure_;
 #else
-      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "NTFSMetadata(native): libfsntfs недоступен в текущей сборке");
+      logger->log(
+          spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION},
+          spdlog::level::debug,
+          "NTFSMetadata(native): libfsntfs недоступен в текущей сборке");
       need_binary_fallback = true;
 #endif
     }
 
     if (!enable_native_fsntfs_parser_ || need_binary_fallback) {
-      auto mft_evidence =
-          parseMftFallback(*resolved_mft, max_bytes, max_candidates_per_source_,
-                           mft_record_size_, mft_max_records_,
-                           enable_si_fn_divergence_check_,
-                           timestamp_divergence_threshold_sec_);
+      auto mft_evidence = parseMftFallback(
+          *resolved_mft, max_bytes, max_candidates_per_source_,
+          mft_record_size_, mft_max_records_, enable_si_fn_divergence_check_,
+          timestamp_divergence_threshold_sec_);
       binary_count += mft_evidence.size();
       appendUniqueEvidence(results, mft_evidence, dedup);
     } else {
@@ -310,8 +312,9 @@ std::vector<RecoveryEvidence> NTFSMetadataAnalyzer::collect(
     appendUniqueEvidence(results, bitmap_evidence, dedup);
   }
 
-  logger->info("Recovery(NTFSMetadata $MFT/$Bitmap): native={} binary={} total={}",
-               native_count, binary_count, results.size());
+  logger->info(
+      "Recovery(NTFSMetadata $MFT/$Bitmap): native={} binary={} total={}",
+      native_count, binary_count, results.size());
   return results;
 }
 

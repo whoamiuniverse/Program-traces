@@ -6,11 +6,11 @@
 #include <string_view>
 #include <unordered_set>
 
+#include "analysis/artifacts/execution/execution_evidence_helpers.hpp"
+#include "common/config_utils.hpp"
+#include "common/utils.hpp"
 #include "infra/config/config.hpp"
 #include "infra/logging/logger.hpp"
-#include "common/utils.hpp"
-#include "common/config_utils.hpp"
-#include "analysis/artifacts/execution/execution_evidence_helpers.hpp"
 
 namespace fs = std::filesystem;
 using namespace WindowsDiskAnalysis;
@@ -60,26 +60,31 @@ void AmcacheAnalyzer::loadConfiguration() {
     }
   }
 
-  logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Конфигурация Amcache для {}: путь={}, ключи={}", os_version_,
-                amcache_path_, keys_str);
+  logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION},
+              spdlog::level::debug,
+              "Конфигурация Amcache для {}: путь={}, ключи={}", os_version_,
+              amcache_path_, keys_str);
 
   // Загружаем расширенные параметры из [VersionDefaults]
   constexpr auto kDefaults = std::string_view("VersionDefaults");
   try {
-    config_.enable_inventory_application = config.getBool(
-        std::string(kDefaults), "EnableInventoryApplication",
-        config_.enable_inventory_application);
-  } catch (...) {}
+    config_.enable_inventory_application =
+        config.getBool(std::string(kDefaults), "EnableInventoryApplication",
+                       config_.enable_inventory_application);
+  } catch (...) {
+  }
   try {
-    config_.enable_inventory_shortcut = config.getBool(
-        std::string(kDefaults), "EnableInventoryShortcut",
-        config_.enable_inventory_shortcut);
-  } catch (...) {}
+    config_.enable_inventory_shortcut =
+        config.getBool(std::string(kDefaults), "EnableInventoryShortcut",
+                       config_.enable_inventory_shortcut);
+  } catch (...) {
+  }
   try {
     config_.enable_inventory_driver = config.getBool(
         std::string(kDefaults), "EnableInventoryApplicationDriver",
         config_.enable_inventory_driver);
-  } catch (...) {}
+  } catch (...) {
+  }
   {
     const std::string app_key = ConfigUtils::getWithVersionFallback(
         config, os_version_, "AmcacheInventoryApplicationKey");
@@ -117,17 +122,23 @@ std::vector<AmcacheEntry> AmcacheAnalyzer::collect(
     const std::string full_path = resolved_hive_path->string();
 
     try {
-      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Анализ куста Amcache: {}", full_path);
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION},
+                  spdlog::level::debug, "Анализ куста Amcache: {}", full_path);
 
       for (const auto& key : amcache_keys_) {
         try {
           auto subkeys = parser_->listSubkeys(full_path, key);
-          logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Найдено {} подразделов в {}", subkeys.size(), key);
+          logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION},
+                      spdlog::level::debug, "Найдено {} подразделов в {}",
+                      subkeys.size(), key);
 
           for (const auto& subkey : subkeys) {
             try {
               std::string full_subkey_path = key + "/" + subkey;
-              logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Обработка подраздела: {}", full_subkey_path);
+              logger->log(
+                  spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION},
+                  spdlog::level::debug, "Обработка подраздела: {}",
+                  full_subkey_path);
 
               auto values = parser_->getKeyValues(full_path, full_subkey_path);
 
@@ -138,13 +149,17 @@ std::vector<AmcacheEntry> AmcacheAnalyzer::collect(
               }
             } catch (const std::exception& e) {
               logger->warn("Пропущен подраздел Amcache");
-              logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Ошибка обработки подраздела \"{}\": {}", subkey,
-                            e.what());
+              logger->log(
+                  spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION},
+                  spdlog::level::debug,
+                  "Ошибка обработки подраздела \"{}\": {}", subkey, e.what());
             }
           }
         } catch (const std::exception& e) {
           logger->error("Ошибка доступа к ключу Amcache");
-          logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Ошибка доступа к ключу \"{}\": {}", key, e.what());
+          logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION},
+                      spdlog::level::debug, "Ошибка доступа к ключу \"{}\": {}",
+                      key, e.what());
         }
       }
 
@@ -197,28 +212,36 @@ std::vector<AmcacheEntry> AmcacheAnalyzer::collect(
       return results;
     } catch (const std::exception& e) {
       logger->error("Критическая ошибка анализа Amcache");
-      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Критическая ошибка анализа Amcache: {}", e.what());
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION},
+                  spdlog::level::debug,
+                  "Критическая ошибка анализа Amcache: {}", e.what());
     }
   }
 
   if (!recent_file_cache_path_.empty()) {
-    const fs::path bcf_candidate = fs::path(disk_root) / recent_file_cache_path_;
+    const fs::path bcf_candidate =
+        fs::path(disk_root) / recent_file_cache_path_;
     if (const auto resolved_bcf =
             ExecutionEvidenceDetail::findPathCaseInsensitive(bcf_candidate);
         resolved_bcf.has_value()) {
-      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Анализ RecentFileCache.bcf: {}", resolved_bcf->string());
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION},
+                  spdlog::level::debug, "Анализ RecentFileCache.bcf: {}",
+                  resolved_bcf->string());
       return collectFromRecentFileCache(resolved_bcf->string());
     }
   }
 
   if (!amcache_path_.empty()) {
     logger->warn("Файл Amcache не найден");
-    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Проверенный путь Amcache: {}", amcache_path_);
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION},
+                spdlog::level::debug, "Проверенный путь Amcache: {}",
+                amcache_path_);
   }
 
   logger->warn("Файл RecentFileCache.bcf не найден");
-  logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Проверенный путь RecentFileCache.bcf: {}",
-                recent_file_cache_path_);
+  logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION},
+              spdlog::level::debug, "Проверенный путь RecentFileCache.bcf: {}",
+              recent_file_cache_path_);
 
   return results;
 }
@@ -272,10 +295,12 @@ AmcacheEntry AmcacheAnalyzer::processInventoryApplicationEntry(
 
     try {
       auto parseUInt64Value = [&]() -> uint64_t {
-        if (value->getType() == RegistryAnalysis::RegistryValueType::REG_QWORD) {
+        if (value->getType() ==
+            RegistryAnalysis::RegistryValueType::REG_QWORD) {
           return value->getAsQword();
         }
-        if (value->getType() == RegistryAnalysis::RegistryValueType::REG_DWORD) {
+        if (value->getType() ==
+            RegistryAnalysis::RegistryValueType::REG_DWORD) {
           return value->getAsDword();
         }
         std::string raw = value->getDataAsString();
@@ -314,8 +339,10 @@ AmcacheEntry AmcacheAnalyzer::processInventoryApplicationEntry(
                  name == "InstallDateArpLastModified") {
         entry.install_time = parseUInt64Value();
       } else if (name == "IsDeleted" || name == "Deleted") {
-        if (value->getType() == RegistryAnalysis::RegistryValueType::REG_DWORD ||
-            value->getType() == RegistryAnalysis::RegistryValueType::REG_QWORD) {
+        if (value->getType() ==
+                RegistryAnalysis::RegistryValueType::REG_DWORD ||
+            value->getType() ==
+                RegistryAnalysis::RegistryValueType::REG_QWORD) {
           entry.is_deleted = parseUInt64Value() != 0;
         } else {
           std::string deleted = to_lower(value->getDataAsString());
@@ -326,8 +353,10 @@ AmcacheEntry AmcacheAnalyzer::processInventoryApplicationEntry(
       }
     } catch (const std::exception& e) {
       logger->warn("Пропущено значение Amcache");
-      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Ошибка обработки значения Amcache \"{}\": {}", name,
-                    e.what());
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION},
+                  spdlog::level::debug,
+                  "Ошибка обработки значения Amcache \"{}\": {}", name,
+                  e.what());
     }
   }
 
@@ -337,7 +366,9 @@ AmcacheEntry AmcacheAnalyzer::processInventoryApplicationEntry(
       entry.modification_time_str = filetimeToString(entry.modification_time);
     } catch (const std::exception& e) {
       logger->warn("Ошибка конвертации времени изменения Amcache");
-      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Ошибка конвертации modification_time: {}", e.what());
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION},
+                  spdlog::level::debug,
+                  "Ошибка конвертации modification_time: {}", e.what());
     }
   }
 
@@ -346,7 +377,9 @@ AmcacheEntry AmcacheAnalyzer::processInventoryApplicationEntry(
       entry.install_time_str = filetimeToString(entry.install_time);
     } catch (const std::exception& e) {
       logger->warn("Ошибка конвертации времени установки Amcache");
-      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "Ошибка конвертации install_time: {}", e.what());
+      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION},
+                  spdlog::level::debug, "Ошибка конвертации install_time: {}",
+                  e.what());
     }
   }
 
@@ -390,7 +423,8 @@ std::vector<AmcacheEntry> AmcacheAnalyzer::collectInventoryApplication(
           } else if (val_name_lower == "installdate") {
             entry.install_time_str = trim_copy(value->getDataAsString());
           }
-        } catch (...) {}
+        } catch (...) {
+        }
       }
 
       // InventoryApplication может содержать директорию установки,
@@ -410,7 +444,9 @@ std::vector<AmcacheEntry> AmcacheAnalyzer::collectInventoryApplication(
       }
     }
   } catch (const std::exception& e) {
-    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "InventoryApplication пропущен: {}", e.what());
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION},
+                spdlog::level::debug, "InventoryApplication пропущен: {}",
+                e.what());
   }
   return results;
 }
@@ -424,7 +460,8 @@ std::vector<AmcacheEntry> AmcacheAnalyzer::collectInventoryApplicationDriver(
         parser_->listSubkeys(hive_path, config_.inventory_driver_key);
 
     for (const auto& subkey : driver_subkeys) {
-      const std::string driver_key = config_.inventory_driver_key + "/" + subkey;
+      const std::string driver_key =
+          config_.inventory_driver_key + "/" + subkey;
       std::vector<std::unique_ptr<RegistryAnalysis::IRegistryData>> values;
       try {
         values = parser_->getKeyValues(hive_path, driver_key);
@@ -452,7 +489,8 @@ std::vector<AmcacheEntry> AmcacheAnalyzer::collectInventoryApplicationDriver(
           } else if (val_name == "driverdate" || val_name == "installdate") {
             entry.modification_time_str = trim_copy(value->getDataAsString());
           }
-        } catch (...) {}
+        } catch (...) {
+        }
       }
 
       // Нормализуем разделители пути
@@ -464,8 +502,8 @@ std::vector<AmcacheEntry> AmcacheAnalyzer::collectInventoryApplicationDriver(
     }
   } catch (const std::exception& e) {
     logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION},
-                spdlog::level::debug,
-                "InventoryApplicationDriver пропущен: {}", e.what());
+                spdlog::level::debug, "InventoryApplicationDriver пропущен: {}",
+                e.what());
   }
   return results;
 }
@@ -498,7 +536,8 @@ std::vector<AmcacheEntry> AmcacheAnalyzer::collectInventoryShortcut(
           } else if (val_name_lower == "target") {
             entry.file_path = trim_copy(value->getDataAsString());
           }
-        } catch (...) {}
+        } catch (...) {
+        }
       }
 
       if (!entry.file_path.empty()) {
@@ -507,7 +546,9 @@ std::vector<AmcacheEntry> AmcacheAnalyzer::collectInventoryShortcut(
       }
     }
   } catch (const std::exception& e) {
-    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "InventoryApplicationShortcut пропущен: {}", e.what());
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION},
+                spdlog::level::debug,
+                "InventoryApplicationShortcut пропущен: {}", e.what());
   }
   return results;
 }

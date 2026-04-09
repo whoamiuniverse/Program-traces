@@ -21,9 +21,8 @@ struct CSVExportOptions {
 
 /// @class CSVExporter
 /// @brief Класс для экспорта результатов анализа Windows в CSV формат
-/// @details Предоставляет статический метод для экспорта данных о процессах,
-/// автозагрузке и сетевых подключениях в структурированный CSV файл.
-/// Поддерживает русскоязычные заголовки и форматирование данных
+/// @details Экспортирует extraction/recovery артефакты в единый record-level CSV
+/// со стабильным набором колонок.
 class CSVExporter {
  public:
   /// @brief Экспортирует данные анализа в CSV файл
@@ -37,29 +36,12 @@ class CSVExporter {
   /// @throw CsvExportException В случае ошибок экспорта
   /// @throw FileOpenException Если не удалось открыть файл для записи
   /// @throw DataFormatException При обнаружении некорректных данных
-  /// @details Формат CSV:
-  ///    - Имя исполняемого файла
-  ///    - Набор обнаруженных путей
-  ///    - Хэш исполняемого файла
-  ///    - Времена запуска (разделенные точкой с запятой)
-  ///    - Первое/последнее наблюдение (UTC)
-  ///    - Таймлайн артефактов
-  ///    - Источники восстановления (RecoveredFrom)
-  ///    - Контекст пользователя и прав (Users/UserSIDs/LogonIDs/LogonTypes,
-  ///      ElevationType/ElevatedToken/IntegrityLevel/Privileges)
-  ///    - Статус автозагрузки (Да/Нет)
-  ///    - Следы удаления файла в Amcache (Да/Нет)
-  ///    - Версия ПО
-  ///    - Сводка сетевых подключений процесса
-  ///    - Отдельный network context блок
-  ///      (NetworkTimelineArtifacts/NetworkContextSources/
-  ///       NetworkProfiles)
-  ///    - Количество запусков
-  ///    - Источники доказательств (EvidenceSources)
-  ///    - Флаги подозрительности (TamperFlags)
+  /// @details Основной CSV содержит унифицированные колонки:
+  ///    `record_id;source;artifact_type;path_or_key;timestamp_utc;
+  ///     is_recovered;recovered_from;host_hint;user_hint;raw_details`.
+  ///    Дополнительно (по опции) может создаваться отдельный recovery CSV.
   /// @note Все строковые значения экранируются двойными кавычками
-  /// @note Временные метки форматируются в читаемый вид (YYYY-MM-DD HH:MM:SS)
-  /// @note Для отсутствующих данных используется "N/A"
+  /// @note Символы новой строки в полях заменяются пробелами
   static void exportToCSV(
       const std::string& output_path,
       const std::vector<AutorunEntry>& autorun_entries,

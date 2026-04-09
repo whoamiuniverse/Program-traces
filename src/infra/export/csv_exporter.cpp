@@ -1,45 +1,48 @@
 /// @file csv_exporter.cpp
-/// @brief Реализация экспорта агрегированных артефактов в CSV.
+/// @brief Реализация экспорта артефактов в единый record-level CSV.
 
 #include "csv_exporter.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <set>
 #include <string_view>
+#include <tuple>
 #include <unordered_map>
 #include <vector>
 
-#include "analysis/artifacts/data/analysis_data.hpp"
 #include "common/path_utils.hpp"
-#include "csv_exporter_filtering.hpp"
+#include "common/utils.hpp"
 #include "csv_exporter_utils.hpp"
 #include "errors/csv_export_exception.hpp"
 
-using namespace PrefetchAnalysis;
 using namespace WindowsDiskAnalysis::CsvExporterUtils;
-using namespace WindowsDiskAnalysis::CsvExporterFiltering;
 
 namespace {
 
 constexpr char kCsvDelimiter = ';';
 constexpr std::string_view kListSeparator = " | ";
-constexpr std::string_view kNotAvailable = "N/A";
-constexpr std::string_view kMissingPort = "-";
-constexpr std::string_view kNetworkEventPrefix = "[NetworkEvent] ";
 
-constexpr std::string_view kCsvHeader =
-    "ИсполняемыйФайл;Пути;Версии;Хэши;РазмерФайла;ВременаЗапуска;FirstSeenUTC;"
-    "LastSeenUTC;TimelineArtifacts;RecoveredFrom;Users;UserSIDs;LogonIDs;"
-    "LogonTypes;ElevationType;ElevatedToken;IntegrityLevel;Privileges;"
-    "Автозагрузка;СледыУдаления;КоличествоЗапусков;Тома(серийный:тип);"
-    "СетевыеПодключения;NetworkTimelineArtifacts;NetworkContextSources;"
-    "NetworkProfiles;ФайловыеМетрики;EvidenceSources;"
-    "TamperFlags\n";
+constexpr std::string_view kUnifiedCsvHeader =
+    "record_id;source;artifact_type;path_or_key;timestamp_utc;is_recovered;"
+    "recovered_from;host_hint;user_hint;raw_details\n";
 
 constexpr std::string_view kRecoveryCsvHeader =
     "ExecutablePath;Source;RecoveredFrom;Timestamp;Details;TamperFlag\n";
+
+struct UnifiedCsvRow {
+  std::string source;
+  std::string artifact_type;
+  std::string path_or_key;
+  std::string timestamp_utc;
+  std::string is_recovered;
+  std::string recovered_from;
+  std::string host_hint;
+  std::string user_hint;
+  std::string raw_details;
+};
 
 std::string escapeCsvField(std::string_view value) {
   if (value.empty()) {
@@ -67,181 +70,242 @@ std::string escapeCsvField(std::string_view value) {
   return result;
 }
 
-void writeCsvHeader(std::ofstream& file) { file << kCsvHeader; }
+void writeUnifiedCsvHeader(std::ofstream& file) { file << kUnifiedCsvHeader; }
 
 void writeRecoveryCsvHeader(std::ofstream& file) { file << kRecoveryCsvHeader; }
 
 template <typename Container>
-std::string joinStrings(const Container& container) {
-  size_t count = 0;
-  size_t total_size = 0;
-  for (const auto& value : container) {
-    if (value.empty()) {
-      continue;
+std::vector<std::string> toSortedUniqueStrings(const Container& values) {
+  std::vector<std::string> result;
+  result.reserve(values.size());
+  for (const auto& value : values) {
+    if (!value.empty()) {
+      result.emplace_back(value);
     }
-    total_size += value.size();
-    ++count;
   }
-
-  if (count == 0) {
-    return {};
-  }
-
-  total_size += (count - 1) * kListSeparator.size();
-  std::string out;
-  out.reserve(total_size);
-
-  bool first = true;
-  for (const auto& value : container) {
-    if (value.empty()) {
-      continue;
-    }
-    if (!first) {
-      out.append(kListSeparator);
-    }
-    out.append(value);
-    first = false;
-  }
-
-  return out;
+  sortAndUnique(result);
+  return result;
 }
 
-std::string joinUint64Values(const std::set<uint64_t>& values) {
+std::string joinStrings(const std::vector<std::string>& values) {
   if (values.empty()) {
     return {};
   }
 
-  std::string out;
-  out.reserve(values.size() * 20 + (values.size() - 1) * kListSeparator.size());
-
-  bool first = true;
-  for (const uint64_t value : values) {
-    if (!first) {
-      out.append(kListSeparator);
-    }
-    out.append(std::to_string(value));
-    first = false;
-  }
-
-  return out;
-}
-
-std::string serializeAutorunValue(const std::set<std::string>& locations) {
-  if (locations.empty()) {
-    return "Нет";
-  }
-
-  size_t total_size = 4;  // "Да()"
-  bool first = true;
-  for (const auto& location : locations) {
-    total_size += location.size();
-    if (!first) {
-      total_size += 2;  // ", "
-    }
-    first = false;
+  std::size_t total_size = (values.size() - 1) * kListSeparator.size();
+  for (const auto& value : values) {
+    total_size += value.size();
   }
 
   std::string out;
   out.reserve(total_size);
-  out.append("Да(");
-
-  first = true;
-  for (const auto& location : locations) {
-    if (!first) {
-      out.append(", ");
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    if (i > 0) {
+      out.append(kListSeparator);
     }
-    out.append(location);
-    first = false;
+    out.append(values[i]);
   }
-
-  out.push_back(')');
   return out;
 }
 
-std::string formatNetworkPort(const uint16_t value) {
-  return value == 0 ? std::string(kMissingPort) : std::to_string(value);
+std::string normalizeSourceOrFallback(std::string source,
+                                      std::string_view fallback) {
+  source = normalizeEvidenceSource(std::move(source));
+  if (!source.empty()) {
+    return source;
+  }
+  return std::string(fallback);
 }
 
-std::string_view valueOrNotAvailable(const std::string& value) noexcept {
-  return value.empty() ? kNotAvailable : std::string_view(value);
+std::string resolveArtifactTypeBySource(std::string source,
+                                        std::string_view fallback) {
+  source = normalizeEvidenceSource(std::move(source));
+  if (source.empty()) {
+    return std::string(fallback);
+  }
+
+  static const std::unordered_map<std::string, std::string_view>
+      kArtifactTypeBySource = {
+          {"Process", "process_evidence"},
+          {"Prefetch", "prefetch_execution"},
+          {"EventLog", "eventlog_execution"},
+          {"SecurityContext", "security_context"},
+          {"Security4688", "security_event_4688"},
+          {"Security4624", "security_event_4624"},
+          {"Security4672", "security_event_4672"},
+          {"SecurityCorrelation", "security_correlation"},
+          {"Autorun", "autorun_entry"},
+          {"Amcache", "amcache_entry"},
+          {"NetworkEvent", "network_connection"},
+          {"UserAssist", "userassist_entry"},
+          {"RunMRU", "runmru_entry"},
+          {"FeatureUsage", "feature_usage_entry"},
+          {"RecentApps", "recent_apps_entry"},
+          {"BAM", "bam_execution"},
+          {"DAM", "dam_execution"},
+          {"ShimCache", "shimcache_entry"},
+          {"Service", "service_entry"},
+          {"NetworkProfile", "network_profile_entry"},
+          {"TaskScheduler", "task_scheduler_entry"},
+          {"IFEO", "ifeo_entry"},
+          {"MuiCache", "muicache_entry"},
+          {"AppCompatFlags", "appcompat_flags_entry"},
+          {"TypedPaths", "typed_paths_entry"},
+          {"LastVisitedMRU", "last_visited_mru_entry"},
+          {"OpenSaveMRU", "open_save_mru_entry"},
+          {"LNKRecent", "lnk_recent_entry"},
+          {"JumpList", "jump_list_entry"},
+          {"PSConsoleHistory", "powershell_history_entry"},
+          {"WER", "wer_entry"},
+          {"Timeline", "activities_timeline_entry"},
+          {"BITS", "bits_job_entry"},
+          {"Hosts", "hosts_entry"},
+          {"WMIRepository", "wmi_repository_entry"},
+          {"WindowsSearch", "windows_search_entry"},
+          {"SRUM", "srum_entry"},
+          {"USN", "usn_recovery_evidence"},
+          {"$LogFile", "logfile_recovery_evidence"},
+          {"VSS", "vss_recovery_evidence"},
+          {"Pagefile", "pagefile_recovery_evidence"},
+          {"Memory", "memory_recovery_evidence"},
+          {"Unallocated", "unallocated_recovery_evidence"},
+          {"NTFSMetadata", "ntfs_recovery_evidence"},
+          {"Registry", "registry_recovery_evidence"},
+          {"Hiber", "hiber_recovery_evidence"},
+          {"SignatureScan", "signature_recovery_evidence"},
+      };
+
+  const auto it = kArtifactTypeBySource.find(source);
+  if (it != kArtifactTypeBySource.end()) {
+    return std::string(it->second);
+  }
+  return std::string(fallback);
 }
 
-std::string serializeNetworkValue(
-    const WindowsDiskAnalysis::NetworkConnection& conn,
-    const bool include_timestamp, const bool include_application,
-    const bool include_prefix) {
-  const std::string source_port = formatNetworkPort(conn.source_port);
-  const std::string dest_port = formatNetworkPort(conn.dest_port);
-  const std::string event_id = std::to_string(conn.event_id);
-  const std::string process_id = std::to_string(conn.process_id);
-
-  const std::string_view protocol = valueOrNotAvailable(conn.protocol);
-  const std::string_view source_ip = valueOrNotAvailable(conn.source_ip);
-  const std::string_view dest_ip = valueOrNotAvailable(conn.dest_ip);
-  const std::string_view direction = valueOrNotAvailable(conn.direction);
-  const std::string_view action = valueOrNotAvailable(conn.action);
-  const std::string_view application = valueOrNotAvailable(conn.application);
-
-  size_t reserve_size = event_id.size() + process_id.size() + source_port.size() +
-                        dest_port.size() + protocol.size() + source_ip.size() +
-                        dest_ip.size() + direction.size() + action.size() + 48;
-  if (include_timestamp) {
-    reserve_size += conn.timestamp.size() + 4;  // " ts="
+std::string normalizePathOrKeep(const std::string& path) {
+  if (path.empty()) {
+    return {};
   }
-  if (include_application) {
-    reserve_size += application.size() + 5;  // " app="
+  std::string normalized = normalizePath(path);
+  if (!normalized.empty()) {
+    return normalized;
   }
-  if (include_prefix) {
-    reserve_size += kNetworkEventPrefix.size();
-  }
-
-  std::string out;
-  out.reserve(reserve_size);
-  if (include_prefix) {
-    out.append(kNetworkEventPrefix);
-  }
-  out.append("id=");
-  out.append(event_id);
-  if (include_timestamp) {
-    out.append(" ts=");
-    out.append(conn.timestamp);
-  }
-  out.push_back(' ');
-  out.append(protocol);
-  out.push_back(' ');
-  out.append(source_ip);
-  out.push_back(':');
-  out.append(source_port);
-  out.append("->");
-  out.append(dest_ip);
-  out.push_back(':');
-  out.append(dest_port);
-  out.append(" pid=");
-  out.append(process_id);
-  if (include_application) {
-    out.append(" app=");
-    out.append(application);
-  }
-  out.append(" dir=");
-  out.append(direction);
-  out.append(" action=");
-  out.append(action);
-
-  return out;
+  return path;
 }
 
-std::string serializeNetworkTimeline(
-    const WindowsDiskAnalysis::NetworkConnection& conn) {
-  return serializeNetworkValue(
-      conn, /*include_timestamp=*/false, /*include_application=*/false,
-      /*include_prefix=*/true);
+std::string extractHostHintFromPathOrKey(const std::string& path_or_key) {
+  if (path_or_key.size() < 3) {
+    return {};
+  }
+
+  const auto is_slash = [](const char c) { return c == '\\' || c == '/'; };
+  if (!is_slash(path_or_key[0]) || !is_slash(path_or_key[1])) {
+    return {};
+  }
+
+  std::size_t host_start = 2;
+  while (host_start < path_or_key.size() && is_slash(path_or_key[host_start])) {
+    ++host_start;
+  }
+  if (host_start >= path_or_key.size()) {
+    return {};
+  }
+
+  std::size_t host_end = host_start;
+  while (host_end < path_or_key.size() && !is_slash(path_or_key[host_end])) {
+    ++host_end;
+  }
+
+  if (host_end <= host_start) {
+    return {};
+  }
+  return path_or_key.substr(host_start, host_end - host_start);
 }
 
-std::string serializeNetworkSummary(
-    const WindowsDiskAnalysis::NetworkConnection& conn) {
-  return serializeNetworkValue(
-      conn, /*include_timestamp=*/true, /*include_application=*/true,
-      /*include_prefix=*/false);
+void appendDetail(std::string& details, std::string_view key,
+                  std::string value) {
+  trim(value);
+  if (value.empty()) {
+    return;
+  }
+  if (!details.empty()) {
+    details.append(kListSeparator);
+  }
+  details.append(key);
+  details.push_back('=');
+  details.append(value);
+}
+
+bool startsWithIsoUtcPrefix(const std::string& value) {
+  if (value.size() < 19) {
+    return false;
+  }
+
+  auto is_digit = [&](const std::size_t index) {
+    return std::isdigit(static_cast<unsigned char>(value[index])) != 0;
+  };
+
+  return is_digit(0) && is_digit(1) && is_digit(2) && is_digit(3) &&
+         value[4] == '-' && is_digit(5) && is_digit(6) && value[7] == '-' &&
+         is_digit(8) && is_digit(9) && value[10] == ' ' && is_digit(11) &&
+         is_digit(12) && value[13] == ':' && is_digit(14) && is_digit(15) &&
+         value[16] == ':' && is_digit(17) && is_digit(18);
+}
+
+std::string extractTimelineTimestamp(const std::string& timeline) {
+  if (!startsWithIsoUtcPrefix(timeline)) {
+    return {};
+  }
+  return timeline.substr(0, 19);
+}
+
+std::string stripTimelineTimestamp(const std::string& timeline) {
+  if (!startsWithIsoUtcPrefix(timeline)) {
+    return timeline;
+  }
+  if (timeline.size() > 20 && timeline[19] == ' ') {
+    return timeline.substr(20);
+  }
+  return timeline.substr(19);
+}
+
+std::string extractTimelineSource(const std::string& timeline) {
+  const std::string without_timestamp = stripTimelineTimestamp(timeline);
+  const std::size_t open = without_timestamp.find('[');
+  if (open == std::string::npos) {
+    return {};
+  }
+  const std::size_t close = without_timestamp.find(']', open + 1);
+  if (close == std::string::npos || close <= open + 1) {
+    return {};
+  }
+  return without_timestamp.substr(open + 1, close - open - 1);
+}
+
+bool isRecoverySource(const std::string& source) {
+  const std::string lowered = toLowerAscii(source);
+  return lowered == "usn" || lowered == "$logfile" || lowered == "vss" ||
+         lowered == "pagefile" || lowered == "memory" ||
+         lowered == "unallocated" || lowered.find("ntfs") != std::string::npos ||
+         lowered.find("hiber") != std::string::npos ||
+         lowered.find("signature") != std::string::npos ||
+         lowered.find("registry") != std::string::npos;
+}
+
+void appendUnifiedRow(std::vector<UnifiedCsvRow>& rows, UnifiedCsvRow row) {
+  if (row.source.empty()) {
+    row.source = "Unknown";
+  }
+  if (row.artifact_type.empty()) {
+    row.artifact_type = "unknown";
+  }
+  if (row.is_recovered.empty()) {
+    row.is_recovered = "0";
+  }
+  if (row.host_hint.empty()) {
+    row.host_hint = extractHostHintFromPathOrKey(row.path_or_key);
+  }
+  rows.push_back(std::move(row));
 }
 
 std::string selectExecutablePathForAmcache(
@@ -255,7 +319,7 @@ std::string selectExecutablePathForAmcache(
         !PathUtils::isExecutionPathCandidate(normalized)) {
       return {};
     }
-    return raw_path;
+    return normalized;
   };
 
   if (std::string path = pick_if_valid(entry.file_path); !path.empty()) {
@@ -267,100 +331,327 @@ std::string selectExecutablePathForAmcache(
   return {};
 }
 
-void writeAggregatedRow(std::ofstream& file, const std::string& aggregation_key,
-                        const WindowsDiskAnalysis::AggregatedData& row) {
-  const std::string_view filename =
-      row.executable_name.empty() ? std::string_view(aggregation_key)
-                                  : std::string_view(row.executable_name);
+std::string buildProcessBaseDetails(const WindowsDiskAnalysis::ProcessInfo& info) {
+  std::string details;
+  appendDetail(details, "run_count", std::to_string(info.run_count));
+  appendDetail(details, "command", info.command);
+  appendDetail(details, "first_seen_utc", info.first_seen_utc);
+  appendDetail(details, "last_seen_utc", info.last_seen_utc);
+  appendDetail(details, "run_times", joinStrings(toSortedUniqueStrings(info.run_times)));
+  appendDetail(details, "user_sids", joinStrings(toSortedUniqueStrings(info.user_sids)));
+  appendDetail(details, "logon_ids", joinStrings(toSortedUniqueStrings(info.logon_ids)));
+  appendDetail(details, "logon_types", joinStrings(toSortedUniqueStrings(info.logon_types)));
+  appendDetail(details, "elevation_type", info.elevation_type);
+  appendDetail(details, "elevated_token", info.elevated_token);
+  appendDetail(details, "integrity_level", info.integrity_level);
+  appendDetail(details, "privileges", joinStrings(toSortedUniqueStrings(info.privileges)));
+  return details;
+}
 
-  const std::string paths_str = joinStrings(row.paths);
-  const std::string versions_str = joinStrings(row.versions);
-  const std::string hashes_str = joinStrings(row.hashes);
-  const std::string file_sizes_str = joinUint64Values(row.file_sizes);
-
-  std::vector<std::string> unique_run_times = row.run_times;
-  sortAndUnique(unique_run_times);
-  const std::string run_times_str = joinStrings(unique_run_times);
-
-  const std::string users_str = joinStrings(row.users);
-  const std::string user_sids_str = joinStrings(row.user_sids);
-  const std::string logon_ids_str = joinStrings(row.logon_ids);
-  const std::string logon_types_str = joinStrings(row.logon_types);
-  const std::string elevation_types_str = joinStrings(row.elevation_types);
-  const std::string elevated_tokens_str = joinStrings(row.elevated_tokens);
-  const std::string integrity_levels_str = joinStrings(row.integrity_levels);
-  const std::string privileges_str = joinStrings(row.privileges);
-
-  const std::string autorun_str = serializeAutorunValue(row.autorun_locations);
-  const std::string_view deleted_str = row.has_deleted_trace ? "Да" : "Нет";
-
-  std::vector<std::string> network_values;
-  network_values.reserve(row.network_connections.size());
-  for (const auto& conn : row.network_connections) {
-    network_values.push_back(serializeNetworkSummary(conn));
+std::string chooseProcessTimestamp(const WindowsDiskAnalysis::ProcessInfo& info) {
+  if (!info.first_seen_utc.empty()) {
+    return info.first_seen_utc;
   }
-  sortAndUnique(network_values);
-
-  const std::string network_str = joinStrings(network_values);
-  const std::string network_timeline_artifacts_str =
-      joinStrings(row.network_timeline_artifacts);
-  const std::string network_context_sources_str =
-      joinStrings(row.network_context_sources);
-  const std::string network_profiles_str =
-      joinStrings(row.network_profile_artifacts);
-
-  std::vector<std::string> volume_values;
-  volume_values.reserve(row.volumes.size());
-  for (const auto& vol : row.volumes) {
-    volume_values.push_back(std::to_string(vol.getSerialNumber()) + ":" +
-                            volumeTypeToString(vol.getVolumeType()));
+  const std::vector<std::string> run_times = toSortedUniqueStrings(info.run_times);
+  if (!run_times.empty()) {
+    return run_times.front();
   }
-  sortAndUnique(volume_values);
-  const std::string volumes_str = joinStrings(volume_values);
+  return {};
+}
 
-  std::vector<std::string> metric_values = buildMetricValuesForCsv(row.metrics);
-  const std::string metrics_str = joinStrings(metric_values);
+void appendAutorunRows(
+    std::vector<UnifiedCsvRow>& rows,
+    const std::vector<WindowsDiskAnalysis::AutorunEntry>& autorun_entries) {
+  std::vector<WindowsDiskAnalysis::AutorunEntry> sorted = autorun_entries;
+  std::sort(sorted.begin(), sorted.end(),
+            [](const auto& lhs, const auto& rhs) {
+              return std::tie(lhs.path, lhs.location, lhs.name, lhs.command) <
+                     std::tie(rhs.path, rhs.location, rhs.name, rhs.command);
+            });
 
-  const std::string timeline_artifacts_str = joinStrings(row.timeline_artifacts);
-  const std::string recovered_from_str = joinStrings(row.recovered_from);
-  const std::string evidence_sources_str = joinStrings(row.evidence_sources);
-  const std::string tamper_flags_str = joinStrings(row.tamper_flags);
+  for (const auto& entry : sorted) {
+    std::string details;
+    appendDetail(details, "name", entry.name);
+    appendDetail(details, "location", entry.location);
+    appendDetail(details, "command", entry.command);
 
-  const auto writeEscapedField = [&](const std::string_view value) {
-    file << escapeCsvField(value) << kCsvDelimiter;
-  };
+    appendUnifiedRow(rows, {.source = "Autorun",
+                            .artifact_type = "autorun_entry",
+                            .path_or_key = normalizePathOrKeep(entry.path),
+                            .is_recovered = "0",
+                            .raw_details = std::move(details)});
+  }
+}
 
-  writeEscapedField(filename);
-  writeEscapedField(paths_str);
-  writeEscapedField(versions_str);
-  writeEscapedField(hashes_str);
-  writeEscapedField(file_sizes_str);
-  writeEscapedField(run_times_str);
-  writeEscapedField(row.first_seen_utc);
-  writeEscapedField(row.last_seen_utc);
-  writeEscapedField(timeline_artifacts_str);
-  writeEscapedField(recovered_from_str);
-  writeEscapedField(users_str);
-  writeEscapedField(user_sids_str);
-  writeEscapedField(logon_ids_str);
-  writeEscapedField(logon_types_str);
-  writeEscapedField(elevation_types_str);
-  writeEscapedField(elevated_tokens_str);
-  writeEscapedField(integrity_levels_str);
-  writeEscapedField(privileges_str);
-  writeEscapedField(autorun_str);
-  writeEscapedField(deleted_str);
+void appendProcessRows(
+    std::vector<UnifiedCsvRow>& rows,
+    const std::unordered_map<std::string, WindowsDiskAnalysis::ProcessInfo>&
+        process_data) {
+  std::vector<std::string> keys;
+  keys.reserve(process_data.size());
+  for (const auto& [key, _] : process_data) {
+    keys.push_back(key);
+  }
+  std::sort(keys.begin(), keys.end());
 
-  file << row.run_count << kCsvDelimiter;
+  for (const auto& key : keys) {
+    const auto it = process_data.find(key);
+    if (it == process_data.end()) {
+      continue;
+    }
+    const auto& info = it->second;
 
-  writeEscapedField(volumes_str);
-  writeEscapedField(network_str);
-  writeEscapedField(network_timeline_artifacts_str);
-  writeEscapedField(network_context_sources_str);
-  writeEscapedField(network_profiles_str);
-  writeEscapedField(metrics_str);
-  writeEscapedField(evidence_sources_str);
-  file << escapeCsvField(tamper_flags_str) << '\n';
+    std::string path_or_key = normalizePathOrKeep(key);
+    if (path_or_key.empty()) {
+      path_or_key = normalizePathOrKeep(info.filename);
+    }
+
+    std::vector<std::string> evidence_sources = toSortedUniqueStrings(info.evidence_sources);
+    for (auto& source : evidence_sources) {
+      source = normalizeSourceOrFallback(std::move(source), "Process");
+    }
+    sortAndUnique(evidence_sources);
+    if (evidence_sources.empty()) {
+      if (!info.metrics.empty() || !info.volumes.empty()) {
+        evidence_sources.emplace_back("Prefetch");
+      } else if (info.run_count > 0 || !info.run_times.empty()) {
+        evidence_sources.emplace_back("EventLog");
+      } else {
+        evidence_sources.emplace_back("Process");
+      }
+    }
+
+    std::string base_details = buildProcessBaseDetails(info);
+    const std::string user_hint = joinStrings(toSortedUniqueStrings(info.users));
+    const std::string process_timestamp = chooseProcessTimestamp(info);
+
+    for (const auto& source : evidence_sources) {
+      std::string details = base_details;
+      appendDetail(details, "evidence_source", source);
+      const std::string artifact_type =
+          resolveArtifactTypeBySource(source, "process_evidence");
+
+      appendUnifiedRow(rows, {.source = source,
+                              .artifact_type = artifact_type,
+                              .path_or_key = path_or_key,
+                              .timestamp_utc = process_timestamp,
+                              .is_recovered = "0",
+                              .user_hint = user_hint,
+                              .raw_details = std::move(details)});
+    }
+
+    std::vector<std::string> recovered_from = toSortedUniqueStrings(info.recovered_from);
+    for (auto& source : recovered_from) {
+      source = normalizeSourceOrFallback(std::move(source), "Recovery");
+    }
+    sortAndUnique(recovered_from);
+    for (const auto& source : recovered_from) {
+      std::string details = base_details;
+      appendDetail(details, "recovered_marker", source);
+      appendUnifiedRow(rows, {.source = source,
+                              .artifact_type = "process_recovery_marker",
+                              .path_or_key = path_or_key,
+                              .timestamp_utc = process_timestamp,
+                              .is_recovered = "1",
+                              .recovered_from = source,
+                              .user_hint = user_hint,
+                              .raw_details = std::move(details)});
+    }
+
+    std::vector<std::string> timeline = toSortedUniqueStrings(info.timeline_artifacts);
+    for (const auto& timeline_entry : timeline) {
+      std::string source = normalizeSourceOrFallback(
+          extractTimelineSource(timeline_entry), "Timeline");
+      const std::string timestamp = [&]() {
+        const std::string extracted = extractTimelineTimestamp(timeline_entry);
+        return extracted.empty() ? process_timestamp : extracted;
+      }();
+      const bool recovered = isRecoverySource(source);
+      const std::string artifact_type =
+          resolveArtifactTypeBySource(source, "timeline_artifact");
+
+      appendUnifiedRow(rows, {.source = source,
+                              .artifact_type = artifact_type,
+                              .path_or_key = path_or_key,
+                              .timestamp_utc = timestamp,
+                              .is_recovered = recovered ? "1" : "0",
+                              .recovered_from = recovered ? source : std::string(),
+                              .user_hint = user_hint,
+                              .raw_details = timeline_entry});
+    }
+  }
+}
+
+void appendNetworkRows(
+    std::vector<UnifiedCsvRow>& rows,
+    const std::vector<WindowsDiskAnalysis::NetworkConnection>&
+        network_connections) {
+  std::vector<WindowsDiskAnalysis::NetworkConnection> sorted =
+      network_connections;
+  std::sort(sorted.begin(), sorted.end(),
+            [](const auto& lhs, const auto& rhs) {
+              return std::tie(lhs.timestamp, lhs.application, lhs.process_name,
+                              lhs.process_id, lhs.event_id, lhs.source_ip,
+                              lhs.source_port, lhs.dest_ip, lhs.dest_port) <
+                     std::tie(rhs.timestamp, rhs.application, rhs.process_name,
+                              rhs.process_id, rhs.event_id, rhs.source_ip,
+                              rhs.source_port, rhs.dest_ip, rhs.dest_port);
+            });
+
+  for (const auto& conn : sorted) {
+    std::string details;
+    appendDetail(details, "event_id", std::to_string(conn.event_id));
+    appendDetail(details, "pid", std::to_string(conn.process_id));
+    appendDetail(details, "process_name", conn.process_name);
+    appendDetail(details, "source_ip", conn.source_ip);
+    appendDetail(details, "source_port", std::to_string(conn.source_port));
+    appendDetail(details, "dest_ip", conn.dest_ip);
+    appendDetail(details, "dest_port", std::to_string(conn.dest_port));
+    appendDetail(details, "protocol", conn.protocol);
+    appendDetail(details, "direction", conn.direction);
+    appendDetail(details, "action", conn.action);
+
+    std::string path_or_key = normalizePathOrKeep(conn.application);
+    if (path_or_key.empty()) {
+      path_or_key = normalizePathOrKeep(conn.process_name);
+    }
+    if (path_or_key.empty() && conn.process_id > 0) {
+      path_or_key = "pid:" + std::to_string(conn.process_id);
+    }
+
+    appendUnifiedRow(rows, {.source = "NetworkEvent",
+                            .artifact_type = "network_connection",
+                            .path_or_key = std::move(path_or_key),
+                            .timestamp_utc = conn.timestamp,
+                            .is_recovered = "0",
+                            .host_hint = conn.source_ip,
+                            .raw_details = std::move(details)});
+  }
+}
+
+void appendAmcacheRows(
+    std::vector<UnifiedCsvRow>& rows,
+    const std::vector<WindowsDiskAnalysis::AmcacheEntry>& amcache_entries) {
+  std::vector<WindowsDiskAnalysis::AmcacheEntry> sorted = amcache_entries;
+  std::sort(sorted.begin(), sorted.end(),
+            [](const auto& lhs, const auto& rhs) {
+              return std::tie(lhs.file_path, lhs.alternate_path,
+                              lhs.modification_time_str, lhs.install_time_str,
+                              lhs.file_hash, lhs.name) <
+                     std::tie(rhs.file_path, rhs.alternate_path,
+                              rhs.modification_time_str, rhs.install_time_str,
+                              rhs.file_hash, rhs.name);
+            });
+
+  for (const auto& entry : sorted) {
+    std::string details;
+    appendDetail(details, "name", entry.name);
+    appendDetail(details, "version", entry.version);
+    appendDetail(details, "file_hash", entry.file_hash);
+    appendDetail(details, "publisher", entry.publisher);
+    appendDetail(details, "description", entry.description);
+    if (entry.file_size > 0) {
+      appendDetail(details, "file_size", std::to_string(entry.file_size));
+    }
+    appendDetail(details, "is_deleted", entry.is_deleted ? "1" : "0");
+    appendDetail(details, "alternate_path", normalizePathOrKeep(entry.alternate_path));
+    appendDetail(details, "install_time_utc", entry.install_time_str);
+
+    const std::string timestamp = !entry.modification_time_str.empty()
+                                      ? entry.modification_time_str
+                                      : entry.install_time_str;
+    const std::string path_or_key = [&]() {
+      const std::string selected = selectExecutablePathForAmcache(entry);
+      if (!selected.empty()) {
+        return selected;
+      }
+      const std::string main_path = normalizePathOrKeep(entry.file_path);
+      if (!main_path.empty()) {
+        return main_path;
+      }
+      return normalizePathOrKeep(entry.alternate_path);
+    }();
+
+    appendUnifiedRow(rows, {.source = normalizeSourceOrFallback(
+                                entry.source.empty() ? "Amcache" : entry.source,
+                                "Amcache"),
+                            .artifact_type = "amcache_entry",
+                            .path_or_key = path_or_key,
+                            .timestamp_utc = timestamp,
+                            .is_recovered = "0",
+                            .raw_details = std::move(details)});
+  }
+}
+
+void appendRecoveryRows(
+    std::vector<UnifiedCsvRow>& rows,
+    const std::vector<WindowsDiskAnalysis::RecoveryEvidence>& recovery_evidence) {
+  std::vector<WindowsDiskAnalysis::RecoveryEvidence> sorted = recovery_evidence;
+  std::sort(sorted.begin(), sorted.end(),
+            [](const auto& lhs, const auto& rhs) {
+              return std::tie(lhs.executable_path, lhs.source, lhs.recovered_from,
+                              lhs.timestamp, lhs.details, lhs.tamper_flag) <
+                     std::tie(rhs.executable_path, rhs.source, rhs.recovered_from,
+                              rhs.timestamp, rhs.details, rhs.tamper_flag);
+            });
+
+  for (const auto& entry : sorted) {
+    std::string details = entry.details;
+    appendDetail(details, "tamper_flag", entry.tamper_flag);
+    const std::string source =
+        normalizeSourceOrFallback(entry.source, "Recovery");
+    const std::string recovered_from =
+        entry.recovered_from.empty() ? source : entry.recovered_from;
+
+    appendUnifiedRow(rows, {.source = source,
+                            .artifact_type = "recovery_evidence",
+                            .path_or_key = normalizePathOrKeep(entry.executable_path),
+                            .timestamp_utc = entry.timestamp,
+                            .is_recovered = "1",
+                            .recovered_from = recovered_from,
+                            .raw_details = std::move(details)});
+  }
+}
+
+bool sameUnifiedRow(const UnifiedCsvRow& lhs, const UnifiedCsvRow& rhs) {
+  return std::tie(lhs.source, lhs.artifact_type, lhs.path_or_key,
+                  lhs.timestamp_utc, lhs.is_recovered, lhs.recovered_from,
+                  lhs.host_hint, lhs.user_hint, lhs.raw_details) ==
+         std::tie(rhs.source, rhs.artifact_type, rhs.path_or_key,
+                  rhs.timestamp_utc, rhs.is_recovered, rhs.recovered_from,
+                  rhs.host_hint, rhs.user_hint, rhs.raw_details);
+}
+
+void finalizeUnifiedRows(std::vector<UnifiedCsvRow>& rows) {
+  std::sort(rows.begin(), rows.end(),
+            [](const UnifiedCsvRow& lhs, const UnifiedCsvRow& rhs) {
+              return std::tie(lhs.source, lhs.artifact_type, lhs.path_or_key,
+                              lhs.timestamp_utc, lhs.is_recovered,
+                              lhs.recovered_from, lhs.host_hint, lhs.user_hint,
+                              lhs.raw_details) <
+                     std::tie(rhs.source, rhs.artifact_type, rhs.path_or_key,
+                              rhs.timestamp_utc, rhs.is_recovered,
+                              rhs.recovered_from, rhs.host_hint, rhs.user_hint,
+                              rhs.raw_details);
+            });
+  rows.erase(std::unique(rows.begin(), rows.end(), sameUnifiedRow), rows.end());
+}
+
+void writeUnifiedRows(std::ofstream& file, const std::vector<UnifiedCsvRow>& rows) {
+  std::size_t record_index = 1;
+  for (const auto& row : rows) {
+    const std::string record_id = "rec-" + std::to_string(record_index++);
+    file << escapeCsvField(record_id) << kCsvDelimiter
+         << escapeCsvField(row.source) << kCsvDelimiter
+         << escapeCsvField(row.artifact_type) << kCsvDelimiter
+         << escapeCsvField(row.path_or_key) << kCsvDelimiter
+         << escapeCsvField(row.timestamp_utc) << kCsvDelimiter
+         << escapeCsvField(row.is_recovered) << kCsvDelimiter
+         << escapeCsvField(row.recovered_from) << kCsvDelimiter
+         << escapeCsvField(row.host_hint) << kCsvDelimiter
+         << escapeCsvField(row.user_hint) << kCsvDelimiter
+         << escapeCsvField(row.raw_details) << '\n';
+  }
 }
 
 std::filesystem::path buildRecoveryOutputPath(
@@ -426,199 +717,21 @@ void CSVExporter::exportToCSV(
   }
 
   try {
-    // BOM нужен для корректного чтения UTF-8 заголовков в Excel/Windows
     file.write("\xEF\xBB\xBF", 3);
-    writeCsvHeader(file);
+    writeUnifiedCsvHeader(file);
 
-    // Основная карта для агрегации данных по нормализованному идентификатору
-    // процесса.
-    // Приоритет: полный путь (если есть), иначе имя файла.
-    // unordered_map: O(1) lookup vs O(log n) у std::map — существенно на
-    // дисках с тысячами процессов (каждая из 4 секций делает lookup per entry).
-    std::unordered_map<std::string, AggregatedData> aggregated_data;
-    aggregated_data.reserve(
-        process_data.size() + autorun_entries.size() / 4 + amcache_entries.size());
+    std::vector<UnifiedCsvRow> rows;
+    rows.reserve(autorun_entries.size() + process_data.size() +
+                 network_connections.size() + amcache_entries.size() +
+                 recovery_evidence.size());
 
-    // Обработка всех типов данных с объединением по имени файла
-    auto processEntry = [&](const std::string& path, auto processor) {
-      std::string norm_path = normalizePath(path);
-      if (norm_path.empty()) return;
-
-      // Получаем имя файла - основной ключ для агрегации
-      std::string filename = getFilenameFromPath(norm_path);
-      if (filename.empty()) return;
-
-      const bool has_explicit_path = PathUtils::hasPathContext(norm_path);
-      const std::string aggregation_key =
-          toLowerAscii(has_explicit_path ? norm_path : filename);
-
-      // Обрабатываем данные
-      auto& bucket = aggregated_data[aggregation_key];
-      if (bucket.executable_name.empty()) {
-        bucket.executable_name = filename;
-      }
-
-      processor(bucket, norm_path);
-    };
-
-    // 1. Обрабатываем данные автозагрузки
-    for (const auto& entry : autorun_entries) {
-      processEntry(entry.path,
-                   [&](AggregatedData& data, const std::string& path) {
-                     data.paths.insert(path);
-                     data.autorun_locations.insert(entry.location);
-                     addEvidenceSource(data, "Autorun");
-                     data.timeline_artifacts.insert("[Autorun] " + entry.location);
-                   });
-    }
-
-    // 2. Обрабатываем данные процессов
-    for (const auto& [path, info] : process_data) {
-      processEntry(
-          path, [&](AggregatedData& data, const std::string& normalized_path) {
-            data.paths.insert(normalized_path);
-            data.run_times.insert(data.run_times.end(), info.run_times.begin(),
-                                  info.run_times.end());
-            data.run_count += info.run_count;
-            data.volumes.insert(data.volumes.end(), info.volumes.begin(),
-                                info.volumes.end());
-            data.metrics.insert(data.metrics.end(), info.metrics.begin(),
-                                info.metrics.end());
-            data.users.insert(info.users.begin(), info.users.end());
-            data.user_sids.insert(info.user_sids.begin(), info.user_sids.end());
-            data.logon_ids.insert(info.logon_ids.begin(), info.logon_ids.end());
-            data.logon_types.insert(info.logon_types.begin(), info.logon_types.end());
-            data.privileges.insert(info.privileges.begin(), info.privileges.end());
-            if (!info.elevation_type.empty()) {
-              data.elevation_types.insert(info.elevation_type);
-            }
-            if (!info.elevated_token.empty()) {
-              data.elevated_tokens.insert(info.elevated_token);
-            }
-            if (!info.integrity_level.empty()) {
-              data.integrity_levels.insert(info.integrity_level);
-            }
-
-            for (const auto& source : info.evidence_sources) {
-              const std::string normalized_source =
-                  normalizeEvidenceSource(source);
-              addEvidenceSource(data, normalized_source);
-              if (isNetworkContextSource(normalized_source)) {
-                data.network_context_sources.insert(normalized_source);
-              }
-            }
-            for (const auto& flag : info.tamper_flags) {
-              addTamperFlag(data, flag);
-            }
-            for (const auto& timeline : info.timeline_artifacts) {
-              if (!timeline.empty()) {
-                data.timeline_artifacts.insert(timeline);
-                if (isNetworkTimelineArtifact(timeline)) {
-                  data.network_timeline_artifacts.insert(timeline);
-                  const std::string lowered = toLowerAscii(timeline);
-                  if (lowered.find("[networkprofile]") != std::string::npos) {
-                    data.network_profile_artifacts.insert(timeline);
-                  }
-                }
-              }
-            }
-            for (const auto& recovered_from : info.recovered_from) {
-              if (!recovered_from.empty()) {
-                data.recovered_from.insert(recovered_from);
-              }
-            }
-
-            updateRowFirstSeen(data, info.first_seen_utc);
-            updateRowLastSeen(data, info.last_seen_utc);
-            for (const auto& timestamp : info.run_times) {
-              updateRowFirstSeen(data, timestamp);
-              updateRowLastSeen(data, timestamp);
-            }
-
-            // Fallback для старых источников, где evidence_sources еще не
-            // заполнены на этапе сбора.
-            if (info.evidence_sources.empty()) {
-              if (!info.metrics.empty() || !info.volumes.empty()) {
-                addEvidenceSource(data, "Prefetch");
-              } else if (info.run_count > 0 || !info.run_times.empty()) {
-                addEvidenceSource(data, "EventLog");
-              }
-            }
-
-          });
-    }
-
-    // 3. Обрабатываем сетевые подключения
-    for (const auto& conn : network_connections) {
-      std::string network_key = conn.process_name;
-      if (network_key.empty()) {
-        network_key = conn.application;
-      }
-      if (network_key.empty()) continue;
-
-      processEntry(network_key,
-                   [&](AggregatedData& data, const std::string& path) {
-                     data.paths.insert(path);
-                     data.network_connections.push_back(conn);
-                     addEvidenceSource(data, "NetworkEvent");
-                     data.network_context_sources.insert("NetworkEvent");
-
-                     const std::string timeline_value =
-                         serializeNetworkTimeline(conn);
-                     data.timeline_artifacts.insert(timeline_value);
-                     data.network_timeline_artifacts.insert(timeline_value);
-                   });
-    }
-
-    // 4. Обрабатываем данные Amcache - добавляем версии, хэши, размеры и время
-    // изменения
-    for (const auto& entry : amcache_entries) {
-      // Принимаем только записи, где известен путь к исполняемому файлу.
-      // Приложения/пакеты из InventoryApplication без пути к exe
-      // не должны создавать отдельные process-строки в CSV.
-      const std::string path = selectExecutablePathForAmcache(entry);
-      if (path.empty()) continue;
-
-      processEntry(path,
-                   [&](AggregatedData& data, const std::string& norm_path) {
-                     data.paths.insert(norm_path);
-                     addEvidenceSource(
-                         data, entry.source.empty() ? "Amcache" : entry.source);
-
-                     // Добавляем версии и хэши
-                     if (!entry.version.empty()) {
-                       data.versions.insert(entry.version);
-                     }
-                     if (!entry.file_hash.empty()) {
-                       data.hashes.insert(entry.file_hash);
-                     }
-
-                     // Добавляем размеры файлов
-                     if (entry.file_size > 0) {
-                       data.file_sizes.insert(entry.file_size);
-                     }
-
-                     if (!entry.modification_time_str.empty()) {
-                       data.run_times.push_back(entry.modification_time_str);
-                       updateRowFirstSeen(data, entry.modification_time_str);
-                       updateRowLastSeen(data, entry.modification_time_str);
-                       data.timeline_artifacts.insert(
-                           "[" +
-                           (entry.source.empty() ? std::string("Amcache")
-                                                 : entry.source) +
-                           "] " + entry.modification_time_str);
-                     }
-
-                     if (entry.is_deleted) {
-                       data.has_deleted_trace = true;
-                     }
-                   });
-    }
-
-    // 5. Генерируем выходные данные
-    for (const auto& [aggregation_key, data] : aggregated_data) {
-      writeAggregatedRow(file, aggregation_key, data);
-    }
+    appendAutorunRows(rows, autorun_entries);
+    appendProcessRows(rows, process_data);
+    appendNetworkRows(rows, network_connections);
+    appendAmcacheRows(rows, amcache_entries);
+    appendRecoveryRows(rows, recovery_evidence);
+    finalizeUnifiedRows(rows);
+    writeUnifiedRows(file, rows);
   } catch (const std::exception& e) {
     throw CsvExportException(std::string("Ошибка при экспорте данных: ") +
                              e.what());

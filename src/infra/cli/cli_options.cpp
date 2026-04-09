@@ -33,7 +33,8 @@ void printUsage(const char* program_name) {
       << "  -R, --recovery-output <path>\n"
       << "                   Сохранить recovery CSV в указанный файл\n"
       << "  -i, --image <path>\n"
-      << "                   Путь к образу диска для сигнатурного сканирования\n\n"
+      << "                   Путь к образу диска для сигнатурного "
+         "сканирования\n\n"
       << "Режим auto:\n"
       << "  Если disk-root не указан, используется auto.\n"
       << "  В этом режиме программа ищет Windows-том среди смонтированных.\n"
@@ -58,9 +59,8 @@ std::optional<CliOptions> parseArguments(int argc, char* argv[],
     return options;
   }
 
-  const auto readOptionValue =
-      [&](const std::string& option_name, int& index,
-          std::string& output_value) -> bool {
+  const auto readOptionValue = [&](const std::string& option_name, int& index,
+                                   std::string& output_value) -> bool {
     if (index + 1 >= argc) {
       error_message = "Опция " + option_name + " требует значение";
       return false;

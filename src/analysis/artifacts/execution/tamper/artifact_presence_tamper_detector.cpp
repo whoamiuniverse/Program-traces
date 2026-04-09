@@ -62,15 +62,16 @@ bool isUsnJournalMissing(const std::string& disk_root) {
 /// @param disk_root Корень диска Windows.
 /// @return true если SVI присутствует, но снимки отсутствуют.
 bool isVssDeleted(const std::string& disk_root) {
-  const auto svi = findPathCaseInsensitive(
-      fs::path(disk_root) / "System Volume Information");
+  const auto svi = findPathCaseInsensitive(fs::path(disk_root) /
+                                           "System Volume Information");
   if (!svi.has_value()) return false;  // SVI нет — не можем судить
 
   std::error_code ec;
-  for (const auto& entry :
-       fs::directory_iterator(*svi, fs::directory_options::skip_permission_denied, ec)) {
+  for (const auto& entry : fs::directory_iterator(
+           *svi, fs::directory_options::skip_permission_denied, ec)) {
     if (ec) break;
-    const std::string name_lower = toLowerAscii(entry.path().filename().string());
+    const std::string name_lower =
+        toLowerAscii(entry.path().filename().string());
     if (name_lower.find("harddiskvolumeshadowcopy") != std::string::npos ||
         (!name_lower.empty() && name_lower.front() == '{')) {
       return false;  // нашли снимок
@@ -99,7 +100,8 @@ void ArtifactPresenceTamperDetector::detect(
 
   if (isVssDeleted(ctx.disk_root)) {
     appendTamperFlag(global_tamper_flags, "volume_shadow_copies_deleted");
-    logger->warn("System Volume Information присутствует, но VSS-снимки отсутствуют");
+    logger->warn(
+        "System Volume Information присутствует, но VSS-снимки отсутствуют");
   }
 }
 

@@ -7,8 +7,8 @@
 #include <string>
 #include <vector>
 
-#include "parsers/registry/parser/parser.hpp"
 #include "analysis/artifacts/data/analysis_data.hpp"
+#include "parsers/registry/parser/parser.hpp"
 
 namespace WindowsDiskAnalysis {
 
@@ -18,12 +18,17 @@ struct AmcacheConfig {
   std::string inventory_application_key =
       "Root/InventoryApplication";  ///< Путь к ключу InventoryApplication.
   std::string inventory_shortcut_key =
-      "Root/InventoryApplicationShortcut";  ///< Путь к ключу InventoryApplicationShortcut.
+      "Root/InventoryApplicationShortcut";  ///< Путь к ключу
+                                            ///< InventoryApplicationShortcut.
   std::string inventory_driver_key =
-      "Root/InventoryApplicationDriver";  ///< Путь к ключу InventoryApplicationDriver (Windows 11 24H2+).
-  bool enable_inventory_application = true;  ///< Включает сбор записей приложений.
-  bool enable_inventory_shortcut    = true;  ///< Включает сбор записей shortcut.
-  bool enable_inventory_driver      = true;  ///< Включает сбор записей драйверов (Windows 11 24H2+).
+      "Root/InventoryApplicationDriver";  ///< Путь к ключу
+                                          ///< InventoryApplicationDriver
+                                          ///< (Windows 11 24H2+).
+  bool enable_inventory_application =
+      true;                               ///< Включает сбор записей приложений.
+  bool enable_inventory_shortcut = true;  ///< Включает сбор записей shortcut.
+  bool enable_inventory_driver =
+      true;  ///< Включает сбор записей драйверов (Windows 11 24H2+).
 };
 
 /// @class AmcacheAnalyzer
@@ -74,13 +79,13 @@ class AmcacheAnalyzer {
       const std::string& path) const;
 
   std::unique_ptr<RegistryAnalysis::IRegistryParser>
-      parser_;  ///< Парсер для доступа к значениям реестра
-  std::string os_version_;   ///< Версия ОС для выбора конфигурационного профиля
-  std::string ini_path_;     ///< Путь к INI-файлу с настройками
+      parser_;              ///< Парсер для доступа к значениям реестра
+  std::string os_version_;  ///< Версия ОС для выбора конфигурационного профиля
+  std::string ini_path_;    ///< Путь к INI-файлу с настройками
   std::string amcache_path_;  ///< Путь к файлу Amcache.hve относительно диска
   std::string recent_file_cache_path_;  ///< Путь к RecentFileCache.bcf.
   std::vector<std::string>
-      amcache_keys_;  ///< Список ключей реестра, подлежащих разбору
+      amcache_keys_;      ///< Список ключей реестра, подлежащих разбору
   AmcacheConfig config_;  ///< Расширенная конфигурация дополнительных ключей
 };
 
