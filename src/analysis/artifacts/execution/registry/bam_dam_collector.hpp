@@ -13,7 +13,6 @@ namespace WindowsDiskAnalysis {
 ///
 /// @details Reads per-user BAM and DAM sub-keys from the SYSTEM hive, supporting
 /// both the modern (@c bam/State/UserSettings) and legacy (@c bam/UserSettings) paths.
-/// Skipped entirely when @c ctx.config.enable_bam_dam is @c false.
 class BamDamCollector final : public IExecutionArtifactCollector {
  public:
   /// @brief Collects BAM/DAM execution artifacts from the SYSTEM hive.

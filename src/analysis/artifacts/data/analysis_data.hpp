@@ -68,8 +68,6 @@ struct ProcessInfo {
       metrics;  ///< Файлы, к которым процесс обращался по данным Prefetch
   std::vector<std::string>
       evidence_sources;  ///< Источники доказательств (Prefetch, EventLog и др.)
-  std::vector<std::string>
-      tamper_flags;  ///< Флаги подозрительной модификации артефактов
   std::string first_seen_utc;  ///< Минимальная временная метка корреляции
   std::string last_seen_utc;   ///< Максимальная временная метка корреляции
   std::vector<std::string>
@@ -86,7 +84,6 @@ struct RecoveryEvidence {
   std::string recovered_from;   ///< Категория восстановления (USN/$LogFile/...)
   std::string timestamp;        ///< Временная метка восстановления (если есть)
   std::string details;          ///< Технические детали для последующей корреляции
-  std::string tamper_flag;      ///< Дополнительный флаг подозрительности
 };
 
 /// @struct NetworkConnection

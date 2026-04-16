@@ -20,7 +20,9 @@ namespace fs = std::filesystem;
 namespace WindowsDiskAnalysis {
 
 using namespace ExecutionEvidenceDetail;
+using EvidenceUtils::appendUniqueToken;
 using EvidenceUtils::fileTimeToUtcString;
+using EvidenceUtils::extractExecutableFromCommand;
 using EvidenceUtils::toLowerAscii;
 
 namespace {
@@ -69,7 +71,6 @@ std::vector<std::vector<uint8_t>> extractCustomDestinationLnkBlobs(
 
 void JumpListsCollector::collect(const ExecutionEvidenceContext& ctx,
                                  std::unordered_map<std::string, ProcessInfo>& process_data) {
-  if (!ctx.config.enable_jump_lists) return;
   const auto logger = GlobalLogger::get();
   const std::size_t max_bytes = toByteLimit(ctx.config.binary_scan_max_mb);
   std::size_t collected = 0;
@@ -94,6 +95,19 @@ void JumpListsCollector::collect(const ExecutionEvidenceContext& ctx,
       std::string timestamp = fileTimeToUtcString(
           fs::last_write_time(file_entry.path(), ec));
       std::string details = "jump=" + file_entry.path().filename().string();
+      auto appendCandidate = [&](std::string candidate) {
+        trim(candidate);
+        if (candidate.empty()) return;
+
+        if (auto executable = extractExecutableFromCommand(candidate);
+            executable.has_value()) {
+          appendUniqueToken(candidates, *executable);
+          return;
+        }
+        if (isLikelyExecutionPath(candidate, true)) {
+          appendUniqueToken(candidates, std::move(candidate));
+        }
+      };
 
       if (ext == ".automaticdestinations-ms") {
         if (const auto streams =
@@ -108,7 +122,7 @@ void JumpListsCollector::collect(const ExecutionEvidenceContext& ctx,
                 continue;
               }
 
-              candidates.push_back(candidate);
+              appendCandidate(candidate);
               details = "jump=" + file_entry.path().filename().string() +
                         ", stream=" + stream.name;
               if (!parsed->write_time.empty() && parsed->write_time != "N/A") {
@@ -128,7 +142,7 @@ void JumpListsCollector::collect(const ExecutionEvidenceContext& ctx,
               continue;
             }
 
-            candidates.push_back(candidate);
+            appendCandidate(candidate);
             if (!parsed->write_time.empty() && parsed->write_time != "N/A") {
               timestamp = parsed->write_time;
             }

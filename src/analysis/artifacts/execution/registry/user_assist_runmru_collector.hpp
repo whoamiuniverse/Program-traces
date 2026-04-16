@@ -13,8 +13,6 @@ namespace WindowsDiskAnalysis {
 ///
 /// @details Reads ROT-13 encoded UserAssist entries from @c ctx.config.userassist_key
 /// and plain-text RunMRU entries from @c ctx.config.runmru_key in each user's NTUSER.DAT.
-/// Skipped for UserAssist when @c ctx.config.enable_userassist is @c false;
-/// skipped for RunMRU when @c ctx.config.enable_runmru is @c false.
 class UserAssistRunMruCollector final : public IExecutionArtifactCollector {
  public:
   /// @brief Collects UserAssist and RunMRU execution artifacts from user hives.

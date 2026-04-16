@@ -34,15 +34,10 @@ class NTFSMetadataAnalyzer final : public IRecoveryAnalyzer {
       const std::string& disk_root) const override;
 
  private:
-  /// @brief Loads analyzer parameters from the @c [Recovery] INI section.
+ /// @brief Loads analyzer parameters from the @c [Recovery] INI section.
   void loadConfiguration();
 
   std::string config_path_;  ///< Path to the INI configuration file.
-  bool enabled_ = true;      ///< Whether NTFS metadata analysis is enabled.
-  bool enable_native_fsntfs_parser_ =
-      true;  ///< Whether to use the native libfsntfs parser.
-  bool fsntfs_fallback_to_binary_on_native_failure_ =
-      true;  ///< Whether to fall back to binary scan when native parsing fails.
   std::size_t binary_scan_max_mb_ = 64;  ///< Byte limit (in MB) for the binary scan.
   std::size_t max_candidates_per_source_ =
       2000;  ///< Maximum number of extracted candidates per source.
@@ -50,8 +45,6 @@ class NTFSMetadataAnalyzer final : public IRecoveryAnalyzer {
   std::size_t mft_max_records_ = 200000;  ///< Maximum number of MFT records to analyze.
   std::string mft_path_ = "$MFT";         ///< Path to the $MFT file relative to disk_root.
   std::string bitmap_path_ = "$Bitmap";   ///< Path to the $Bitmap file relative to disk_root.
-  bool enable_si_fn_divergence_check_ = true;  ///< Whether to check for $STANDARD_INFORMATION / $FILE_NAME timestamp divergence.
-  std::size_t timestamp_divergence_threshold_sec_ = 2;  ///< Minimum divergence in seconds to flag as suspicious.
 };
 
 }  // namespace WindowsDiskAnalysis

@@ -15,6 +15,7 @@
 #include "analysis/artifacts/recovery/usn/usn_analyzer.hpp"
 #include "analysis/artifacts/recovery/vss/vss_analyzer.hpp"
 #include "analysis/artifacts/recovery/signature/signature_scanner.hpp"
+#include "analysis/artifacts/recovery/tsk/tsk_deleted_file_analyzer.hpp"
 #include "infra/logging/logger.hpp"
 #include "parsers/event_log/evt/parser/parser.hpp"
 #include "parsers/event_log/evtx/parser/parser.hpp"
@@ -102,6 +103,8 @@ void WindowsDiskAnalyzer::initializeComponents() {
         {"Registry", std::make_unique<RegistryLogAnalyzer>(config_path_)});
     recovery_analyzers_.push_back(
         {"SigScan", std::make_unique<SignatureScanner>(config_path_, cli_image_path_)});
+    recovery_analyzers_.push_back(
+        {"TSK", std::make_unique<TskDeletedFileAnalyzer>(config_path_, cli_image_path_)});
   }
 }
 
@@ -130,7 +133,6 @@ void WindowsDiskAnalyzer::resetAnalysisState() {
   process_data_.clear();
   network_connections_.clear();
   amcache_entries_.clear();
-  global_tamper_flags_.clear();
   recovery_evidence_.clear();
 }
 

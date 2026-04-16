@@ -13,7 +13,6 @@ namespace WindowsDiskAnalysis {
 ///
 /// @details Reads the binary @c AppCompatCache value from the SYSTEM hive as configured
 /// in @c ctx.config.shimcache_value_path and decodes it using @c ShimCacheDecoder.
-/// Skipped entirely when @c ctx.config.enable_shimcache is @c false.
 class ShimCacheCollector final : public IExecutionArtifactCollector {
  public:
   /// @brief Collects ShimCache execution artifacts from the SYSTEM hive.

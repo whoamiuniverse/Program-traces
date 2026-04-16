@@ -21,7 +21,6 @@ using EvidenceUtils::extractExecutableFromCommand;
 
 void PsConsoleHistoryCollector::collect(const ExecutionEvidenceContext& ctx,
                                         std::unordered_map<std::string, ProcessInfo>& process_data) {
-  if (!ctx.config.enable_ps_history) return;
   const auto logger = GlobalLogger::get();
   std::size_t collected = 0;
   std::error_code ec;

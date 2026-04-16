@@ -13,7 +13,6 @@ namespace WindowsDiskAnalysis {
 ///
 /// @details Enumerates @c .lnk files from per-user Recent directories as
 /// configured in @c ctx.config.recent_lnk_suffix and extracts target paths.
-/// Skipped entirely when @c ctx.config.enable_lnk_recent is @c false.
 class LnkRecentCollector final : public IExecutionArtifactCollector {
  public:
   /// @brief Collects execution artifacts from .lnk files in user Recent folders.

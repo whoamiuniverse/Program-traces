@@ -126,11 +126,6 @@ void appendEvidenceSource(ProcessInfo& info, const std::string& source);
 /// @param artifact Timeline artifact label to append.
 void appendTimelineArtifact(ProcessInfo& info, std::string artifact);
 
-/// @brief Appends a tamper flag to a vector without duplicates.
-/// @param flags Vector of existing tamper flags.
-/// @param flag  Tamper flag to append.
-void appendTamperFlag(std::vector<std::string>& flags, std::string flag);
-
 /// @brief Records a timestamp in a @c ProcessInfo entry and updates first/last-seen fields.
 /// @param info      @c ProcessInfo to update.
 /// @param timestamp Timestamp string to record.

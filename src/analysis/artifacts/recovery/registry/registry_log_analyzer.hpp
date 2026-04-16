@@ -30,11 +30,10 @@ class RegistryLogAnalyzer final : public IRecoveryAnalyzer {
       const std::string& disk_root) const override;
 
  private:
-  /// @brief Loads analyzer parameters from the @c [Recovery] INI section.
+ /// @brief Loads analyzer parameters from the @c [Recovery] INI section.
   void loadConfiguration();
 
   std::string config_path_;  ///< Path to the INI configuration file.
-  bool enabled_ = true;      ///< Whether registry transaction log analysis is enabled.
   std::size_t binary_scan_max_mb_ = 64;  ///< Byte limit (in MB) for the binary scan.
   std::size_t max_candidates_per_source_ =
       2000;  ///< Maximum number of extracted candidates per source file.

@@ -12,8 +12,7 @@ namespace WindowsDiskAnalysis {
 /// @brief Collects execution artifacts from Jump Lists (AutomaticDestinations and CustomDestinations).
 ///
 /// @details Scans per-user @c AutomaticDestinations and @c CustomDestinations directories
-/// as configured in @c ctx.config. Skipped entirely when
-/// @c ctx.config.enable_jump_lists is @c false.
+/// as configured in @c ctx.config.
 class JumpListsCollector final : public IExecutionArtifactCollector {
  public:
   /// @brief Collects execution artifacts from Jump List files.

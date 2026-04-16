@@ -355,9 +355,6 @@ void mergeProcessInfo(ProcessInfo& target, ProcessInfo&& source) {
   for (auto& source_name : source.evidence_sources) {
     EvidenceUtils::appendUniqueToken(target.evidence_sources, std::move(source_name));
   }
-  for (auto& flag : source.tamper_flags) {
-    EvidenceUtils::appendUniqueToken(target.tamper_flags, std::move(flag));
-  }
   for (auto& timeline : source.timeline_artifacts) {
     EvidenceUtils::appendUniqueToken(target.timeline_artifacts, std::move(timeline));
   }

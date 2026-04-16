@@ -13,7 +13,6 @@ namespace WindowsDiskAnalysis {
 ///
 /// @details Reads per-user PSReadLine history files at the path suffix specified in
 /// @c ctx.config.ps_history_suffix and extracts lines that look like executable invocations.
-/// Skipped entirely when @c ctx.config.enable_ps_history is @c false.
 class PsConsoleHistoryCollector final : public IExecutionArtifactCollector {
  public:
   /// @brief Collects execution artifacts from PowerShell console history files.

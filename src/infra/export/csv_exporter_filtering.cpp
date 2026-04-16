@@ -44,25 +44,15 @@ void addEvidenceSource(AggregatedData& data, std::string source) {
   }
 }
 
-void addTamperFlag(AggregatedData& data, std::string flag) {
-  trim(flag);
-  if (!flag.empty()) {
-    data.tamper_flags.insert(std::move(flag));
-  }
-}
-
 bool isNetworkContextSource(const std::string& source) {
-  return source == "NetworkEvent" || source == "NetworkProfile" ||
-         source == "BITS" || source == "SRUM" || source == "Hosts";
+  return source == "NetworkEvent" || source == "SRUM";
 }
 
 bool isNetworkTimelineArtifact(const std::string& timeline) {
   if (timeline.empty()) return false;
   const std::string lowered = toLowerAscii(timeline);
   return lowered.find("[networkevent]") != std::string::npos ||
-         lowered.find("[networkprofile]") != std::string::npos ||
-         lowered.find("[bits]") != std::string::npos ||
-         lowered.find("[hosts]") != std::string::npos;
+         lowered.find("[srum]") != std::string::npos;
 }
 
 void updateRowFirstSeen(AggregatedData& data, const std::string& timestamp) {

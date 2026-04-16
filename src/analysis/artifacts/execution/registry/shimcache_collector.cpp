@@ -25,7 +25,6 @@ using EvidenceUtils::toLowerAscii;
 void ShimCacheCollector::collect(
     const ExecutionEvidenceContext& ctx,
     std::unordered_map<std::string, ProcessInfo>& process_data) {
-  if (!ctx.config.enable_shimcache) return;
   if (ctx.system_hive_path.empty()) return;
 
   const auto logger = GlobalLogger::get();
@@ -87,10 +86,6 @@ void ShimCacheCollector::collect(
 
       for (const auto& record : decoded_records) {
         append_unique(record.executable_path, record.timestamp, record.details);
-        if (record.no_exec_flag) {
-          auto& info = ensureProcessInfo(process_data, record.executable_path);
-          appendTamperFlag(info.tamper_flags, "shimcache_no_exec_flag");
-        }
       }
       structured_count = decoded_records.size();
 

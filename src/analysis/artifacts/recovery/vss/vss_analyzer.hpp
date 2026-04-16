@@ -31,17 +31,10 @@ class VSSAnalyzer final : public IRecoveryAnalyzer {
       const std::string& disk_root) const override;
 
  private:
-  /// @brief Loads analyzer parameters from the @c [Recovery] INI section.
+ /// @brief Loads analyzer parameters from the @c [Recovery] INI section.
   void loadConfiguration();
 
   std::string config_path_;  ///< Path to the INI configuration file.
-  bool enabled_ = true;      ///< Whether VSS analysis is enabled.
-  bool enable_pagefile_ = true;     ///< Whether pagefile/swapfile scanning is enabled.
-  bool enable_memory_ = true;       ///< Whether hiberfil/MEMORY.DMP scanning is enabled.
-  bool enable_unallocated_ = true;  ///< Whether scanning of an external unallocated image is enabled.
-  bool enable_native_vss_parser_ = true;  ///< Whether to use the native libvshadow parser.
-  bool vss_fallback_to_binary_on_native_failure_ =
-      true;  ///< Whether to fall back to binary scan when native VSS parsing fails.
   std::size_t binary_scan_max_mb_ = 64;  ///< Maximum bytes (in MB) for the binary fallback scan.
   std::size_t max_candidates_per_source_ =
       2000;  ///< Maximum number of candidates extracted per source.
@@ -49,8 +42,6 @@ class VSSAnalyzer final : public IRecoveryAnalyzer {
       32;  ///< Maximum number of VSS snapshot stores for the native parser.
   std::string vss_volume_path_;  ///< Explicit raw/device source path for native VSS.
   std::string unallocated_image_path_;  ///< Path to the external unallocated space image file.
-  bool enable_snapshot_artifact_replay_ =
-      true;  ///< Whether to re-scan key artifacts from VSS snapshot roots.
   std::size_t vss_snapshot_replay_max_files_ =
       200;  ///< Maximum number of files processed during VSS snapshot replay.
 };

@@ -77,9 +77,6 @@ class ScopedDebugLevelOverride {
 /// @brief Добавляет токен в вектор без дубликатов (case-insensitive).
 void appendUniqueToken(std::vector<std::string>& target, std::string token);
 
-/// @brief Добавляет tamper-флаг к процессу без дубликатов.
-void appendTamperFlag(ProcessInfo& info, const std::string& flag);
-
 /// @brief Добавляет источник evidence к процессу без дубликатов.
 void appendEvidenceSource(ProcessInfo& info, const std::string& source);
 

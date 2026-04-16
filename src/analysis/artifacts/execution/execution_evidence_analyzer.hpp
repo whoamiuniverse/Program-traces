@@ -1,5 +1,5 @@
 /// @file execution_evidence_analyzer.hpp
-/// @brief Orchestrator for the extended process execution evidence analysis stage.
+/// @brief Оркестратор расширенного этапа извлечения execution-артефактов.
 
 #pragma once
 
@@ -16,48 +16,49 @@
 namespace WindowsDiskAnalysis {
 
 /// @class ExecutionEvidenceAnalyzer
-/// @brief Orchestrator that loads configuration, initializes collectors, and runs them.
+/// @brief Оркестратор, который загружает конфигурацию, инициализирует
+/// коллекторы и запускает их.
 ///
-/// @details Manages four groups of @c IExecutionArtifactCollector instances
-/// (software registry, system registry, filesystem, and database).
-/// Groups can optionally be processed in parallel.
+/// @details Управляет четырьмя группами @c IExecutionArtifactCollector:
+/// SOFTWARE-реестр, SYSTEM-реестр, файловая система и базы данных.
+/// Группы могут выполняться параллельно.
 class ExecutionEvidenceAnalyzer {
  public:
-  /// @brief Constructs the execution evidence orchestrator.
-  /// @param os_version Detected Windows OS version string.
-  /// @param ini_path   Path to the INI configuration file.
+  /// @brief Создаёт оркестратор execution-источников.
+  /// @param os_version Определённая версия Windows.
+  /// @param ini_path   Путь к INI-конфигурации.
   ExecutionEvidenceAnalyzer(
       std::string os_version, std::string ini_path);
 
-  /// @brief Enriches the process map with execution sources and timeline entries.
-  /// @param disk_root          Root path of the Windows partition.
-  /// @param process_data       Aggregated process data map (updated in place).
-  /// @param global_tamper_flags Legacy output parameter (unused in production pipeline).
+  /// @brief Обогащает агрегированную карту процессов execution-данными.
+  /// @param disk_root    Корень анализируемого Windows-раздела.
+  /// @param process_data Карта процессов (обновляется на месте).
+  /// @details Оркестратор использует только источники из целевого набора
+  /// из 11 артефактов запуска ПО.
   void collect(const std::string& disk_root,
-               std::unordered_map<std::string, ProcessInfo>& process_data,
-               std::vector<std::string>& global_tamper_flags);
+               std::unordered_map<std::string, ProcessInfo>& process_data);
 
  private:
-  /// @brief Loads settings from the @c [ExecutionArtifacts] INI section.
+  /// @brief Загружает параметры из секции @c [ExecutionArtifacts].
   void loadConfiguration();
 
-  /// @brief Registers all available execution artifact collectors.
+  /// @brief Регистрирует используемые execution-коллекторы.
   void initializeCollectors();
 
-  /// @brief Type alias for a group of execution artifact collectors.
+  /// @brief Псевдоним группы execution-коллекторов.
   using CollectorGroup = std::vector<std::unique_ptr<IExecutionArtifactCollector>>;
 
-  std::string os_version_;  ///< Detected Windows OS version string.
-  std::string ini_path_;    ///< Path to the INI configuration file.
-  ExecutionEvidenceConfig config_;  ///< Loaded analysis configuration.
-  bool enable_parallel_groups_ = false;  ///< Whether collector groups run in parallel.
-  bool enable_parallel_user_hive_analysis_ = false;  ///< Whether per-user hive traversal is parallelized.
+  std::string os_version_;  ///< Определённая версия Windows.
+  std::string ini_path_;    ///< Путь к INI-конфигурации.
+  ExecutionEvidenceConfig config_;  ///< Загруженная конфигурация анализа.
+  bool enable_parallel_groups_ = false;  ///< Параллельный запуск групп коллекторов.
+  bool enable_parallel_user_hive_analysis_ = false;  ///< Параллельный обход пользовательских hive.
   std::size_t worker_threads_ =
-      std::max<std::size_t>(1, std::thread::hardware_concurrency());  ///< Number of worker threads.
-  CollectorGroup software_collectors_;    ///< Collectors reading from the SOFTWARE hive.
-  CollectorGroup system_collectors_;      ///< Collectors reading from the SYSTEM hive.
-  CollectorGroup filesystem_collectors_;  ///< Collectors reading from the filesystem.
-  CollectorGroup database_collectors_;    ///< Collectors reading from ESE/SQLite databases.
+      std::max<std::size_t>(1, std::thread::hardware_concurrency());  ///< Число рабочих потоков.
+  CollectorGroup software_collectors_;    ///< Коллекторы SOFTWARE-hive.
+  CollectorGroup system_collectors_;      ///< Коллекторы SYSTEM-hive.
+  CollectorGroup filesystem_collectors_;  ///< Коллекторы файловой системы.
+  CollectorGroup database_collectors_;    ///< Коллекторы ESE/SQLite баз.
 };
 
 }  // namespace WindowsDiskAnalysis

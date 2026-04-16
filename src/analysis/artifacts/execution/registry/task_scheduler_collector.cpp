@@ -27,7 +27,6 @@ using EvidenceUtils::toLowerAscii;
 
 void TaskSchedulerCollector::collect(const ExecutionEvidenceContext& ctx,
                                      std::unordered_map<std::string, ProcessInfo>& process_data) {
-  if (!ctx.config.enable_task_scheduler) return;
   const auto logger = GlobalLogger::get();
   RegistryAnalysis::RegistryParser local_parser;
   const std::size_t max_bytes = std::min<std::size_t>(

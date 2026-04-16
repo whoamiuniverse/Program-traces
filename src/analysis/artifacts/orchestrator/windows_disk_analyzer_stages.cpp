@@ -99,6 +99,26 @@ std::string selectExecutablePathForAmcacheEntry(const AmcacheEntry& entry) {
   return {};
 }
 
+/// @brief Формирует нормализованный timeline-label для записи Amcache.
+/// @param entry Исходная запись Amcache.
+/// @param executable_path Нормализованный путь исполняемого файла.
+/// @return Строка timeline в формате `[Amcache] ...` или `[Amcache:BCF] ...`.
+std::string buildAmcacheTimelineArtifact(const AmcacheEntry& entry,
+                                         const std::string& executable_path) {
+  std::string source = entry.source;
+  trim(source);
+  std::string lowered = to_lower(source);
+
+  std::string label = "[Amcache";
+  if (lowered.find("bcf") != std::string::npos ||
+      lowered.find("recentfilecache") != std::string::npos) {
+    label += ":BCF";
+  }
+  label += "] ";
+  label += executable_path;
+  return label;
+}
+
 template <typename T>
 void appendMovedVector(std::vector<T>& destination, std::vector<T>& source) {
   if (source.empty()) {
@@ -155,6 +175,10 @@ void mergePrefetchProcessInfo(ProcessInfo& merged, ProcessInfo& prefetch_info) {
   appendPrefetchTimeline(merged, prefetch_info);
 
   appendMovedVector(merged.run_times, prefetch_info.run_times);
+  std::sort(merged.run_times.begin(), merged.run_times.end());
+  merged.run_times.erase(
+      std::unique(merged.run_times.begin(), merged.run_times.end()),
+      merged.run_times.end());
   appendMovedVector(merged.volumes, prefetch_info.volumes);
   appendMovedVector(merged.metrics, prefetch_info.metrics);
 }
@@ -262,20 +286,14 @@ void WindowsDiskAnalyzer::runAmcacheStage() {
       info.filename = path;
     }
 
-    appendEvidenceSource(info, entry.source.empty() ? "Amcache" : entry.source);
+    appendEvidenceSource(info, "Amcache");
     if (!entry.modification_time_str.empty() &&
         entry.modification_time_str != "N/A") {
       info.run_times.push_back(entry.modification_time_str);
       updateProcessTimestampBounds(info, entry.modification_time_str);
     }
 
-    if (entry.is_deleted) {
-      appendTamperFlag(info, "amcache_deleted_trace");
-    }
-    appendTimelineArtifact(
-        info, "[" + (entry.source.empty() ? std::string("Amcache")
-                                          : entry.source) +
-                  "] " + path);
+    appendTimelineArtifact(info, buildAmcacheTimelineArtifact(entry, path));
   }
 
   logger->info("Этап 2/7 завершен: записей Amcache={}", amcache_entries_.size());
@@ -332,8 +350,7 @@ void WindowsDiskAnalyzer::runExecutionStage() {
 
   {
     ScopedDebugLevelOverride scoped_debug(debug_options_.execution);
-    execution_evidence_analyzer_->collect(disk_root_, process_data_,
-                                          global_tamper_flags_);
+    execution_evidence_analyzer_->collect(disk_root_, process_data_);
   }
 
   for (const auto& connection : network_connections_) {

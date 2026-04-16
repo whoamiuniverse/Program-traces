@@ -379,17 +379,6 @@ void VSSAnalyzer::loadConfiguration() {
   try {
     Config config(config_path_, false, false);
     if (config.hasSection("Recovery")) {
-      enabled_ = config.getBool("Recovery", "EnableVSS", enabled_);
-      enable_pagefile_ =
-          config.getBool("Recovery", "EnablePagefile", enable_pagefile_);
-      enable_memory_ = config.getBool("Recovery", "EnableMemory", enable_memory_);
-      enable_unallocated_ =
-          config.getBool("Recovery", "EnableUnallocated", enable_unallocated_);
-      enable_native_vss_parser_ = config.getBool(
-          "Recovery", "EnableNativeVSSParser", enable_native_vss_parser_);
-      vss_fallback_to_binary_on_native_failure_ = config.getBool(
-          "Recovery", "VSSFallbackToBinaryOnNativeFailure",
-          vss_fallback_to_binary_on_native_failure_);
       binary_scan_max_mb_ = static_cast<std::size_t>(std::max(
           1, config.getInt("Recovery", "BinaryScanMaxMB",
                            static_cast<int>(binary_scan_max_mb_))));
@@ -402,12 +391,20 @@ void VSSAnalyzer::loadConfiguration() {
       vss_volume_path_ = config.getString("Recovery", "VSSVolumePath", "");
       unallocated_image_path_ =
           config.getString("Recovery", "UnallocatedImagePath", "");
-      enable_snapshot_artifact_replay_ = config.getBool(
-          "Recovery", "EnableVSSSnapshotReplay",
-          enable_snapshot_artifact_replay_);
       vss_snapshot_replay_max_files_ = static_cast<std::size_t>(std::max(
           1, config.getInt("Recovery", "VSSSnapshotReplayMaxFiles",
                            static_cast<int>(vss_snapshot_replay_max_files_))));
+
+      for (const std::string& key :
+           {"EnableVSS", "EnablePagefile", "EnableMemory", "EnableUnallocated",
+            "EnableNativeVSSParser", "VSSFallbackToBinaryOnNativeFailure",
+            "EnableVSSSnapshotReplay"}) {
+        if (config.hasKey("Recovery", key)) {
+          logger->warn(
+              "Параметр [Recovery]/{} игнорируется: модуль VSS всегда активен",
+              key);
+        }
+      }
     }
   } catch (const std::exception& e) {
     logger->warn("Не удалось загрузить настройки VSS");
@@ -418,10 +415,6 @@ void VSSAnalyzer::loadConfiguration() {
 std::vector<RecoveryEvidence> VSSAnalyzer::collect(
     const std::string& disk_root) const {
   const auto logger = GlobalLogger::get();
-  if (!enabled_) {
-    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "VSS-анализ отключен в конфигурации");
-    return {};
-  }
 
   const std::size_t max_bytes = toByteLimit(binary_scan_max_mb_);
   std::vector<RecoveryEvidence> results;
@@ -432,56 +425,52 @@ std::vector<RecoveryEvidence> VSSAnalyzer::collect(
   bool native_attempted = false;
   bool native_success = false;
 
-  if (enable_native_vss_parser_) {
 #if defined(PROGRAM_TRACES_HAVE_LIBVSHADOW) && PROGRAM_TRACES_HAVE_LIBVSHADOW
-    std::vector<fs::path> volume_candidates;
-    if (!vss_volume_path_.empty()) {
-      const fs::path configured(vss_volume_path_);
-      if (configured.is_absolute()) {
-        volume_candidates.push_back(configured);
-      } else {
-        volume_candidates.push_back(fs::path(disk_root) / configured);
-      }
+  std::vector<fs::path> volume_candidates;
+  if (!vss_volume_path_.empty()) {
+    const fs::path configured(vss_volume_path_);
+    if (configured.is_absolute()) {
+      volume_candidates.push_back(configured);
+    } else {
+      volume_candidates.push_back(fs::path(disk_root) / configured);
     }
-
-    std::error_code ec;
-    const fs::path disk_root_path(disk_root);
-    if ((fs::is_regular_file(disk_root_path, ec) && !ec) ||
-        (fs::is_block_file(disk_root_path, ec) && !ec) ||
-        (fs::is_character_file(disk_root_path, ec) && !ec)) {
-      volume_candidates.push_back(disk_root_path);
-    }
-
-    std::sort(volume_candidates.begin(), volume_candidates.end());
-    volume_candidates.erase(
-        std::unique(volume_candidates.begin(), volume_candidates.end()),
-        volume_candidates.end());
-
-    if (volume_candidates.empty()) {
-      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "VSS(native): не найден источник тома. Укажите "
-                    "[Recovery]/VSSVolumePath (raw/device) для нативного парсинга.");
-    }
-
-    for (const fs::path& candidate : volume_candidates) {
-      const auto resolved = findPathCaseInsensitive(candidate);
-      if (!resolved.has_value()) continue;
-
-      NativeVssParseResult native_result = parseVssVolumeNative(
-          *resolved, max_bytes, max_candidates_per_source_, vss_native_max_stores_);
-      native_attempted = native_attempted || native_result.attempted;
-      native_success = native_success || native_result.success;
-      native_count += native_result.evidence.size();
-      appendUniqueEvidence(results, native_result.evidence, dedup);
-    }
-#else
-    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "VSS(native): libvshadow недоступен в текущей сборке");
-#endif
   }
 
+  std::error_code ec;
+  const fs::path disk_root_path(disk_root);
+  if ((fs::is_regular_file(disk_root_path, ec) && !ec) ||
+      (fs::is_block_file(disk_root_path, ec) && !ec) ||
+      (fs::is_character_file(disk_root_path, ec) && !ec)) {
+    volume_candidates.push_back(disk_root_path);
+  }
+
+  std::sort(volume_candidates.begin(), volume_candidates.end());
+  volume_candidates.erase(
+      std::unique(volume_candidates.begin(), volume_candidates.end()),
+      volume_candidates.end());
+
+  if (volume_candidates.empty()) {
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "VSS(native): не найден источник тома. Укажите "
+                  "[Recovery]/VSSVolumePath (raw/device) для нативного парсинга.");
+  }
+
+  for (const fs::path& candidate : volume_candidates) {
+    const auto resolved = findPathCaseInsensitive(candidate);
+    if (!resolved.has_value()) continue;
+
+    NativeVssParseResult native_result = parseVssVolumeNative(
+        *resolved, max_bytes, max_candidates_per_source_, vss_native_max_stores_);
+    native_attempted = native_attempted || native_result.attempted;
+    native_success = native_success || native_result.success;
+    native_count += native_result.evidence.size();
+    appendUniqueEvidence(results, native_result.evidence, dedup);
+  }
+#else
+  logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "VSS(native): libvshadow недоступен в текущей сборке");
+#endif
+
   const bool run_binary_fallback =
-      !enable_native_vss_parser_ ||
-      (vss_fallback_to_binary_on_native_failure_ &&
-       (!native_attempted || !native_success || native_count == 0));
+      !native_attempted || !native_success || native_count == 0;
 
   if (run_binary_fallback) {
     const fs::path svi_dir = fs::path(disk_root) / "System Volume Information";
@@ -509,40 +498,36 @@ std::vector<RecoveryEvidence> VSSAnalyzer::collect(
     }
   }
 
-  if (enable_pagefile_) {
-    const std::vector<fs::path> pagefile_candidates = {
-        fs::path(disk_root) / "pagefile.sys",
-        fs::path(disk_root) / "swapfile.sys",
-        fs::path(disk_root) / "Windows" / "Temp" / "pagefile.sys"};
-    for (const auto& candidate : pagefile_candidates) {
-      const auto resolved = findPathCaseInsensitive(candidate);
-      if (!resolved.has_value()) continue;
+  const std::vector<fs::path> pagefile_candidates = {
+      fs::path(disk_root) / "pagefile.sys",
+      fs::path(disk_root) / "swapfile.sys",
+      fs::path(disk_root) / "Windows" / "Temp" / "pagefile.sys"};
+  for (const auto& candidate : pagefile_candidates) {
+    const auto resolved = findPathCaseInsensitive(candidate);
+    if (!resolved.has_value()) continue;
 
-      auto evidence =
-          scanRecoveryFileBinary(*resolved, "Pagefile", "Pagefile", max_bytes,
-                                 max_candidates_per_source_);
-      binary_count += evidence.size();
-      appendUniqueEvidence(results, evidence, dedup);
-    }
+    auto evidence =
+        scanRecoveryFileBinary(*resolved, "Pagefile", "Pagefile", max_bytes,
+                               max_candidates_per_source_);
+    binary_count += evidence.size();
+    appendUniqueEvidence(results, evidence, dedup);
   }
 
-  if (enable_memory_) {
-    const std::vector<fs::path> memory_candidates = {
-        fs::path(disk_root) / "Windows" / "MEMORY.DMP",
-        fs::path(disk_root) / "MEMORY.DMP"};
-    for (const auto& candidate : memory_candidates) {
-      const auto resolved = findPathCaseInsensitive(candidate);
-      if (!resolved.has_value()) continue;
+  const std::vector<fs::path> memory_candidates = {
+      fs::path(disk_root) / "Windows" / "MEMORY.DMP",
+      fs::path(disk_root) / "MEMORY.DMP"};
+  for (const auto& candidate : memory_candidates) {
+    const auto resolved = findPathCaseInsensitive(candidate);
+    if (!resolved.has_value()) continue;
 
-      auto evidence =
-          scanRecoveryFileBinary(*resolved, "Memory", "Memory", max_bytes,
-                                 max_candidates_per_source_);
-      binary_count += evidence.size();
-      appendUniqueEvidence(results, evidence, dedup);
-    }
+    auto evidence =
+        scanRecoveryFileBinary(*resolved, "Memory", "Memory", max_bytes,
+                               max_candidates_per_source_);
+    binary_count += evidence.size();
+    appendUniqueEvidence(results, evidence, dedup);
   }
 
-  if (enable_unallocated_ && !unallocated_image_path_.empty()) {
+  if (!unallocated_image_path_.empty()) {
     const fs::path image_path(unallocated_image_path_);
     std::error_code ec;
     if (fs::exists(image_path, ec) && !ec && fs::is_regular_file(image_path, ec) &&
@@ -555,13 +540,11 @@ std::vector<RecoveryEvidence> VSSAnalyzer::collect(
     }
   }
 
-  if (enable_snapshot_artifact_replay_) {
-    auto snapshot_evidence = collectSnapshotReplayEvidence(
-        disk_root, max_bytes, max_candidates_per_source_,
-        vss_snapshot_replay_max_files_);
-    binary_count += snapshot_evidence.size();
-    appendUniqueEvidence(results, snapshot_evidence, dedup);
-  }
+  auto snapshot_evidence = collectSnapshotReplayEvidence(
+      disk_root, max_bytes, max_candidates_per_source_,
+      vss_snapshot_replay_max_files_);
+  binary_count += snapshot_evidence.size();
+  appendUniqueEvidence(results, snapshot_evidence, dedup);
 
   logger->info("Recovery(VSS/Pagefile/Memory/Unallocated): native={} binary={} "
                "total={}",

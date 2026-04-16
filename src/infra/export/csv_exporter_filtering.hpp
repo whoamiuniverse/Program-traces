@@ -21,9 +21,6 @@ std::vector<std::string> buildMetricValuesForCsv(
 /// @brief Добавляет источник артефактов с нормализацией имени.
 void addEvidenceSource(AggregatedData& data, std::string source);
 
-/// @brief Добавляет tamper-флаг, если он не пуст.
-void addTamperFlag(AggregatedData& data, std::string flag);
-
 /// @brief Проверяет, является ли источник сетевым контекстом.
 bool isNetworkContextSource(const std::string& source);
 

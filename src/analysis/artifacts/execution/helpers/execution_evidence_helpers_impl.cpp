@@ -101,13 +101,6 @@ void appendTimelineArtifact(ProcessInfo& info, std::string artifact) {
   appendUniqueToken(info.timeline_artifacts, std::move(artifact));
 }
 
-/// @brief Добавляет уникальный tamper-флаг в вектор.
-/// @param flags Вектор флагов.
-/// @param flag Флаг для добавления.
-void appendTamperFlag(std::vector<std::string>& flags, std::string flag) {
-  appendUniqueToken(flags, std::move(flag));
-}
-
 /// @brief Обновляет временные поля процесса по валидной метке.
 /// @param info Структура процесса.
 /// @param timestamp Метка времени UTC.
@@ -314,9 +307,6 @@ void mergeProcessInfo(ProcessInfo& target, const ProcessInfo& source) {
   for (const auto& value : source.evidence_sources) {
     appendUniqueToken(target.evidence_sources, value);
   }
-  for (const auto& value : source.tamper_flags) {
-    appendUniqueToken(target.tamper_flags, value);
-  }
   for (const auto& value : source.timeline_artifacts) {
     appendUniqueToken(target.timeline_artifacts, value);
   }
@@ -375,9 +365,6 @@ void mergeProcessInfo(ProcessInfo& target, ProcessInfo&& source) {
   }
   for (auto& value : source.evidence_sources) {
     appendUniqueToken(target.evidence_sources, std::move(value));
-  }
-  for (auto& value : source.tamper_flags) {
-    appendUniqueToken(target.tamper_flags, std::move(value));
   }
   for (auto& value : source.timeline_artifacts) {
     appendUniqueToken(target.timeline_artifacts, std::move(value));

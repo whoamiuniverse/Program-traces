@@ -32,15 +32,10 @@ class HibernationAnalyzer final : public IRecoveryAnalyzer {
       const std::string& disk_root) const override;
 
  private:
-  /// @brief Loads analyzer parameters from the @c [Recovery] INI section.
+ /// @brief Loads analyzer parameters from the @c [Recovery] INI section.
   void loadConfiguration();
 
   std::string config_path_;  ///< Path to the INI configuration file.
-  bool enabled_ = true;      ///< Whether hibernation file analysis is enabled.
-  bool enable_native_hiber_parser_ =
-      true;  ///< Whether to use @c libhibr for native decompression.
-  bool hiber_fallback_to_binary_ =
-      true;  ///< Whether to fall back to binary scan when native parsing fails.
   std::size_t hiber_max_pages_ =
       16384;  ///< Maximum number of pages to process in native mode (4 KB per page).
   std::size_t binary_scan_max_mb_ = 64;  ///< Maximum bytes (in MB) read during the fallback scan.

@@ -27,8 +27,6 @@ using EvidenceUtils::toLowerAscii;
 
 void UserAssistRunMruCollector::collect(const ExecutionEvidenceContext& ctx,
                                         std::unordered_map<std::string, ProcessInfo>& process_data) {
-  if (!ctx.config.enable_userassist && !ctx.config.enable_runmru) return;
-
   const auto logger = GlobalLogger::get();
   const std::vector<fs::path> user_hives = collectUserHivePaths(ctx.disk_root);
   if (user_hives.empty()) return;
@@ -45,84 +43,79 @@ void UserAssistRunMruCollector::collect(const ExecutionEvidenceContext& ctx,
         const std::string hive = hive_path.string();
         const std::string username = extractUsernameFromHivePath(hive_path);
 
-        if (ctx.config.enable_userassist) {
-          try {
-            const auto guid_subkeys =
-                parser.listSubkeys(hive, ctx.config.userassist_key);
-            for (const std::string& guid : guid_subkeys) {
-              const std::string count_key =
-                  ctx.config.userassist_key + "/" + guid + "/Count";
-              std::vector<std::unique_ptr<RegistryAnalysis::IRegistryData>> values;
-              try {
-                values = parser.getKeyValues(hive, count_key);
-              } catch (...) {
-                continue;
-              }
-
-              for (const auto& value : values) {
-                std::string encoded_name =
-                    getLastPathComponent(value->getName(), '/');
-                if (encoded_name.empty()) continue;
-
-                std::string decoded_name = decodeRot13(encoded_name);
-                decoded_name = replace_all(decoded_name, "UEME_RUNPATH:", "");
-                decoded_name = replace_all(decoded_name, "UEME_RUNPIDL:", "");
-                trim(decoded_name);
-
-                auto executable = extractExecutableFromCommand(decoded_name);
-                if (!executable.has_value()) continue;
-
-                uint32_t run_count = 0;
-                std::string timestamp;
-                if (value->getType() ==
-                    RegistryAnalysis::RegistryValueType::REG_BINARY) {
-                  const auto& binary = value->getAsBinary();
-                  if (binary.size() >= 8) {
-                    run_count = readLeUInt32(binary, 4);
-                  }
-                  if (binary.size() >= 68) {
-                    const uint64_t filetime = readLeUInt64(binary, 60);
-                    if (filetime >= kFiletimeUnixEpoch &&
-                        filetime <= kMaxReasonableFiletime) {
-                      timestamp = filetimeToString(filetime);
-                    }
-                  }
-                }
-
-                addExecutionEvidence(
-                    result.process_data, *executable, "UserAssist", timestamp,
-                    "user=" + username +
-                        ", run_count=" + std::to_string(run_count));
-                result.userassist_count++;
-              }
+        try {
+          const auto guid_subkeys = parser.listSubkeys(hive, ctx.config.userassist_key);
+          for (const std::string& guid : guid_subkeys) {
+            const std::string count_key =
+                ctx.config.userassist_key + "/" + guid + "/Count";
+            std::vector<std::unique_ptr<RegistryAnalysis::IRegistryData>> values;
+            try {
+              values = parser.getKeyValues(hive, count_key);
+            } catch (...) {
+              continue;
             }
-          } catch (const std::exception& e) {
-            logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "UserAssist пропущен для {}: {}", hive, e.what());
-          }
-        }
 
-        if (ctx.config.enable_runmru) {
-          try {
-            auto values = parser.getKeyValues(hive, ctx.config.runmru_key);
             for (const auto& value : values) {
-              std::string value_name = getLastPathComponent(value->getName(), '/');
-              if (value_name.empty()) continue;
-              if (toLowerAscii(value_name) == "mrulist" ||
-                  toLowerAscii(value_name) == "mrulistex") {
-                continue;
-              }
+              std::string encoded_name =
+                  getLastPathComponent(value->getName(), '/');
+              if (encoded_name.empty()) continue;
 
-              const std::string command = value->getDataAsString();
-              auto executable = extractExecutableFromCommand(command);
+              std::string decoded_name = decodeRot13(encoded_name);
+              decoded_name = replace_all(decoded_name, "UEME_RUNPATH:", "");
+              decoded_name = replace_all(decoded_name, "UEME_RUNPIDL:", "");
+              trim(decoded_name);
+
+              auto executable = extractExecutableFromCommand(decoded_name);
               if (!executable.has_value()) continue;
 
-              addExecutionEvidence(result.process_data, *executable, "RunMRU", "",
-                                  "user=" + username + ", value=" + value_name);
-              result.runmru_count++;
+              uint32_t run_count = 0;
+              std::string timestamp;
+              if (value->getType() ==
+                  RegistryAnalysis::RegistryValueType::REG_BINARY) {
+                const auto& binary = value->getAsBinary();
+                if (binary.size() >= 8) {
+                  run_count = readLeUInt32(binary, 4);
+                }
+                if (binary.size() >= 68) {
+                  const uint64_t filetime = readLeUInt64(binary, 60);
+                  if (filetime >= kFiletimeUnixEpoch &&
+                      filetime <= kMaxReasonableFiletime) {
+                    timestamp = filetimeToString(filetime);
+                  }
+                }
+              }
+
+              addExecutionEvidence(
+                  result.process_data, *executable, "UserAssist", timestamp,
+                  "user=" + username +
+                      ", run_count=" + std::to_string(run_count));
+              result.userassist_count++;
             }
-          } catch (const std::exception& e) {
-            logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "RunMRU пропущен для {}: {}", hive, e.what());
           }
+        } catch (const std::exception& e) {
+          logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "UserAssist пропущен для {}: {}", hive, e.what());
+        }
+
+        try {
+          auto values = parser.getKeyValues(hive, ctx.config.runmru_key);
+          for (const auto& value : values) {
+            std::string value_name = getLastPathComponent(value->getName(), '/');
+            if (value_name.empty()) continue;
+            if (toLowerAscii(value_name) == "mrulist" ||
+                toLowerAscii(value_name) == "mrulistex") {
+              continue;
+            }
+
+            const std::string command = value->getDataAsString();
+            auto executable = extractExecutableFromCommand(command);
+            if (!executable.has_value()) continue;
+
+            addExecutionEvidence(result.process_data, *executable, "RunMRU", "",
+                                "user=" + username + ", value=" + value_name);
+            result.runmru_count++;
+          }
+        } catch (const std::exception& e) {
+          logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "RunMRU пропущен для {}: {}", hive, e.what());
         }
       };
 

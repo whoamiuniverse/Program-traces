@@ -38,12 +38,10 @@ class SignatureScanner final : public IRecoveryAnalyzer {
       const std::string& disk_root) const override;
 
  private:
-  void loadConfiguration();
+ void loadConfiguration();
 
   std::string config_path_;
-  bool        enabled_              = true;   ///< Master enable/disable flag.
-  bool        scan_pagefile_        = true;   ///< Scan pagefile.sys / swapfile.sys.
-  bool        scan_hiberfil_        = true;   ///< Scan hiberfil.sys.
+  bool        enable_entropy_       = false;  ///< Enable Shannon entropy analysis for high-entropy blocks.
   std::string image_path_;                    ///< Optional explicit disk image path.
   std::size_t block_size_           = 65536;  ///< Read block size in bytes (64 KiB).
   std::size_t max_scan_mb_          = 512;    ///< Maximum bytes (MB) per target file.

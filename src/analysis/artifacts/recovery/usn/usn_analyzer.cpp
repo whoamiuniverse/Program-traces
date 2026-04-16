@@ -458,14 +458,6 @@ void USNAnalyzer::loadConfiguration() {
   try {
     Config config(config_path_, false, false);
     if (config.hasSection("Recovery")) {
-      enabled_ = config.getBool("Recovery", "EnableUSN", enabled_);
-      enable_logfile_ =
-          config.getBool("Recovery", "EnableLogFile", enable_logfile_);
-      enable_native_usn_parser_ = config.getBool(
-          "Recovery", "EnableNativeUSNParser", enable_native_usn_parser_);
-      usn_fallback_to_binary_on_native_failure_ = config.getBool(
-          "Recovery", "USNFallbackToBinaryOnNativeFailure",
-          usn_fallback_to_binary_on_native_failure_);
       binary_scan_max_mb_ = static_cast<std::size_t>(std::max(
           1, config.getInt("Recovery", "BinaryScanMaxMB",
                            static_cast<int>(binary_scan_max_mb_))));
@@ -476,6 +468,16 @@ void USNAnalyzer::loadConfiguration() {
           std::max(100, config.getInt("Recovery", "USNNativeMaxRecords",
                                       static_cast<int>(native_usn_max_records_))));
       usn_journal_path_ = config.getString("Recovery", "USNJournalPath", "");
+
+      for (const std::string& key :
+           {"EnableUSN", "EnableLogFile", "EnableNativeUSNParser",
+            "USNFallbackToBinaryOnNativeFailure"}) {
+        if (config.hasKey("Recovery", key)) {
+          logger->warn(
+              "Параметр [Recovery]/{} игнорируется: модуль USN всегда активен",
+              key);
+        }
+      }
     }
   } catch (const std::exception& e) {
     logger->warn("Не удалось загрузить настройки USN");
@@ -486,10 +488,6 @@ void USNAnalyzer::loadConfiguration() {
 std::vector<RecoveryEvidence> USNAnalyzer::collect(
     const std::string& disk_root) const {
   const auto logger = GlobalLogger::get();
-  if (!enabled_) {
-    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "USN-анализ отключен в конфигурации");
-    return {};
-  }
 
   const std::size_t max_bytes = toByteLimit(binary_scan_max_mb_);
   std::vector<RecoveryEvidence> results;
@@ -519,23 +517,20 @@ std::vector<RecoveryEvidence> USNAnalyzer::collect(
 
     bool need_binary_fallback = true;
 
-    if (enable_native_usn_parser_) {
 #if defined(PROGRAM_TRACES_HAVE_LIBFUSN) && PROGRAM_TRACES_HAVE_LIBFUSN
-      NativeUsnParseResult native_result =
-          parseUsnFileNative(*resolved, max_bytes, max_candidates_per_source_,
-                             native_usn_max_records_);
-      native_count += native_result.evidence.size();
-      need_binary_fallback =
-          usn_fallback_to_binary_on_native_failure_ &&
-          (!native_result.success || native_result.evidence.empty());
-      appendUniqueEvidence(results, native_result.evidence, dedup);
+    NativeUsnParseResult native_result =
+        parseUsnFileNative(*resolved, max_bytes, max_candidates_per_source_,
+                           native_usn_max_records_);
+    native_count += native_result.evidence.size();
+    need_binary_fallback =
+        !native_result.success || native_result.evidence.empty();
+    appendUniqueEvidence(results, native_result.evidence, dedup);
 #else
-      logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "USN(native): libfusn недоступен в текущей сборке");
-      need_binary_fallback = true;
+    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "USN(native): libfusn недоступен в текущей сборке");
+    need_binary_fallback = true;
 #endif
-    }
 
-    if (!enable_native_usn_parser_ || need_binary_fallback) {
+    if (need_binary_fallback) {
       auto evidence =
           scanRecoveryFileBinary(*resolved, "USN", "USN(binary)", max_bytes,
                                  max_candidates_per_source_);
@@ -544,23 +539,21 @@ std::vector<RecoveryEvidence> USNAnalyzer::collect(
     }
   }
 
-  if (enable_logfile_) {
-    const std::vector<fs::path> logfile_candidates = {
-        fs::path(disk_root) / "$LogFile",
-        fs::path(disk_root) / "Windows" / "$LogFile"};
-    for (const auto& candidate : logfile_candidates) {
-      const auto resolved = findPathCaseInsensitive(candidate);
-      if (!resolved.has_value()) continue;
+  const std::vector<fs::path> logfile_candidates = {
+      fs::path(disk_root) / "$LogFile",
+      fs::path(disk_root) / "Windows" / "$LogFile"};
+  for (const auto& candidate : logfile_candidates) {
+    const auto resolved = findPathCaseInsensitive(candidate);
+    if (!resolved.has_value()) continue;
 
-      auto evidence =
-          scanRecoveryFileBinary(*resolved, "$LogFile", "$LogFile", max_bytes,
-                                 max_candidates_per_source_);
-      binary_count += evidence.size();
-      appendUniqueEvidence(results, evidence, dedup);
-    }
+    auto evidence =
+        scanRecoveryFileBinary(*resolved, "$LogFile", "$LogFile", max_bytes,
+                               max_candidates_per_source_);
+    binary_count += evidence.size();
+    appendUniqueEvidence(results, evidence, dedup);
   }
 
-  if (enable_native_usn_parser_ && native_count == 0 && binary_count == 0) {
+  if (native_count == 0 && binary_count == 0) {
     logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "USN(native): источник не найден. Укажите [Recovery]/USNJournalPath "
                   "или предоставьте доступ к $Extend/$UsnJrnl.");
   }

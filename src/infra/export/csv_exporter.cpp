@@ -30,7 +30,7 @@ constexpr std::string_view kUnifiedCsvHeader =
     "recovered_from;host_hint;user_hint;raw_details\n";
 
 constexpr std::string_view kRecoveryCsvHeader =
-    "ExecutablePath;Source;RecoveredFrom;Timestamp;Details;TamperFlag\n";
+    "ExecutablePath;Source;RecoveredFrom;Timestamp;Details\n";
 
 struct UnifiedCsvRow {
   std::string source;
@@ -45,20 +45,86 @@ struct UnifiedCsvRow {
 };
 
 std::string escapeCsvField(std::string_view value) {
-  if (value.empty()) {
+  if (value.empty()) return {};
+
+  auto sanitizeUtf8 = [](std::string_view raw) {
+    std::string sanitized;
+    sanitized.reserve(raw.size());
+
+    for (std::size_t i = 0; i < raw.size();) {
+      const unsigned char c = static_cast<unsigned char>(raw[i]);
+      if (c < 0x80) {
+        if (c == '\0') {
+          ++i;
+          continue;
+        }
+        if (c == '\n' || c == '\r' || c == '\t') {
+          sanitized.push_back(' ');
+        } else if (std::iscntrl(c) != 0) {
+          sanitized.push_back(' ');
+        } else {
+          sanitized.push_back(static_cast<char>(c));
+        }
+        ++i;
+        continue;
+      }
+
+      std::size_t sequence_size = 0;
+      if ((c & 0xE0U) == 0xC0U) {
+        sequence_size = (c >= 0xC2U) ? 2U : 0U;
+      } else if ((c & 0xF0U) == 0xE0U) {
+        sequence_size = 3U;
+      } else if ((c & 0xF8U) == 0xF0U) {
+        sequence_size = (c <= 0xF4U) ? 4U : 0U;
+      }
+
+      if (sequence_size == 0 || i + sequence_size > raw.size()) {
+        sanitized.push_back('?');
+        ++i;
+        continue;
+      }
+
+      const auto b1 =
+          static_cast<unsigned char>(raw[i + 1]);
+      bool valid = (b1 & 0xC0U) == 0x80U;
+      for (std::size_t j = 2; valid && j < sequence_size; ++j) {
+        const auto continuation =
+            static_cast<unsigned char>(raw[i + j]);
+        valid = (continuation & 0xC0U) == 0x80U;
+      }
+
+      if (valid && sequence_size == 3) {
+        if (c == 0xE0U && b1 < 0xA0U) valid = false;
+        if (c == 0xEDU && b1 >= 0xA0U) valid = false;
+      }
+      if (valid && sequence_size == 4) {
+        if (c == 0xF0U && b1 < 0x90U) valid = false;
+        if (c == 0xF4U && b1 >= 0x90U) valid = false;
+      }
+
+      if (!valid) {
+        sanitized.push_back('?');
+        ++i;
+        continue;
+      }
+
+      sanitized.append(raw.substr(i, sequence_size));
+      i += sequence_size;
+    }
+
+    return sanitized;
+  };
+
+  const std::string sanitized = sanitizeUtf8(value);
+  if (sanitized.empty()) {
     return {};
   }
 
   std::string result;
-  result.reserve(value.size() + 2);
+  result.reserve(sanitized.size() + 2);
   result.push_back('"');
 
-  for (const char c : value) {
-    if (c == '\n' || c == '\r') {
-      result.push_back(' ');
-      continue;
-    }
-
+  for (const char c : sanitized) {
     if (c == '"') {
       result.append("\"\"");
     } else {
@@ -139,29 +205,13 @@ std::string resolveArtifactTypeBySource(std::string source,
           {"NetworkEvent", "network_connection"},
           {"UserAssist", "userassist_entry"},
           {"RunMRU", "runmru_entry"},
-          {"FeatureUsage", "feature_usage_entry"},
-          {"RecentApps", "recent_apps_entry"},
           {"BAM", "bam_execution"},
           {"DAM", "dam_execution"},
           {"ShimCache", "shimcache_entry"},
-          {"Service", "service_entry"},
-          {"NetworkProfile", "network_profile_entry"},
           {"TaskScheduler", "task_scheduler_entry"},
-          {"IFEO", "ifeo_entry"},
-          {"MuiCache", "muicache_entry"},
-          {"AppCompatFlags", "appcompat_flags_entry"},
-          {"TypedPaths", "typed_paths_entry"},
-          {"LastVisitedMRU", "last_visited_mru_entry"},
-          {"OpenSaveMRU", "open_save_mru_entry"},
           {"LNKRecent", "lnk_recent_entry"},
           {"JumpList", "jump_list_entry"},
           {"PSConsoleHistory", "powershell_history_entry"},
-          {"WER", "wer_entry"},
-          {"Timeline", "activities_timeline_entry"},
-          {"BITS", "bits_job_entry"},
-          {"Hosts", "hosts_entry"},
-          {"WMIRepository", "wmi_repository_entry"},
-          {"WindowsSearch", "windows_search_entry"},
           {"SRUM", "srum_entry"},
           {"USN", "usn_recovery_evidence"},
           {"$LogFile", "logfile_recovery_evidence"},
@@ -590,14 +640,12 @@ void appendRecoveryRows(
   std::sort(sorted.begin(), sorted.end(),
             [](const auto& lhs, const auto& rhs) {
               return std::tie(lhs.executable_path, lhs.source, lhs.recovered_from,
-                              lhs.timestamp, lhs.details, lhs.tamper_flag) <
+                              lhs.timestamp, lhs.details) <
                      std::tie(rhs.executable_path, rhs.source, rhs.recovered_from,
-                              rhs.timestamp, rhs.details, rhs.tamper_flag);
+                              rhs.timestamp, rhs.details);
             });
 
   for (const auto& entry : sorted) {
-    std::string details = entry.details;
-    appendDetail(details, "tamper_flag", entry.tamper_flag);
     const std::string source =
         normalizeSourceOrFallback(entry.source, "Recovery");
     const std::string recovered_from =
@@ -609,7 +657,7 @@ void appendRecoveryRows(
                             .timestamp_utc = entry.timestamp,
                             .is_recovered = "1",
                             .recovered_from = recovered_from,
-                            .raw_details = std::move(details)});
+                            .raw_details = entry.details});
   }
 }
 
@@ -678,8 +726,7 @@ void writeRecoveryRows(std::ofstream& file,
          << escapeCsvField(entry.source) << kCsvDelimiter
          << escapeCsvField(entry.recovered_from) << kCsvDelimiter
          << escapeCsvField(entry.timestamp) << kCsvDelimiter
-         << escapeCsvField(entry.details) << kCsvDelimiter
-         << escapeCsvField(entry.tamper_flag) << '\n';
+         << escapeCsvField(entry.details) << '\n';
   }
 }
 

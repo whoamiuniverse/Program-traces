@@ -14,7 +14,7 @@ namespace WindowsDiskAnalysis {
 ///
 /// @details The context is constructed once by @c ExecutionEvidenceAnalyzer and
 /// passed by const reference to each @c IExecutionArtifactCollector::collect()
-/// and @c ITamperSignalDetector::detect() call.
+/// call.
 struct ExecutionEvidenceContext {
   std::string disk_root;          ///< Root path of the analyzed Windows partition.
   std::string software_hive_path; ///< Resolved absolute path to the SOFTWARE registry hive.

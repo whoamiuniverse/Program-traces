@@ -12,7 +12,6 @@ namespace WindowsDiskAnalysis {
 /// @brief Collects executable file paths from SRUDB.dat via the native ESE parser or binary fallback.
 ///
 /// @details Reads the SRUM database at the path specified in @c ctx.config.srum_path.
-/// Skipped entirely when @c ctx.config.enable_srum is @c false.
 class SrumCollector final : public IExecutionArtifactCollector {
  public:
   /// @brief Collects execution artifacts from the SRUM database.

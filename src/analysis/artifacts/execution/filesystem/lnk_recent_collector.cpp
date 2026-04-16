@@ -2,6 +2,7 @@
 /// @brief Реализация LnkRecentCollector.
 #include "lnk_recent_collector.hpp"
 
+#include <algorithm>
 #include <filesystem>
 #include <string>
 #include <unordered_map>
@@ -23,7 +24,6 @@ using EvidenceUtils::toLowerAscii;
 
 void LnkRecentCollector::collect(const ExecutionEvidenceContext& ctx,
                                  std::unordered_map<std::string, ProcessInfo>& process_data) {
-  if (!ctx.config.enable_lnk_recent) return;
   const auto logger = GlobalLogger::get();
   const std::size_t max_bytes = toByteLimit(ctx.config.binary_scan_max_mb);
   std::size_t collected = 0;
@@ -54,19 +54,31 @@ void LnkRecentCollector::collect(const ExecutionEvidenceContext& ctx,
       std::vector<std::string> candidates;
       std::string timestamp;
       std::string details = "lnk=" + file_entry.path().filename().string();
+      auto appendCandidate = [&](std::string candidate) {
+        trim(candidate);
+        if (candidate.empty()) return;
+        auto appendUnique = [&](std::string value) {
+          if (std::ranges::find(candidates, value) == candidates.end()) {
+            candidates.push_back(std::move(value));
+          }
+        };
+
+        if (auto executable = extractExecutableFromCommand(candidate);
+            executable.has_value()) {
+          appendUnique(*executable);
+          return;
+        }
+        if (isLikelyExecutionPath(candidate, true)) {
+          appendUnique(std::move(candidate));
+        }
+      };
 
       if (auto parsed = parseLnkFile(file_entry.path().string());
           parsed.has_value()) {
         if (!parsed->target_path.empty()) {
-          if (auto executable =
-                  extractExecutableFromCommand(parsed->target_path);
-              executable.has_value()) {
-            candidates.push_back(*executable);
-          } else {
-            candidates.push_back(parsed->target_path);
-          }
+          appendCandidate(parsed->target_path);
         } else if (!parsed->relative_path.empty()) {
-          candidates.push_back(parsed->relative_path);
+          appendCandidate(parsed->relative_path);
         }
 
         if (!parsed->write_time.empty() && parsed->write_time != "N/A") {

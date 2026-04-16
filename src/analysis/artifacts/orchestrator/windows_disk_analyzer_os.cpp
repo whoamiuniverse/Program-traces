@@ -29,7 +29,7 @@ namespace {
 
 struct BestEffortRunConfig {
   bool enable = false;
-  std::string fallback_ini_version = "Windows10";
+  std::string ini_version;
 };
 
 std::string resolveFirstConfiguredVersion(const Config& config) {
@@ -52,18 +52,10 @@ BestEffortRunConfig loadBestEffortRunConfig(const Config& config) {
   } catch (...) {
   }
 
-  try {
-    options.fallback_ini_version = config.getString(
-        "General", "FallbackOSVersion", options.fallback_ini_version);
-    trim(options.fallback_ini_version);
-  } catch (...) {
-  }
-
-  if (options.fallback_ini_version.empty()) {
-    options.fallback_ini_version = resolveFirstConfiguredVersion(config);
-    if (options.fallback_ini_version.empty()) {
-      options.fallback_ini_version = "Windows10";
-    }
+  options.ini_version = resolveFirstConfiguredVersion(config);
+  if (options.ini_version.empty()) {
+    // Защитный fallback: если список Versions пуст/поврежден.
+    options.ini_version = "Windows10";
   }
 
   return options;
@@ -84,7 +76,7 @@ void applyBestEffortFallback(OSInfo& os_info,
   const auto logger = GlobalLogger::get();
 
   os_info = {};
-  os_info.ini_version = options.fallback_ini_version;
+  os_info.ini_version = options.ini_version;
   os_info.product_name = "Windows (best-effort)";
   os_info.fullname_os = "Windows (best-effort, ini=" + os_info.ini_version + ")";
 
@@ -101,7 +93,6 @@ void WindowsDiskAnalyzer::detectOSVersion() {
   Config config(config_path_);
   loadLoggingOptions(config);
   loadPerformanceOptions(config);
-  loadTamperOptions(config);
   const BestEffortRunConfig best_effort = loadBestEffortRunConfig(config);
   std::string initial_validation_error;
 

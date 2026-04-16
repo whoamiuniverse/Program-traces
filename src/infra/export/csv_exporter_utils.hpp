@@ -47,7 +47,6 @@ struct AggregatedData {
   std::set<uint64_t> file_sizes;  ///< Размеры файла в байтах.
   bool has_deleted_trace = false;  ///< Признак следов удаления/отсутствия файла на диске.
   std::set<std::string> evidence_sources;  ///< Источники доказательств по процессу.
-  std::set<std::string> tamper_flags;  ///< Флаги подозрительных признаков.
   std::set<std::string> timeline_artifacts;  ///< Timeline-артефакты исполнения.
   std::set<std::string> recovered_from;  ///< Источники recovery (USN/VSS/hiber/...).
   std::string first_seen_utc;  ///< Самое раннее время наблюдения (UTC).

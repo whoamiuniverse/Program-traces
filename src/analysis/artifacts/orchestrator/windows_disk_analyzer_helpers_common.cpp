@@ -46,10 +46,6 @@ void appendUniqueToken(std::vector<std::string>& target, std::string token) {
   }
 }
 
-void appendTamperFlag(ProcessInfo& info, const std::string& flag) {
-  appendUniqueToken(info.tamper_flags, flag);
-}
-
 void appendEvidenceSource(ProcessInfo& info, const std::string& source) {
   appendUniqueToken(info.evidence_sources, source);
 }
@@ -160,10 +156,6 @@ void mergeRecoveryEvidenceToProcessData(
         EvidenceUtils::updateTimestampMin(info.first_seen_utc, evidence.timestamp);
         EvidenceUtils::updateTimestampMax(info.last_seen_utc, evidence.timestamp);
       }
-    }
-
-    if (!evidence.tamper_flag.empty()) {
-      appendTamperFlag(info, evidence.tamper_flag);
     }
 
     std::string timeline = "[" + (evidence.source.empty() ? "Recovery"

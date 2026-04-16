@@ -14,7 +14,6 @@ namespace WindowsDiskAnalysis {
 /// @details Reads XML task definition files from @c ctx.config.task_scheduler_root_path
 /// and correlates them with @c TaskCache entries in the SOFTWARE hive to extract
 /// executable paths and last-run timestamps.
-/// Skipped entirely when @c ctx.config.enable_task_scheduler is @c false.
 class TaskSchedulerCollector final : public IExecutionArtifactCollector {
  public:
   /// @brief Collects Task Scheduler execution artifacts.

@@ -2,10 +2,12 @@
 /// @brief Реализация SrumCollector.
 #include "srum_collector.hpp"
 
+#include <cstring>
 #include <filesystem>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include "analysis/artifacts/common/evidence_utils.hpp"
 #include "analysis/artifacts/execution/execution_evidence_helpers.hpp"
@@ -51,6 +53,202 @@ std::size_t collectSrumBinaryFallback(
                         "sru=SRUDB.dat (binary)");
   }
   return candidates.size();
+}
+
+// ---------------------------------------------------------------------------
+// ESE/JET B-tree page structured parser (1.4)
+// ---------------------------------------------------------------------------
+//
+// The ESE (Extensible Storage Engine) database format (used by SRUDB.dat) has:
+//   - File header at offset 0: 4-byte checksum + 4-byte signature (0xEF CD AB 89)
+//   - Page size stored at offset 0xEC in the file header (uint32_t LE)
+//   - Each page has a 40-byte header (ESE format ≥ Win Vista):
+//       [0..3]   checksum / XOR parity
+//       [4..11]  page number / flags  (varies by version; we use heuristics)
+//       [16..17] number of entries in tag array (uint16_t LE)  — "cbAvailCommon"
+//       [20..21] first free byte offset (uint16_t LE)
+//       [22..23] count of tags (uint16_t LE) — "cbPageFlags" in older layout
+//       [24..25] page flags (uint16_t LE)
+//     Flags: 0x0002 = leaf, 0x0080 = long value, 0x0400 = root
+//
+//   - Tag array starts at the END of the page and grows backwards.
+//     Each tag is 4 bytes: uint16_t tag_offset (from page start), uint16_t tag_size.
+//     Tag 0 is the "page header" tag; tags 1..n are data records.
+//
+//   - Data records are "SRUM record nodes". We try to extract null-terminated
+//     ASCII strings and UTF-16LE strings of length ≥ 6 from each record blob.
+//
+// This is purely heuristic: we do not decode the full ESE on-disk format (which
+// requires reverse-engineered column descriptors). The goal is to recover
+// executable paths from SRUM tables without libesedb.
+
+namespace ese_detail {
+
+static constexpr uint32_t kEseSignature  = 0x89ABCDEF;  // bytes: EF CD AB 89 LE
+static constexpr std::size_t kEseHdrSize = 668;          // minimum ESE file header
+static constexpr std::size_t kPageHdrSize = 40;
+static constexpr uint16_t kPageFlagLeaf  = 0x0002;
+static constexpr uint16_t kPageFlagLongVal = 0x0080;
+static constexpr std::size_t kTagBytes   = 4;            // bytes per tag entry
+
+/// Reads a uint16_t LE from data[off].
+inline uint16_t u16le(const uint8_t* p, std::size_t off) {
+  return static_cast<uint16_t>(p[off]) | (static_cast<uint16_t>(p[off + 1]) << 8);
+}
+
+/// Reads a uint32_t LE from data[off].
+inline uint32_t u32le(const uint8_t* p, std::size_t off) {
+  return static_cast<uint32_t>(p[off])
+       | (static_cast<uint32_t>(p[off + 1]) << 8)
+       | (static_cast<uint32_t>(p[off + 2]) << 16)
+       | (static_cast<uint32_t>(p[off + 3]) << 24);
+}
+
+/// Detects ESE signature and returns page size (0 on failure).
+std::size_t detectEsePageSize(const std::vector<uint8_t>& data) {
+  if (data.size() < kEseHdrSize) return 0;
+  const uint32_t sig = u32le(data.data(), 4);
+  if (sig != kEseSignature) return 0;
+  // Page size is at file offset 0xEC (236 decimal).
+  const uint32_t pg = u32le(data.data(), 0xEC);
+  if (pg != 4096 && pg != 8192 && pg != 16384 && pg != 32768) return 0;
+  return static_cast<std::size_t>(pg);
+}
+
+/// Extracts printable ASCII strings of length ≥ min_len from a byte blob.
+void extractAsciiFromBlob(const uint8_t* data, std::size_t sz,
+                          std::size_t min_len,
+                          std::vector<std::string>& out) {
+  std::string cur;
+  for (std::size_t i = 0; i < sz; ++i) {
+    const uint8_t b = data[i];
+    if (b >= 0x20 && b < 0x7F) {
+      cur.push_back(static_cast<char>(b));
+    } else {
+      if (cur.size() >= min_len) out.push_back(cur);
+      cur.clear();
+    }
+  }
+  if (cur.size() >= min_len) out.push_back(cur);
+}
+
+/// Extracts UTF-16LE strings (ASCII code points only) of length ≥ min_len from blob.
+void extractUtf16FromBlob(const uint8_t* data, std::size_t sz,
+                          std::size_t min_len,
+                          std::vector<std::string>& out) {
+  if (sz < 2) return;
+  std::string cur;
+  for (std::size_t i = 0; i + 1 < sz; i += 2) {
+    const uint8_t lo = data[i];
+    const uint8_t hi = data[i + 1];
+    if (hi == 0 && lo >= 0x20 && lo < 0x7F) {
+      cur.push_back(static_cast<char>(lo));
+    } else if (lo == 0 && hi == 0) {
+      if (cur.size() >= min_len) out.push_back(cur);
+      cur.clear();
+    } else {
+      if (cur.size() >= min_len) out.push_back(cur);
+      cur.clear();
+      // Don't skip — restart scan from next byte boundary.
+    }
+  }
+  if (cur.size() >= min_len) out.push_back(cur);
+}
+
+}  // namespace ese_detail
+
+/// @brief Structured ESE B-tree page parser for SRUM (Phase 1.4).
+/// Parses the ESE file header, enumerates leaf pages, reads tag arrays,
+/// and extracts executable path candidates from record blobs.
+std::size_t collectSrumEseStructured(
+    const fs::path& srum_path,
+    std::unordered_map<std::string, ProcessInfo>& process_data,
+    const ExecutionEvidenceContext& ctx) {
+  using namespace ese_detail;
+
+  // We need a larger read than binary fallback to walk multiple pages.
+  const std::size_t max_bytes = std::min<std::size_t>(
+      toByteLimit(ctx.config.binary_scan_max_mb), 128 * 1024 * 1024);
+  const auto data_opt = readFilePrefix(srum_path, max_bytes);
+  if (!data_opt.has_value()) return 0;
+  const std::vector<uint8_t>& data = *data_opt;
+
+  const std::size_t page_size = detectEsePageSize(data);
+  if (page_size == 0) return 0;  // Not an ESE file or format unsupported.
+
+  std::error_code ec;
+  const std::string timestamp = fileTimeToUtcString(fs::last_write_time(srum_path, ec));
+
+  std::size_t collected = 0;
+  std::unordered_set<std::string> seen;
+
+  // ESE pages start after the two shadow-copy header pages (page 0 and 1),
+  // i.e., data starts at offset page_size * 2 from file start.
+  // We scan from offset page_size (skip file header page) through end of data.
+  for (std::size_t page_off = page_size;
+       page_off + page_size <= data.size() &&
+       collected < ctx.config.max_candidates_per_source;
+       page_off += page_size) {
+
+    const uint8_t* pg = data.data() + page_off;
+
+    // Page flags are at byte offset 24 of the page header (ESE format ≥ Vista).
+    const uint16_t flags = u16le(pg, 24);
+    const bool is_leaf     = (flags & kPageFlagLeaf)    != 0;
+    const bool is_longval  = (flags & kPageFlagLongVal) != 0;
+    if (!is_leaf || is_longval) continue;  // Only process regular leaf pages.
+
+    // Number of tags is stored as uint16_t at page offset 22.
+    const uint16_t tag_count = u16le(pg, 22);
+    if (tag_count == 0 || tag_count > 2000) continue;  // Sanity check.
+
+    // Tags grow backwards from the end of the page.
+    // Tag[0] is the page header tag; data tags are [1..tag_count-1].
+    for (uint16_t t = 1; t < tag_count &&
+         collected < ctx.config.max_candidates_per_source; ++t) {
+      // Tag t is at page_size - (t+1)*kTagBytes from page start.
+      const std::size_t tag_pos = page_size - static_cast<std::size_t>(t + 1) * kTagBytes;
+      if (tag_pos + kTagBytes > page_size) break;
+
+      const uint16_t rec_off  = u16le(pg, tag_pos);
+      const uint16_t rec_size = u16le(pg, tag_pos + 2);
+      // High nibble of rec_size encodes tag flags in some versions; mask it.
+      const uint16_t actual_size = rec_size & 0x1FFF;
+
+      if (actual_size == 0) continue;
+      if (static_cast<std::size_t>(rec_off) + actual_size > page_size) continue;
+
+      const uint8_t* rec = pg + rec_off;
+
+      // Extract strings from record blob.
+      std::vector<std::string> strings;
+      extractAsciiFromBlob(rec, actual_size, 6, strings);
+      extractUtf16FromBlob(rec, actual_size, 6, strings);
+
+      for (const auto& s : strings) {
+        if (collected >= ctx.config.max_candidates_per_source) break;
+        std::string exe;
+        if (const auto opt = extractExecutableFromCommand(s); opt.has_value()) {
+          exe = *opt;
+        } else if (isLikelyExecutionPath(s)) {
+          exe = s;
+        }
+        if (exe.empty()) continue;
+        if (!seen.insert(exe).second) continue;
+
+        addExecutionEvidence(process_data, exe, "SRUM", timestamp,
+                             "sru=SRUDB.dat (ese_structured)"
+                             " page=0x" + [&]() {
+                               char buf[16];
+                               std::snprintf(buf, sizeof(buf), "%zx",
+                                             page_off / page_size);
+                               return std::string(buf);
+                             }());
+        ++collected;
+      }
+    }
+  }
+  return collected;
 }
 
 std::size_t collectSrumNative(
@@ -375,29 +573,23 @@ std::size_t collectSrumNative(
 
 void SrumCollector::collect(const ExecutionEvidenceContext& ctx,
                             std::unordered_map<std::string, ProcessInfo>& process_data) {
-  if (!ctx.config.enable_srum) return;
   const auto logger = GlobalLogger::get();
   const fs::path srum_path = fs::path(ctx.disk_root) / ctx.config.srum_path;
   const auto resolved = findPathCaseInsensitive(srum_path);
   if (!resolved.has_value()) return;
 
   std::size_t collected = 0;
-  bool native_attempted = false;
 
-  if (ctx.config.enable_srum_native_parser) {
-    native_attempted = true;
-    collected = collectSrumNative(*resolved, process_data, ctx);
-    if (collected > 0) {
-      logger->info("SRUM(native): добавлено {} кандидат(ов)", collected);
-      return;
-    }
+  collected = collectSrumNative(*resolved, process_data, ctx);
+  if (collected > 0) {
+    logger->info("SRUM(native): добавлено {} кандидат(ов)", collected);
+    return;
   }
 
-  if (!ctx.config.srum_fallback_to_binary_on_native_failure &&
-      native_attempted) {
-    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, 
-        "SRUM fallback отключен, бинарный режим не используется после "
-        "неуспеха native-парсера");
+  // Phase 1.4: try structured ESE B-tree page parser before raw binary scan.
+  collected = collectSrumEseStructured(*resolved, process_data, ctx);
+  if (collected > 0) {
+    logger->info("SRUM(ese_structured): добавлено {} кандидат(ов)", collected);
     return;
   }
 

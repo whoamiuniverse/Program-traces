@@ -29,15 +29,10 @@ class USNAnalyzer final : public IRecoveryAnalyzer {
       const std::string& disk_root) const override;
 
  private:
-  /// @brief Loads analyzer parameters from the @c [Recovery] INI section.
+ /// @brief Loads analyzer parameters from the @c [Recovery] INI section.
   void loadConfiguration();
 
   std::string config_path_;  ///< Path to the INI configuration file.
-  bool enabled_ = true;      ///< Whether USN analysis is enabled.
-  bool enable_logfile_ = true;  ///< Whether $LogFile fallback scan is enabled.
-  bool enable_native_usn_parser_ = true;  ///< Whether to use the native libfusn parser.
-  bool usn_fallback_to_binary_on_native_failure_ =
-      true;  ///< Whether to fall back to binary scan when native USN parsing fails.
   std::size_t binary_scan_max_mb_ = 64;  ///< Maximum bytes (in MB) for the binary fallback scan.
   std::size_t max_candidates_per_source_ =
       2000;  ///< Maximum number of candidates extracted per source.

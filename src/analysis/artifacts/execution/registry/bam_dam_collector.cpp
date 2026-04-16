@@ -21,7 +21,6 @@ using EvidenceUtils::toLowerAscii;
 
 void BamDamCollector::collect(const ExecutionEvidenceContext& ctx,
                               std::unordered_map<std::string, ProcessInfo>& process_data) {
-  if (!ctx.config.enable_bam_dam) return;
   if (ctx.system_hive_path.empty()) return;
 
   const auto logger = GlobalLogger::get();

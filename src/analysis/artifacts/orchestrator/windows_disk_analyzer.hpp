@@ -75,20 +75,6 @@ class WindowsDiskAnalyzer {
     std::size_t max_io_workers         = 4;      ///< Ограничение I/O-bound workers
   };
 
-  /// @struct TamperOptions
-  /// @brief Настройки правил подозрительных признаков.
-  struct TamperOptions {
-    bool enable_prefetch_missing_rule = true;  ///< Включает правило `PrefetchMissingOnDisk`.
-    bool prefetch_missing_require_process_image =
-        true;  ///< Требует наличие process-image для срабатывания Prefetch-правила.
-    std::vector<std::string> runtime_sources = {
-        "EventLog",      "UserAssist",  "RunMRU",       "FeatureUsage",
-        "BAM",           "DAM",         "JumpList",     "LNKRecent",
-        "RecentApps",    "TaskScheduler","IFEO",         "WER",
-        "Timeline",      "BITS",        "WMIRepository","WindowsSearch",
-        "SRUM",          "ShimCache"};  ///< Источники runtime-следов для rule engine.
-  };
-
   /// @struct NamedRecoveryAnalyzer
   /// @brief Recovery-анализатор с человеко-читаемой меткой для логирования.
   ///
@@ -131,9 +117,6 @@ class WindowsDiskAnalyzer {
   /// @brief Загружает настройки [Performance] для параллельного выполнения
   void loadPerformanceOptions(const Config& config);
 
-  /// @brief Загружает настройки правил Tamper из `[TamperRules]`.
-  void loadTamperOptions(const Config& config);
-
   /// @brief Очищает внутреннее состояние перед новым запуском анализа
   void resetAnalysisState();
 
@@ -157,12 +140,6 @@ class WindowsDiskAnalyzer {
   /// @brief Этап 6: recovery (все зарегистрированные анализаторы)
   void runRecoveryStage();
 
-  /// @brief Применяет глобальные tamper-флаги ко всем процессам
-  void applyGlobalTamperFlags();
-
-  /// @brief Применяет локальные tamper-правила к агрегированным процессам.
-  void applyTamperRules();
-
   /// @brief Экспортирует агрегированные данные в CSV
   void exportCsv(const std::string& output_path,
                  const AnalyzeOutputOptions& options);
@@ -176,7 +153,6 @@ class WindowsDiskAnalyzer {
 
   ArtifactDebugOptions debug_options_;       ///< Настройки debug-логирования
   PerformanceOptions   performance_options_; ///< Настройки производительности
-  TamperOptions        tamper_options_;      ///< Настройки tamper-правил
 
   // ---------------------------------------------------------------- analyzers
 
@@ -205,8 +181,6 @@ class WindowsDiskAnalyzer {
   std::vector<NetworkConnection>
       network_connections_;  ///< Сетевые события процесса.
   std::vector<AmcacheEntry> amcache_entries_;  ///< Собранные записи Amcache.
-  std::vector<std::string>
-      global_tamper_flags_;  ///< Глобальные tamper-флаги из execution-этапа.
   std::vector<RecoveryEvidence>           recovery_evidence_;  ///< Общий пул recovery
 };
 
