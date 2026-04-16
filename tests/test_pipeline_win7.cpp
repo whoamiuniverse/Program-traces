@@ -37,7 +37,7 @@ std::string writeWin7Config(const TestSupport::TempDir& dir) {
       "[OSInfoSystemRegistryPaths]\nDefault = WINDOWS/system32/config/SYSTEM\n"
       "[OSInfoHive]\nDefault = Microsoft/Windows NT/CurrentVersion\n"
       "[OSInfoKeys]\nDefault = ProductName,CurrentBuild\n"
-      "[Recovery]\nEnableSignatureScan = false\nEnableUSN = false\n"
+      "[Recovery]\nSignatureScanMaxCandidates = 100\n"
       "[VersionDefaults]\nPrefetchPath = WINDOWS/Prefetch\n"
       "AmcachePath =\nAmcacheKeys =\n";
   const auto p = dir.path() / "config_w7.ini";

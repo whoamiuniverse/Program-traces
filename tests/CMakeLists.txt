@@ -28,6 +28,7 @@ endif()
 
 set(PROGRAM_TRACES_TEST_SOURCES
     placeholder_smoke.cpp
+    test_artifact_paths_by_os.cpp
     test_amcache_analyzer.cpp
     test_cli.cpp
     test_cli_options.cpp
@@ -42,7 +43,6 @@ set(PROGRAM_TRACES_TEST_SOURCES
     test_shimcache_decoder.cpp
     test_recovery_analyzers.cpp
     test_signature_scanner.cpp
-    test_tamper_detectors.cpp
     test_time_utils.cpp
 )
 

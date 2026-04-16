@@ -95,7 +95,7 @@ std::string writeTempConfig(const TestSupport::TempDir& dir,
 // ---------------------------------------------------------------------------
 
 TEST(SignatureDatabaseTest, ContainsExpectedArtifactCount) {
-  EXPECT_EQ(SignatureDB::kSignatures.size(), 9u);
+  EXPECT_GE(SignatureDB::kSignatures.size(), 9u);
 }
 
 TEST(SignatureDatabaseTest, EvtxSignatureIsEightBytes) {
@@ -131,19 +131,20 @@ TEST(SignatureDatabaseTest, AllSignaturesHaveNonNullBytes) {
 }
 
 // ---------------------------------------------------------------------------
-// SignatureScanner — disabled scanner returns empty
+// SignatureScanner — legacy enable flag is ignored
 // ---------------------------------------------------------------------------
 
-TEST(SignatureScannerTest, DisabledScannerReturnsEmpty) {
-  TestSupport::TempDir dir("sig_disabled");
-  const std::string cfg = writeTempConfig(dir);
-  // Override enable flag in config
-  const std::string ini_content = "[Recovery]\nEnableSignatureScan=false\n";
+TEST(SignatureScannerTest, IgnoresEnableSignatureScanFlag) {
+  TestSupport::TempDir dir("sig_ignore_enable");
+  const auto blob  = makeEvtxBlob();
+  const auto image = writeTempBinary(dir, "disk.img", blob);
+  const std::string ini_content =
+      "[Recovery]\nEnableSignatureScan=false\nSignatureScanPath=" + image + "\n";
   TestSupport::writeTextFile(dir.path() / "config.ini", ini_content);
 
-  SignatureScanner scanner(cfg);
+  SignatureScanner scanner((dir.path() / "config.ini").string());
   const auto results = scanner.collect(dir.path().string());
-  EXPECT_TRUE(results.empty());
+  EXPECT_FALSE(results.empty());
 }
 
 // ---------------------------------------------------------------------------

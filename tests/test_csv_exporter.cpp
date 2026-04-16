@@ -36,7 +36,6 @@ TEST(CSVExporterTest, EscapesFieldsAndWritesRecoveryCsv) {
   process_info.timeline_artifacts = {R"([Test] value "quoted"; line
 break)"};
   process_info.evidence_sources = {"EventLog"};
-  process_info.tamper_flags = {"shimcache_no_exec_flag"};
 
   std::unordered_map<std::string, WindowsDiskAnalysis::ProcessInfo> process_data = {
       {R"(C:\Program Files\Test App\app.exe)", process_info}};
@@ -55,7 +54,6 @@ break)"};
       .recovered_from = "$MFT(binary)",
       .timestamp = "2026-03-13 10:00:02",
       .details = "details with \"quotes\"\nand newline",
-      .tamper_flag = "mft_si_fn_divergence",
   }};
 
   WindowsDiskAnalysis::CSVExporter::exportToCSV(
@@ -71,13 +69,13 @@ break)"};
   EXPECT_NE(main_csv.find("\"rec-1\";"), std::string::npos);
   EXPECT_NE(main_csv.find("Autorun"), std::string::npos);
   EXPECT_NE(main_csv.find("EventLog"), std::string::npos);
-  EXPECT_NE(main_csv.find("Amcache(BCF)"), std::string::npos);
+  EXPECT_NE(main_csv.find("Amcache"), std::string::npos);
   EXPECT_NE(main_csv.find("NTFSMetadata"), std::string::npos);
   EXPECT_NE(main_csv.find("recovery_evidence"), std::string::npos);
   EXPECT_NE(main_csv.find("version=1.0 \"\"beta\"\""), std::string::npos);
   EXPECT_NE(main_csv.find("line break"), std::string::npos);
 
-  EXPECT_NE(recovery_csv.find("mft_si_fn_divergence"), std::string::npos);
+  EXPECT_EQ(recovery_csv.find("TamperFlag"), std::string::npos);
   EXPECT_NE(recovery_csv.find("details with \"\"quotes\"\" and newline"),
             std::string::npos);
 }
@@ -128,7 +126,7 @@ TEST(CSVExporterTest, WritesExpectedPathOrKeyForSingleRecord) {
 
   const std::string main_csv = readTextFile(output_path);
   EXPECT_NE(
-      main_csv.find("\"rec-1\";\"EventLog\";\"eventlog_execution\";\"C:\\\\Tools\\\\pathkey.exe\";"),
+      main_csv.find("\"rec-1\";\"EventLog\";\"eventlog_execution\";\"C:\\Tools\\pathkey.exe\";"),
       std::string::npos);
 }
 
@@ -150,7 +148,7 @@ TEST(CSVExporterTest, WritesExpectedTimestampUtcForSingleRecord) {
   const std::string main_csv = readTextFile(output_path);
   EXPECT_NE(
       main_csv.find(
-          "\"rec-1\";\"EventLog\";\"eventlog_execution\";\"C:\\\\Tools\\\\time.exe\";\"2026-04-08 10:11:12\";"),
+          "\"rec-1\";\"EventLog\";\"eventlog_execution\";\"C:\\Tools\\time.exe\";\"2026-04-08 10:11:12\";"),
       std::string::npos);
 }
 
@@ -177,11 +175,11 @@ TEST(CSVExporterTest, WritesExpectedIsRecoveredForExtractionAndRecovery) {
                                                 {}, {}, recovery_evidence);
 
   const std::string main_csv = readTextFile(output_path);
-  EXPECT_NE(main_csv.find("\"eventlog_execution\";\"C:\\\\Tools\\\\flag.exe\";;\"0\";"),
+  EXPECT_NE(main_csv.find("\"eventlog_execution\";\"C:\\Tools\\flag.exe\";;\"0\";"),
             std::string::npos);
   EXPECT_NE(
       main_csv.find(
-          "\"recovery_evidence\";\"C:\\\\Tools\\\\flag.exe\";\"2026-04-08 10:20:00\";\"1\";"),
+          "\"recovery_evidence\";\"C:\\Tools\\flag.exe\";\"2026-04-08 10:20:00\";\"1\";"),
       std::string::npos);
 }
 
@@ -203,7 +201,7 @@ TEST(CSVExporterTest, WritesExpectedRecoveredFromForRecoveryRecord) {
   const std::string main_csv = readTextFile(output_path);
   EXPECT_NE(
       main_csv.find(
-          "\"rec-1\";\"NTFSMetadata\";\"recovery_evidence\";\"C:\\\\Tools\\\\rf.exe\";\"2026-04-08 10:30:00\";\"1\";\"$MFT(binary)\";"),
+          "\"rec-1\";\"NTFSMetadata\";\"recovery_evidence\";\"C:\\Tools\\rf.exe\";\"2026-04-08 10:30:00\";\"1\";\"$MFT(binary)\";"),
       std::string::npos);
 }
 
@@ -245,7 +243,7 @@ TEST(CSVExporterTest, WritesUserHintWhenUsersAvailable) {
   const std::string main_csv = readTextFile(output_path);
   EXPECT_NE(
       main_csv.find(
-          "\"rec-1\";\"EventLog\";\"eventlog_execution\";\"C:\\\\Tools\\\\user.exe\";\"2026-04-08 11:00:00\";\"0\";;;\"alice | bob\";"),
+          "\"rec-1\";\"EventLog\";\"eventlog_execution\";\"C:\\Tools\\user.exe\";\"2026-04-08 11:00:00\";\"0\";;;\"alice | bob\";"),
       std::string::npos);
 }
 

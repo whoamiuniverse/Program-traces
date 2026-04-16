@@ -41,7 +41,7 @@ std::string writeFakeConfig(const TestSupport::TempDir& dir) {
       "[OSInfoSystemRegistryPaths]\nDefault = Windows/System32/config/SYSTEM\n"
       "[OSInfoHive]\nDefault = Microsoft/Windows NT/CurrentVersion\n"
       "[OSInfoKeys]\nDefault = ProductName\n"
-      "[Recovery]\nEnableSignatureScan = false\n";
+      "[Recovery]\nSignatureScanMaxCandidates = 100\n";
   const auto p = dir.path() / "config.ini";
   TestSupport::writeTextFile(p, ini);
   return p.string();
