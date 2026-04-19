@@ -42,6 +42,8 @@ set(PROGRAM_TRACES_TEST_SOURCES
     test_registry_parser.cpp
     test_shimcache_decoder.cpp
     test_recovery_analyzers.cpp
+    test_recovery_orchestrator.cpp
+    test_recovery_contract.cpp
     test_signature_scanner.cpp
     test_time_utils.cpp
 )

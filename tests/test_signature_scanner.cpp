@@ -2,8 +2,10 @@
 /// @brief Unit tests for SignatureScanner and SignatureDatabase.
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -30,10 +32,15 @@ std::vector<uint8_t> makeBlobWithSig(const uint8_t* sig_bytes, std::size_t sig_l
   return blob;
 }
 
-/// @brief Builds a minimal EVTX blob: ElfFile\0\0 at offset 0.
+/// @brief Builds a minimal EVTX blob with file header and first chunk magic.
 std::vector<uint8_t> makeEvtxBlob() {
   auto blob = makeBlobWithSig(SignatureDB::kSigEvtx.data(),
                                SignatureDB::kSigEvtx.size(), 0, 8192);
+  constexpr std::size_t kFirstChunkOffset = 0x1000;
+  for (std::size_t i = 0; i < SignatureDB::kSigEvtxChunk.size() &&
+                          (kFirstChunkOffset + i) < blob.size(); ++i) {
+    blob[kFirstChunkOffset + i] = SignatureDB::kSigEvtxChunk[i];
+  }
   return blob;
 }
 
@@ -45,7 +52,7 @@ std::vector<uint8_t> makeLnkBlob() {
   return blob;
 }
 
-/// @brief Builds a minimal PE blob: MZ magic + valid PE offset at 0x3C.
+/// @brief Builds a minimal PE blob: MZ magic + valid PE offset + PE\0\0.
 std::vector<uint8_t> makePeBlob() {
   std::vector<uint8_t> blob(4096, 0x00);
   blob[0] = 0x4D;  // M
@@ -55,6 +62,10 @@ std::vector<uint8_t> makePeBlob() {
   blob[0x3D] = 0x00;
   blob[0x3E] = 0x00;
   blob[0x3F] = 0x00;
+  blob[0x80] = 0x50;  // P
+  blob[0x81] = 0x45;  // E
+  blob[0x82] = 0x00;
+  blob[0x83] = 0x00;
   return blob;
 }
 
@@ -95,7 +106,18 @@ std::string writeTempConfig(const TestSupport::TempDir& dir,
 // ---------------------------------------------------------------------------
 
 TEST(SignatureDatabaseTest, ContainsExpectedArtifactCount) {
-  EXPECT_GE(SignatureDB::kSignatures.size(), 9u);
+  EXPECT_EQ(SignatureDB::kSignatures.size(), 13u);
+}
+
+TEST(SignatureDatabaseTest, SignatureSetIsStable) {
+  const std::array<std::string_view, 13> expected = {
+      "EVTX", "EVTXChunk", "EVT", "LNK", "OLE2/MSI", "RegHive", "HiveBin",
+      "ESE/JET", "SQLite", "Prefetch", "PfCmpr", "JobFile", "PE"};
+
+  ASSERT_EQ(SignatureDB::kSignatures.size(), expected.size());
+  for (std::size_t i = 0; i < expected.size(); ++i) {
+    EXPECT_EQ(SignatureDB::kSignatures[i].artifact_type, expected[i]);
+  }
 }
 
 TEST(SignatureDatabaseTest, EvtxSignatureIsEightBytes) {
@@ -166,6 +188,38 @@ TEST(SignatureScannerTest, DetectsEvtxInExplicitImageFile) {
         return ev.executable_path.find("EVTX") != std::string::npos;
       });
   EXPECT_TRUE(found) << "Expected at least one EVTX hit";
+}
+
+TEST(SignatureScannerTest, DetectsSignatureAcrossBlockBoundary) {
+  TestSupport::TempDir dir("sig_overlap_boundary");
+  std::vector<uint8_t> blob(8192, 0x00);
+  const std::size_t boundary_offset = 4094;  // crosses 4KB block boundary
+  for (std::size_t i = 0; i < SignatureDB::kSigEvtx.size(); ++i) {
+    blob[boundary_offset + i] = SignatureDB::kSigEvtx[i];
+  }
+  const auto image = writeTempBinary(dir, "boundary.img", blob);
+
+  const std::string ini =
+      "[Recovery]\nSignatureScanPath=" + image +
+      "\nSignatureScanBlockSizeKB=4\nSignatureScanMaxMB=2\n";
+  TestSupport::writeTextFile(dir.path() / "config.ini", ini);
+
+  SignatureScanner scanner((dir.path() / "config.ini").string());
+  const auto results = scanner.collect(dir.path().string());
+
+  const bool found = std::any_of(results.begin(), results.end(),
+      [](const RecoveryEvidence& ev) {
+        return ev.executable_path.find("EVTX") != std::string::npos;
+      });
+  EXPECT_TRUE(found) << "EVTX signature crossing block boundary must be detected";
+
+  const auto hit_it = std::find_if(
+      results.begin(), results.end(), [](const RecoveryEvidence& ev) {
+        return ev.executable_path.find("EVTX") != std::string::npos;
+      });
+  ASSERT_NE(hit_it, results.end());
+  EXPECT_NE(hit_it->details.find("offset=0xFFE"), std::string::npos)
+      << "Boundary hit must preserve exact disk offset in details";
 }
 
 // ---------------------------------------------------------------------------
@@ -337,6 +391,27 @@ TEST(SignatureScannerTest, EmptyImageProducesNoResults) {
   EXPECT_TRUE(results.empty());
 }
 
+TEST(SignatureScannerTest, RespectsGlobalMaxCandidatesAcrossTargets) {
+  TestSupport::TempDir dir("sig_global_max");
+
+  const auto image_blob = makeEvtxBlob();
+  const auto image_path = writeTempBinary(dir, "disk.img", image_blob);
+  TestSupport::writeBinaryFile(dir.path() / "pagefile.sys", makeEvtxBlob());
+  TestSupport::writeBinaryFile(dir.path() / "hiberfil.sys", makeEvtxBlob());
+
+  const std::string ini =
+      "[Recovery]\nSignatureScanPath=" + image_path +
+      "\nSignatureScanMaxCandidates=1\nSignatureScanMaxMB=2\n";
+  TestSupport::writeTextFile(dir.path() / "config.ini", ini);
+
+  SignatureScanner scanner((dir.path() / "config.ini").string());
+  const auto results = scanner.collect(dir.path().string());
+
+  ASSERT_EQ(results.size(), 1u);
+  EXPECT_EQ(results.front().source, "SignatureScan");
+  EXPECT_EQ(results.front().recovered_from, "SignatureScan.signature");
+}
+
 // ---------------------------------------------------------------------------
 // SignatureScanner — evidence fields are properly populated
 // ---------------------------------------------------------------------------
@@ -356,5 +431,107 @@ TEST(SignatureScannerTest, EvidenceFieldsArePopulated) {
     EXPECT_FALSE(ev.source.empty());
     EXPECT_FALSE(ev.recovered_from.empty());
     EXPECT_FALSE(ev.details.empty());
+    EXPECT_EQ(ev.source, "SignatureScan");
+    EXPECT_EQ(ev.recovered_from, "SignatureScan.signature");
   }
+}
+
+// ---------------------------------------------------------------------------
+// EVT validator — rejects false positives from {0x30,0x00,0x00,0x00}
+// ---------------------------------------------------------------------------
+
+TEST(SignatureScannerTest, EvtValidatorRejectsFalsePositive) {
+  TestSupport::TempDir dir("sig_evt_false_positive");
+  // Create a blob with the EVT signature bytes but no "LfLe" magic at +4.
+  std::vector<uint8_t> blob(4096, 0x00);
+  blob[0] = 0x30; blob[1] = 0x00; blob[2] = 0x00; blob[3] = 0x00;
+  // Bytes at +4 are NOT "LfLe" — should be rejected by validateEvt.
+  blob[4] = 0xAA; blob[5] = 0xBB; blob[6] = 0xCC; blob[7] = 0xDD;
+
+  const auto image = writeTempBinary(dir, "disk.img", blob);
+  const auto cfg   = writeTempConfig(dir, image);
+
+  SignatureScanner scanner(cfg);
+  const auto results = scanner.collect(dir.path().string());
+
+  const bool found = std::any_of(results.begin(), results.end(),
+      [](const RecoveryEvidence& ev) {
+        return ev.executable_path.find("EVT") != std::string::npos &&
+               ev.executable_path.find("EVTX") == std::string::npos;
+      });
+  EXPECT_FALSE(found) << "EVT without LfLe magic must be rejected";
+}
+
+TEST(SignatureScannerTest, EvtValidatorAcceptsValidRecord) {
+  TestSupport::TempDir dir("sig_evt_valid");
+  std::vector<uint8_t> blob(4096, 0x00);
+  // Valid EVT header: RecordLength=48, "LfLe" magic
+  blob[0] = 0x30; blob[1] = 0x00; blob[2] = 0x00; blob[3] = 0x00;
+  blob[4] = 0x4C; blob[5] = 0x66; blob[6] = 0x4C; blob[7] = 0x65;  // "LfLe"
+  // Footer RecordLength (at offset 44) must also be 48 (0x30)
+  blob[44] = 0x30; blob[45] = 0x00; blob[46] = 0x00; blob[47] = 0x00;
+
+  const auto image = writeTempBinary(dir, "disk.img", blob);
+  const auto cfg   = writeTempConfig(dir, image);
+
+  SignatureScanner scanner(cfg);
+  const auto results = scanner.collect(dir.path().string());
+
+  const bool found = std::any_of(results.begin(), results.end(),
+      [](const RecoveryEvidence& ev) {
+        return ev.executable_path.find("EVT") != std::string::npos;
+      });
+  EXPECT_TRUE(found) << "Valid EVT record should be detected";
+}
+
+// ---------------------------------------------------------------------------
+// EVTX chunk validator — uses header_size at 0x30, not free_space at 0x28
+// ---------------------------------------------------------------------------
+
+TEST(SignatureScannerTest, EvtxChunkValidatorUsesHeaderSizeField) {
+  TestSupport::TempDir dir("sig_evtx_chunk_header");
+  std::vector<uint8_t> blob(131072, 0x00);
+  // Place EVTXChunk magic "ElfChnk\0" at offset 0
+  for (std::size_t i = 0; i < SignatureDB::kSigEvtxChunk.size(); ++i) {
+    blob[i] = SignatureDB::kSigEvtxChunk[i];
+  }
+  // header_size at 0x30 = 0x80 (128) — correct value
+  blob[0x30] = 0x80; blob[0x31] = 0x00; blob[0x32] = 0x00; blob[0x33] = 0x00;
+  // free_space_offset at 0x28 = 0x200 (valid: >= 0x80 and <= 65536)
+  blob[0x28] = 0x00; blob[0x29] = 0x02; blob[0x2A] = 0x00; blob[0x2B] = 0x00;
+
+  const auto image = writeTempBinary(dir, "chunk.img", blob);
+  const auto cfg   = writeTempConfig(dir, image);
+
+  SignatureScanner scanner(cfg);
+  const auto results = scanner.collect(dir.path().string());
+
+  const bool found = std::any_of(results.begin(), results.end(),
+      [](const RecoveryEvidence& ev) {
+        return ev.executable_path.find("EVTXChunk") != std::string::npos;
+      });
+  EXPECT_TRUE(found) << "EVTX chunk with correct header_size=0x80 should pass";
+}
+
+TEST(SignatureScannerTest, EvtxChunkValidatorRejectsWrongHeaderSize) {
+  TestSupport::TempDir dir("sig_evtx_chunk_bad");
+  std::vector<uint8_t> blob(131072, 0x00);
+  for (std::size_t i = 0; i < SignatureDB::kSigEvtxChunk.size(); ++i) {
+    blob[i] = SignatureDB::kSigEvtxChunk[i];
+  }
+  // header_size at 0x30 = 0xFF (wrong, should be 0x80)
+  blob[0x30] = 0xFF; blob[0x31] = 0x00; blob[0x32] = 0x00; blob[0x33] = 0x00;
+  blob[0x28] = 0x00; blob[0x29] = 0x02; blob[0x2A] = 0x00; blob[0x2B] = 0x00;
+
+  const auto image = writeTempBinary(dir, "bad_chunk.img", blob);
+  const auto cfg   = writeTempConfig(dir, image);
+
+  SignatureScanner scanner(cfg);
+  const auto results = scanner.collect(dir.path().string());
+
+  const bool found = std::any_of(results.begin(), results.end(),
+      [](const RecoveryEvidence& ev) {
+        return ev.executable_path.find("EVTXChunk") != std::string::npos;
+      });
+  EXPECT_FALSE(found) << "EVTX chunk with wrong header_size must be rejected";
 }

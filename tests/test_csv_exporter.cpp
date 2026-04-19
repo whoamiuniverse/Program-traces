@@ -44,8 +44,8 @@ break)"};
       .file_path = R"(C:\Program Files\Test App\app.exe)",
       .name = "app.exe",
       .version = R"(1.0 "beta")",
-      .modification_time_str = "2026-03-13 10:00:01",
       .source = "Amcache(BCF)",
+      .modification_time_str = "2026-03-13 10:00:01",
   }};
 
   std::vector<WindowsDiskAnalysis::RecoveryEvidence> recovery_evidence = {{
@@ -75,7 +75,8 @@ break)"};
   EXPECT_NE(main_csv.find("version=1.0 \"\"beta\"\""), std::string::npos);
   EXPECT_NE(main_csv.find("line break"), std::string::npos);
 
-  EXPECT_EQ(recovery_csv.find("TamperFlag"), std::string::npos);
+  EXPECT_NE(recovery_csv.find("ExecutablePath;Source;RecoveredFrom;Timestamp;Details"),
+            std::string::npos);
   EXPECT_NE(recovery_csv.find("details with \"\"quotes\"\" and newline"),
             std::string::npos);
 }
@@ -201,8 +202,111 @@ TEST(CSVExporterTest, WritesExpectedRecoveredFromForRecoveryRecord) {
   const std::string main_csv = readTextFile(output_path);
   EXPECT_NE(
       main_csv.find(
-          "\"rec-1\";\"NTFSMetadata\";\"recovery_evidence\";\"C:\\Tools\\rf.exe\";\"2026-04-08 10:30:00\";\"1\";\"$MFT(binary)\";"),
+          "\"rec-1\";\"NTFSMetadata\";\"recovery_evidence\";\"C:\\Tools\\rf.exe\";\"2026-04-08 10:30:00\";\"1\";\"NTFSMetadata.mft_binary\";"),
       std::string::npos);
+}
+
+TEST(CSVExporterTest, CanonicalizesLegacyRecoveryContractValues) {
+  TestSupport::TempDir temp_dir("csv_export_recovery_contract");
+  const auto output_path = temp_dir.path() / "result.csv";
+
+  std::vector<WindowsDiskAnalysis::RecoveryEvidence> recovery_evidence = {{
+      .executable_path = R"(C:\Tools\legacy_registry.exe)",
+      .source = "Registry",
+      .recovered_from = "RegistryLog(SOFTWARE.LOG1)(dirty_sector)",
+      .timestamp = "2026-04-08 10:31:00",
+      .details = "legacy marker",
+  }};
+
+  WindowsDiskAnalysis::CSVExporter::exportToCSV(output_path.string(), {}, {}, {},
+                                                {}, recovery_evidence);
+
+  const std::string main_csv = readTextFile(output_path);
+  EXPECT_NE(main_csv.find("\"RegistryLog\";\"recovery_evidence\""),
+            std::string::npos);
+  EXPECT_NE(main_csv.find("\"RegistryLog.dirty_sector\""), std::string::npos);
+}
+
+TEST(CSVExporterTest, EnsuresRecoveredFromIsAlwaysPresentForRecoveryRows) {
+  TestSupport::TempDir temp_dir("csv_export_recovery_non_empty_marker");
+  const auto output_path = temp_dir.path() / "result.csv";
+
+  std::vector<WindowsDiskAnalysis::RecoveryEvidence> recovery_evidence = {{
+      .executable_path = R"(C:\Tools\no_marker.exe)",
+      .source = "TSK",
+      .recovered_from = "",
+      .timestamp = "2026-04-08 10:32:00",
+      .details = "missing recovered_from",
+  }};
+
+  WindowsDiskAnalysis::CSVExporter::exportToCSV(output_path.string(), {}, {}, {},
+                                                {}, recovery_evidence,
+                                                {.export_recovery_csv = true});
+
+  const std::string main_csv = readTextFile(output_path);
+  const std::string recovery_csv =
+      readTextFile(temp_dir.path() / "result_recovery.csv");
+  EXPECT_NE(main_csv.find("\"TSK.unknown\""), std::string::npos);
+  EXPECT_NE(recovery_csv.find("TSK.unknown"), std::string::npos);
+}
+
+TEST(CSVExporterTest, WritesStableSchemaHeaders) {
+  TestSupport::TempDir temp_dir("csv_export_schema_headers");
+  const auto output_path = temp_dir.path() / "result.csv";
+
+  WindowsDiskAnalysis::CSVExporter::exportToCSV(
+      output_path.string(), {}, {}, {}, {}, {},
+      {.export_recovery_csv = true});
+
+  const std::string main_csv = readTextFile(output_path);
+  const std::string recovery_csv =
+      readTextFile(temp_dir.path() / "result_recovery.csv");
+
+  EXPECT_NE(main_csv.find(
+                "record_id;source;artifact_type;path_or_key;timestamp_utc;is_recovered;recovered_from;host_hint;user_hint;raw_details"),
+            std::string::npos);
+  EXPECT_NE(recovery_csv.find(
+                "ExecutablePath;Source;RecoveredFrom;Timestamp;Details"),
+            std::string::npos);
+}
+
+TEST(CSVExporterTest, RecoveryCsvRowsAreSortedAndDeduplicated) {
+  TestSupport::TempDir temp_dir("csv_export_recovery_order");
+  const auto output_path = temp_dir.path() / "result.csv";
+
+  std::vector<WindowsDiskAnalysis::RecoveryEvidence> recovery_evidence = {
+      {.executable_path = R"(C:\Tools\b.exe)",
+       .source = "NTFSMetadata",
+       .recovered_from = "NTFSMetadata.mft_binary",
+       .timestamp = "2026-04-08 12:00:00",
+       .details = "z"},
+      {.executable_path = R"(C:\Tools\a.exe)",
+       .source = "NTFSMetadata",
+       .recovered_from = "NTFSMetadata.mft_binary",
+       .timestamp = "2026-04-08 11:59:00",
+       .details = "a"},
+      {.executable_path = R"(C:\Tools\a.exe)",
+       .source = "NTFSMetadata",
+       .recovered_from = "NTFSMetadata.mft_binary",
+       .timestamp = "2026-04-08 11:59:00",
+       .details = "a"},
+  };
+
+  WindowsDiskAnalysis::CSVExporter::exportToCSV(
+      output_path.string(), {}, {}, {}, {}, recovery_evidence,
+      {.export_recovery_csv = true});
+
+  const std::string recovery_csv =
+      readTextFile(temp_dir.path() / "result_recovery.csv");
+  const std::size_t pos_a = recovery_csv.find(R"(C:\Tools\a.exe)");
+  const std::size_t pos_b = recovery_csv.find(R"(C:\Tools\b.exe)");
+  ASSERT_NE(pos_a, std::string::npos);
+  ASSERT_NE(pos_b, std::string::npos);
+  EXPECT_LT(pos_a, pos_b);
+
+  const std::size_t first_a = recovery_csv.find(R"(C:\Tools\a.exe)");
+  const std::size_t second_a = recovery_csv.find(R"(C:\Tools\a.exe)", first_a + 1);
+  EXPECT_EQ(second_a, std::string::npos);
 }
 
 TEST(CSVExporterTest, WritesHostHintWhenUncPathIsAvailable) {
