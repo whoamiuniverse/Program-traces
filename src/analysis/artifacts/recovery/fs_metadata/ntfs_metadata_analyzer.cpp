@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -36,6 +37,9 @@ using RecoveryUtils::scanRecoveryBufferBinary;
 using RecoveryUtils::scanRecoveryFileBinary;
 using RecoveryUtils::toByteLimit;
 
+constexpr uint64_t kFiletimeUnixEpoch = 116444736000000000ULL;
+constexpr uint64_t kMaxReasonableFiletime = 210000000000000000ULL;
+
 // ---------------------------------------------------------------------------
 // Low-level read helpers
 // ---------------------------------------------------------------------------
@@ -54,11 +58,73 @@ uint64_t readLeUInt64(const std::vector<uint8_t>& bytes, const std::size_t offse
   return value;
 }
 
+/// @brief Performs baseline sanity checks for a FILE record header.
+bool hasSaneMftRecordHeader(const std::vector<uint8_t>& record,
+                            const std::size_t record_size) {
+  if (record_size < 256 || record.size() < record_size) return false;
+  if (!(record[0] == 'F' && record[1] == 'I' &&
+        record[2] == 'L' && record[3] == 'E')) {
+    return false;
+  }
+
+  const uint16_t usa_offset = readLeUInt16(record, 0x04);
+  const uint16_t usa_count = readLeUInt16(record, 0x06);
+  // USA must be present for valid MFT records.  usa_offset=0 or usa_count=0
+  // is only legitimate for the self-referencing $MFT record 0, but even there
+  // modern NTFS always populates them.  Reject records with missing USA to
+  // avoid treating corrupted data as valid.
+  if (usa_offset == 0 || usa_count == 0) return false;
+  if (usa_count < 2) return false;
+  const std::size_t usa_bytes =
+      static_cast<std::size_t>(usa_count) * sizeof(uint16_t);
+  if (usa_offset < 0x28 ||
+      static_cast<std::size_t>(usa_offset) + usa_bytes > record_size) {
+    return false;
+  }
+
+  const uint16_t first_attr_off = readLeUInt16(record, 0x14);
+  if (first_attr_off < 0x30 || first_attr_off >= record_size) {
+    return false;
+  }
+
+  const uint32_t bytes_in_use = readLeUInt32(record, 0x18);
+  if (bytes_in_use != 0 &&
+      (bytes_in_use < first_attr_off || bytes_in_use > record_size)) {
+    return false;
+  }
+  return true;
+}
+
 /// @brief Форматирует смещение в hex.
 std::string formatOffsetHex(const std::size_t offset) {
   std::ostringstream stream;
   stream << "0x" << std::hex << std::uppercase << offset;
   return stream.str();
+}
+
+/// @brief Возвращает FILETIME в UTC, если значение похоже на валидный диапазон.
+std::string formatReasonableFiletime(const uint64_t filetime) {
+  if (filetime < kFiletimeUnixEpoch || filetime > kMaxReasonableFiletime) {
+    return {};
+  }
+  const std::string timestamp = filetimeToString(filetime);
+  if (timestamp == "N/A") return {};
+  return timestamp;
+}
+
+/// @brief Нормализует компонент пути в MFT chain.
+std::string normalizeMftPathComponent(std::string value) {
+  value.erase(std::remove(value.begin(), value.end(), '\0'), value.end());
+  trim(value);
+  if (value.empty()) return {};
+  std::ranges::replace(value, '/', '\\');
+  if (value.find('\\') != std::string::npos) {
+    value = getLastPathComponent(value, '\\');
+  }
+  trim(value);
+  if (value.empty() || value == "." || value == "..") return {};
+  if (value.size() > 255) return {};
+  return value;
 }
 
 // ---------------------------------------------------------------------------
@@ -108,15 +174,42 @@ std::string decodeMftUtf16Name(const std::vector<uint8_t>& data,
   for (std::size_t i = 0; i < char_count; ++i) {
     const std::size_t pos = offset + i * 2;
     if (pos + 2 > data.size()) break;
-    const uint16_t cp = static_cast<uint16_t>(data[pos]) |
-                        (static_cast<uint16_t>(data[pos + 1]) << 8);
+    uint32_t cp = static_cast<uint32_t>(
+        static_cast<uint16_t>(data[pos]) |
+        static_cast<uint16_t>(static_cast<uint16_t>(data[pos + 1]) << 8));
+
+    // Handle UTF-16 surrogate pairs (U+10000 and above — emoji, rare CJK, etc.)
+    if (cp >= 0xD800 && cp <= 0xDBFF) {
+      // High surrogate — read low surrogate from next code unit.
+      if (i + 1 < char_count) {
+        const std::size_t pos2 = offset + (i + 1) * 2;
+        if (pos2 + 2 <= data.size()) {
+          const uint16_t low = static_cast<uint16_t>(
+              static_cast<uint16_t>(data[pos2]) |
+              static_cast<uint16_t>(static_cast<uint16_t>(data[pos2 + 1]) << 8));
+          if (low >= 0xDC00 && low <= 0xDFFF) {
+            cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
+            ++i;  // consume the low surrogate
+          }
+        }
+      }
+    } else if (cp >= 0xDC00 && cp <= 0xDFFF) {
+      // Unpaired low surrogate — replace with U+FFFD.
+      cp = 0xFFFD;
+    }
+
     if (cp < 0x80) {
       result.push_back(static_cast<char>(cp));
     } else if (cp < 0x800) {
       result.push_back(static_cast<char>(0xC0 | (cp >> 6)));
       result.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-    } else {
+    } else if (cp < 0x10000) {
       result.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+      result.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+      result.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    } else {
+      result.push_back(static_cast<char>(0xF0 | (cp >> 18)));
+      result.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
       result.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
       result.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
     }
@@ -131,8 +224,8 @@ std::string formatGuidHex(const std::vector<uint8_t>& data, std::size_t offset) 
   ss << std::uppercase << std::hex << std::setfill('0');
   // Data1 (LE 4 bytes)
   ss << '{';
-  for (int i = 3; i >= 0; --i)
-    ss << std::setw(2) << static_cast<int>(data[offset + i]);
+  for (std::size_t i = 4; i > 0; --i)
+    ss << std::setw(2) << static_cast<int>(data[offset + i - 1]);
   ss << '-';
   // Data2 (LE 2 bytes)
   ss << std::setw(2) << static_cast<int>(data[offset + 5])
@@ -147,7 +240,7 @@ std::string formatGuidHex(const std::vector<uint8_t>& data, std::size_t offset) 
      << std::setw(2) << static_cast<int>(data[offset + 9]);
   ss << '-';
   // Data4 continued (BE 6 bytes)
-  for (int i = 10; i < 16; ++i)
+  for (std::size_t i = 10; i < 16; ++i)
     ss << std::setw(2) << static_cast<int>(data[offset + i]);
   ss << '}';
   return ss.str();
@@ -167,6 +260,78 @@ bool hasExecutableName(const std::string& name) {
       return true;
   }
   return false;
+}
+
+/// @brief Снижает шум binary fallback для NTFS (непохожие на путь кандидаты).
+bool isLikelyNtfsBinaryCandidate(std::string path) {
+  path.erase(std::remove(path.begin(), path.end(), '\0'), path.end());
+  trim(path);
+  if (path.empty()) return false;
+  std::ranges::replace(path, '/', '\\');
+  if (path.size() < 8 || path.size() > 520) return false;
+  if (!hasExecutableName(path)) return false;
+
+  const std::string lowered = to_lower(path);
+  if (lowered.find("http://") != std::string::npos ||
+      lowered.find("https://") != std::string::npos) {
+    return false;
+  }
+
+  const bool has_drive = path.size() >= 3 &&
+                         std::isalpha(static_cast<unsigned char>(path[0])) != 0 &&
+                         path[1] == ':' && path[2] == '\\';
+  const bool has_unc = path.rfind("\\\\", 0) == 0;
+  const bool has_dir = path.find('\\') != std::string::npos;
+  return has_drive || has_unc || has_dir;
+}
+
+// ---------------------------------------------------------------------------
+// Update Sequence Array (USA) fixup
+// ---------------------------------------------------------------------------
+
+/// @brief Applies NTFS Update Sequence Array fixup to an MFT record in-place.
+/// Each sector's last two bytes are replaced with the original data from the
+/// USA.  Returns false if the fixup array is inconsistent (sector end-of-sector
+/// words do not match the USA check value), indicating a torn/corrupted record.
+bool applyUsaFixup(std::vector<uint8_t>& record, const std::size_t record_size,
+                   const std::size_t sector_size = 512) {
+  if (record.size() < record_size || record_size < 0x30) return false;
+
+  const uint16_t usa_offset = readLeUInt16(record, 0x04);
+  const uint16_t usa_count  = readLeUInt16(record, 0x06);
+  if (usa_offset == 0 || usa_count < 2) return false;
+
+  // usa_count includes the check value itself, so the number of sectors
+  // covered is (usa_count - 1).
+  const std::size_t num_sectors = static_cast<std::size_t>(usa_count) - 1;
+  const std::size_t usa_bytes =
+      static_cast<std::size_t>(usa_count) * sizeof(uint16_t);
+  if (static_cast<std::size_t>(usa_offset) + usa_bytes > record_size) {
+    return false;
+  }
+  if (num_sectors * sector_size > record_size) return false;
+
+  // The first entry is the check value that must match the last two bytes
+  // of each covered sector.
+  const uint16_t check_value = readLeUInt16(record, usa_offset);
+
+  for (std::size_t i = 0; i < num_sectors; ++i) {
+    const std::size_t sector_end = (i + 1) * sector_size - 2;
+    if (sector_end + 2 > record_size) break;
+
+    const uint16_t on_disk = readLeUInt16(record, sector_end);
+    if (on_disk != check_value) {
+      // Torn write detected — the sector was not committed atomically.
+      return false;
+    }
+
+    // Replace with the original bytes from the USA entry.
+    const std::size_t entry_off =
+        static_cast<std::size_t>(usa_offset) + (i + 1) * sizeof(uint16_t);
+    record[sector_end]     = record[entry_off];
+    record[sector_end + 1] = record[entry_off + 1];
+  }
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -241,6 +406,18 @@ std::string parseMftObjectId(const std::vector<uint8_t>& record) {
   return result;
 }
 
+/// @brief Извлекает FILETIME создания из атрибута $STANDARD_INFORMATION (0x10).
+uint64_t parseMftSiCreation(const std::vector<uint8_t>& record) {
+  uint64_t creation = 0;
+  iterateMftAttributes(record, [&](uint32_t type, bool non_resident,
+                                   std::size_t cs, uint32_t csz,
+                                   std::size_t /*aoff*/, uint32_t /*asz*/) {
+    if (creation != 0 || type != 0x10U || non_resident || csz < 8) return;
+    creation = readLeUInt64(record, cs);
+  });
+  return creation;
+}
+
 /// @brief Проверяет наличие $ATTRIBUTE_LIST (0x20) в MFT-записи.
 bool hasMftAttributeList(const std::vector<uint8_t>& record) {
   bool found = false;
@@ -282,14 +459,22 @@ std::unordered_map<uint64_t, MftDirEntry> buildMftDirTree(
     ++parsed;
 
     const uint64_t rec_num = off / record_size;
-    const uint16_t flags = readLeUInt16(data, off + 0x16);
+    std::vector<uint8_t> rec(data.begin() + static_cast<std::ptrdiff_t>(off),
+                              data.begin() + static_cast<std::ptrdiff_t>(off + record_size));
+    if (!hasSaneMftRecordHeader(rec, record_size)) {
+      continue;
+    }
+    // Apply USA fixup — skip record if torn write detected.
+    if (!applyUsaFixup(rec, record_size)) {
+      continue;
+    }
+
+    const uint16_t flags = readLeUInt16(rec, 0x16);
     const bool in_use    = (flags & 0x01) != 0;
     const bool is_dir    = (flags & 0x02) != 0;
 
     // Only directories AND in-use files are needed for path resolution.
     // Files can also be parents (hard links to dirs); include all records.
-    std::vector<uint8_t> rec(data.begin() + static_cast<std::ptrdiff_t>(off),
-                              data.begin() + static_cast<std::ptrdiff_t>(off + record_size));
     const auto fns = parseMftFileNames(rec);
     if (fns.empty()) continue;
 
@@ -299,8 +484,9 @@ std::unordered_map<uint64_t, MftDirEntry> buildMftDirTree(
       if (fn.name_type == 1 || fn.name_type == 3) { best = &fn; break; }
 
     MftDirEntry entry;
-    entry.name          = best->name;
+    entry.name          = normalizeMftPathComponent(best->name);
     entry.parent_record = best->parent_ref & 0x0000FFFFFFFFFFFFULL;
+    if (entry.name.empty()) continue;
 
     (void)in_use; (void)is_dir;
     tree[rec_num] = std::move(entry);
@@ -320,26 +506,62 @@ std::string resolveMftPath(
     uint64_t record_num,
     const std::unordered_map<uint64_t, MftDirEntry>& tree,
     int max_depth = 32) {
-  std::string path;
+  std::vector<std::string> segments;
+  segments.reserve(static_cast<std::size_t>(std::max(0, max_depth)));
   std::unordered_set<uint64_t> visited;
+  bool reached_root = false;
+  bool orphan_chain = false;
   uint64_t cur = record_num;
 
-  while (max_depth-- > 0 && !visited.count(cur)) {
-    visited.insert(cur);
+  // Even with max_depth=0 we must resolve at least the record's own name,
+  // otherwise the path is silently lost.  We use max_depth to limit the
+  // parent-chain walk, but the first lookup (the record itself) is free.
+  while (max_depth >= 0) {
+    if (!visited.insert(cur).second) {
+      orphan_chain = true;
+      break;
+    }
     auto it = tree.find(cur);
-    if (it == tree.end()) break;
+    if (it == tree.end()) {
+      orphan_chain = true;
+      break;
+    }
 
-    const std::string& seg = it->second.name;
-    path = path.empty() ? seg : seg + "\\" + path;
+    const std::string seg = normalizeMftPathComponent(it->second.name);
+    if (seg.empty()) {
+      orphan_chain = true;
+      break;
+    }
+    segments.push_back(seg);
 
     uint64_t parent = it->second.parent_record;
-    if (parent == cur || parent == 5) {
-      // parent == 5 означает корень тома ($Root)
-      path = "\\" + path;
+    if (parent == 5) {
+      reached_root = true;
+      break;
+    }
+    if (parent == 0 || parent == cur) {
+      orphan_chain = true;
       break;
     }
     cur = parent;
+    --max_depth;
+    if (max_depth < 0) {
+      orphan_chain = true;
+      break;
+    }
   }
+
+  if (segments.empty()) return {};
+
+  std::reverse(segments.begin(), segments.end());
+  std::string path;
+  for (const auto& segment : segments) {
+    if (!path.empty()) path += "\\";
+    path += segment;
+  }
+
+  if (reached_root) return "\\" + path;
+  if (orphan_chain) return "\\[orphan]\\" + path;
   return path;
 }
 
@@ -375,6 +597,7 @@ std::vector<RecoveryEvidence> parseMftFallback(
   // Pass 2: structured evidence + binary-scan evidence per record.
   // ------------------------------------------------------------------
   std::size_t parsed_records = 0;
+  std::size_t damaged_records = 0;
 
   for (std::size_t offset = 0;
        offset + record_size <= data.size() && parsed_records < max_records &&
@@ -387,13 +610,22 @@ std::vector<RecoveryEvidence> parseMftFallback(
     ++parsed_records;
 
     const uint64_t rec_num = offset / record_size;
-    const uint16_t flags   = readLeUInt16(data, offset + 0x16);
-    const bool in_use      = (flags & 0x01) != 0;
-    const bool is_dir      = (flags & 0x02) != 0;
-
     std::vector<uint8_t> record(
         data.begin() + static_cast<std::ptrdiff_t>(offset),
         data.begin() + static_cast<std::ptrdiff_t>(offset + record_size));
+    if (!hasSaneMftRecordHeader(record, record_size)) {
+      damaged_records++;
+      continue;
+    }
+    // Apply USA fixup — skip record if torn write detected.
+    if (!applyUsaFixup(record, record_size)) {
+      damaged_records++;
+      continue;
+    }
+
+    const uint16_t flags   = readLeUInt16(record, 0x16);
+    const bool in_use      = (flags & 0x01) != 0;
+    const bool is_dir      = (flags & 0x02) != 0;
 
     // ---- Structured: $FILE_NAME ----------------------------------------
     const auto fns = parseMftFileNames(record);
@@ -406,6 +638,7 @@ std::vector<RecoveryEvidence> parseMftFallback(
       if (hasExecutableName(best->name)) {
         const std::string full_path = resolveMftPath(rec_num, dir_tree);
         const std::string display   = full_path.empty() ? best->name : full_path;
+        const bool orphan_chain = starts_with(full_path, "\\[orphan]\\");
 
         // Collect all aliases (short + long names).
         std::ostringstream names_ss;
@@ -417,6 +650,10 @@ std::vector<RecoveryEvidence> parseMftFallback(
 
         // ---- $OBJECT_ID -----------------------------------------------
         const std::string obj_id = parseMftObjectId(record);
+        const std::string si_creation =
+            formatReasonableFiletime(parseMftSiCreation(record));
+        const std::string fn_creation =
+            formatReasonableFiletime(best->creation);
 
         // ---- $ATTRIBUTE_LIST detection --------------------------------
         const bool has_al  = hasMftAttributeList(record);
@@ -427,29 +664,41 @@ std::vector<RecoveryEvidence> parseMftFallback(
                 << " rec_num=" << rec_num
                 << " flags=" << (in_use ? "in_use" : "deleted")
                 << " names=[" << names_ss.str() << "]";
+        details << " path_chain=" << (orphan_chain ? "orphan" : "resolved");
         if (!obj_id.empty())  details << " object_id=" << obj_id;
+        if (!si_creation.empty()) details << " si_creation=" << si_creation;
+        if (!fn_creation.empty()) details << " fn_creation=" << fn_creation;
         if (has_al)           details << " attr_list=true";
         if (has_rd)           details << " resident_data=true";
 
         RecoveryEvidence ev;
         ev.executable_path = display;
         ev.source          = "NTFSMetadata";
-        ev.recovered_from  = "FSMetadata";
+        ev.recovered_from  = "NTFSMetadata.structured";
         ev.timestamp       = file_ts;
         ev.details         = "artifact=$MFT(structured), " + details.str();
 
-        const std::string key = ev.executable_path + "|" + ev.recovered_from;
+        const std::string key =
+            ev.executable_path + "|" + ev.recovered_from + "|rec=" +
+            std::to_string(rec_num);
         if (dedup.insert(key).second)
           results.push_back(std::move(ev));
       }
     }
 
     // ---- Binary scan (keeps finding paths embedded as plain strings) ---
-    if (results.size() < max_candidates) {
+    if (!is_dir && results.size() < max_candidates) {
       auto bin_ev = scanRecoveryBufferBinary(
-          record, "NTFSMetadata", "$MFT(binary)",
+          record, "NTFSMetadata", "NTFSMetadata.mft_binary",
           mft_path.filename().string(), file_ts,
           max_candidates - results.size(), offset, "mft_record", data.size());
+      bin_ev.erase(
+          std::remove_if(bin_ev.begin(), bin_ev.end(),
+                         [](const RecoveryEvidence& item) {
+                           return !isLikelyNtfsBinaryCandidate(
+                               item.executable_path);
+                         }),
+          bin_ev.end());
 
       for (auto& ev : bin_ev) {
         std::ostringstream details;
@@ -457,10 +706,17 @@ std::vector<RecoveryEvidence> parseMftFallback(
         details << "record_offset=" << formatOffsetHex(offset)
                 << ", flags=" << (in_use ? "in_use" : "deleted");
         if (is_dir)         details << "|directory";
+        details << ", parser=two_pass_mft";
         ev.details = details.str();
       }
       appendUniqueEvidence(results, bin_ev, dedup);
     }
+  }
+
+  if (damaged_records > 0) {
+    GlobalLogger::get()->warn(
+        "NTFSMetadata(two-pass): поврежденные MFT-записи пропущены: {}",
+        damaged_records);
   }
 
   return results;
@@ -546,16 +802,6 @@ std::vector<RecoveryEvidence> NTFSMetadataAnalyzer::collect(
       auto mft_evidence = parseMftFallback(
           *resolved_mft, max_bytes, max_candidates_per_source_,
           mft_record_size_, mft_max_records_);
-      for (auto& evidence : mft_evidence) {
-        if (evidence.recovered_from != "FSMetadata") {
-          const std::string previous = evidence.recovered_from;
-          evidence.recovered_from = "FSMetadata";
-          if (!previous.empty()) {
-            evidence.details = "artifact=" + previous +
-                               (evidence.details.empty() ? "" : ", " + evidence.details);
-          }
-        }
-      }
       binary_count += mft_evidence.size();
       appendUniqueEvidence(results, mft_evidence, dedup);
     } else {
@@ -563,26 +809,12 @@ std::vector<RecoveryEvidence> NTFSMetadataAnalyzer::collect(
     }
   }
 
-  const fs::path bitmap_candidate = fs::path(disk_root) / bitmap_path_;
-  if (const auto resolved_bitmap = findPathCaseInsensitive(bitmap_candidate);
-      resolved_bitmap.has_value()) {
-    auto bitmap_evidence = scanRecoveryFileBinary(
-        *resolved_bitmap, "NTFSMetadata", "$Bitmap(binary)", max_bytes,
-        max_candidates_per_source_);
-    for (auto& evidence : bitmap_evidence) {
-      const std::string previous = evidence.recovered_from;
-      evidence.recovered_from = "FSMetadata";
-      if (!previous.empty()) {
-        evidence.details = "artifact=" + previous +
-                           (evidence.details.empty() ? "" : ", " + evidence.details);
-      }
-    }
-    binary_count += bitmap_evidence.size();
-    appendUniqueEvidence(results, bitmap_evidence, dedup);
-  }
+  // NOTE: $Bitmap is a cluster allocation bitmap (bit-array), not a
+  // text/binary artifact — scanning it for executable paths produces only
+  // noise.  The previous binary scan of $Bitmap has been removed (P2 fix).
 
   logger->info(
-      "Recovery(NTFSMetadata $MFT/$Bitmap): native={} binary={} total={}",
+      "Recovery(NTFSMetadata $MFT): native={} binary={} total={}",
       native_count, binary_count, results.size());
   return results;
 }

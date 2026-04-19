@@ -11,6 +11,8 @@
 #include <filesystem>
 #include <optional>
 #include <sstream>
+#include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
@@ -43,8 +45,15 @@ constexpr uint64_t kMaxReasonableFiletime = 210000000000000000ULL;
 struct NativeVssParseResult {
   bool attempted = false;
   bool success = false;
+  bool partial_corruption_detected = false;
+  std::size_t stores_processed = 0;
+  std::size_t stores_failed = 0;
   std::vector<RecoveryEvidence> evidence;
 };
+
+void appendVssLimits(std::vector<RecoveryEvidence>& evidence,
+                     std::size_t max_bytes,
+                     std::size_t max_candidates);
 
 /// @brief Ищет snapshot-root директории в `System Volume Information`.
 /// @param svi_root Корень `System Volume Information`.
@@ -70,6 +79,7 @@ std::vector<fs::path> findSnapshotRoots(const fs::path& svi_root) {
     if (!dedup.insert(root).second) continue;
     roots.push_back(entry.path());
   }
+  std::sort(roots.begin(), roots.end());
   return roots;
 }
 
@@ -94,23 +104,32 @@ std::vector<RecoveryEvidence> collectSnapshotReplayEvidence(
   for (const fs::path& snapshot_root : snapshot_roots) {
     if (processed_files >= max_files) break;
 
-    const std::vector<fs::path> key_paths = {
-        snapshot_root / "Windows" / "appcompat" / "Programs" / "Amcache.hve",
-        snapshot_root / "Windows" / "System32" / "winevt" / "Logs" /
-            "Security.evtx",
-        snapshot_root / "Windows" / "System32" / "Tasks"};
+    const std::vector<std::pair<fs::path, std::string_view>> replay_targets = {
+        {snapshot_root / "Windows" / "appcompat" / "Programs" / "Amcache.hve",
+         "amcache_hive"},
+        {snapshot_root / "Windows" / "System32" / "winevt" / "Logs" /
+             "Security.evtx",
+         "security_evtx"},
+        {snapshot_root / "Windows" / "System32" / "Tasks", "scheduled_tasks"},
+        {snapshot_root / "Windows" / "System32" / "config" / "SYSTEM",
+         "system_hive"},
+        {snapshot_root / "Users" / "Default" / "NTUSER.DAT",
+         "ntuser_hive"},
+    };
 
-    for (const fs::path& path : key_paths) {
+    for (const auto& [path, replay_target] : replay_targets) {
       if (processed_files >= max_files) break;
       const auto resolved = findPathCaseInsensitive(path);
       if (!resolved.has_value()) continue;
       if (!fs::is_regular_file(*resolved)) continue;
 
       auto evidence = scanRecoveryFileBinary(
-          *resolved, "VSS", "VSS(snapshot_replay)", max_bytes,
+          *resolved, "VSS", "VSS.snapshot_replay", max_bytes,
           max_candidates);
+      appendVssLimits(evidence, max_bytes, max_candidates);
       for (auto& item : evidence) {
         item.details += ", snapshot_root=" + snapshot_root.string();
+        item.details += ", replay_target=" + std::string(replay_target);
       }
       appendUniqueEvidence(results, evidence, dedup);
       processed_files++;
@@ -125,18 +144,26 @@ std::vector<RecoveryEvidence> collectSnapshotReplayEvidence(
       continue;
     }
 
+    std::vector<fs::path> prefetch_files;
     for (const auto& entry :
          fs::directory_iterator(*resolved_prefetch,
                                 fs::directory_options::skip_permission_denied, ec)) {
       if (processed_files >= max_files || ec) break;
       if (!entry.is_regular_file()) continue;
       if (toLowerAscii(entry.path().extension().string()) != ".pf") continue;
+      prefetch_files.push_back(entry.path());
+    }
+    std::sort(prefetch_files.begin(), prefetch_files.end());
 
-      auto evidence = scanRecoveryFileBinary(entry.path(), "VSS",
-                                             "VSS(snapshot_prefetch)",
+    for (const auto& prefetch_file : prefetch_files) {
+      if (processed_files >= max_files) break;
+      auto evidence = scanRecoveryFileBinary(prefetch_file, "VSS",
+                                             "VSS.snapshot_prefetch",
                                              max_bytes, max_candidates);
+      appendVssLimits(evidence, max_bytes, max_candidates);
       for (auto& item : evidence) {
         item.details += ", snapshot_root=" + snapshot_root.string();
+        item.details += ", replay_target=prefetch";
       }
       appendUniqueEvidence(results, evidence, dedup);
       processed_files++;
@@ -157,6 +184,81 @@ std::string formatReasonableFiletime(const uint64_t filetime) {
   const std::string timestamp = filetimeToString(filetime);
   if (timestamp == "N/A") return {};
   return timestamp;
+}
+
+/// @brief Возвращает приоритет recovered_from для разрешения дублей.
+/// @param recovered_from Канонический marker источника восстановления.
+/// @return Приоритет: больше — лучше.
+int vssRecoveredFromPriority(std::string recovered_from) {
+  recovered_from = toLowerAscii(std::move(recovered_from));
+  if (recovered_from.find("vss.native") != std::string::npos) return 5;
+  if (recovered_from.find("snapshot_replay") != std::string::npos) return 4;
+  if (recovered_from.find("snapshot_prefetch") != std::string::npos) return 3;
+  if (recovered_from.find("pagefile") != std::string::npos) return 2;
+  if (recovered_from.find("memory_dump") != std::string::npos) return 2;
+  if (recovered_from.find("unallocated") != std::string::npos) return 2;
+  if (recovered_from.find("vss.binary") != std::string::npos) return 1;
+  return 0;
+}
+
+/// @brief Удаляет дубликаты кандидатов между native/snapshot/binary ветками.
+/// @param evidence Набор VSS-кандидатов.
+void deduplicateVssEvidence(std::vector<RecoveryEvidence>& evidence) {
+  if (evidence.size() < 2) return;
+
+  std::unordered_map<std::string, std::size_t> best_index_by_key;
+  std::vector<RecoveryEvidence> deduped;
+  deduped.reserve(evidence.size());
+
+  for (auto& item : evidence) {
+    std::string path = item.executable_path;
+    trim(path);
+    if (path.empty()) continue;
+
+    // Include recovered_from in the dedup key so that evidence from different
+    // VSS snapshots (which carry different recovered_from markers) is preserved.
+    // Without this, timeline information from distinct snapshots is lost.
+    const std::string key = toLowerAscii(path) + "|" + toLowerAscii(item.source) +
+                            "|" + toLowerAscii(item.recovered_from);
+    const int candidate_priority =
+        vssRecoveredFromPriority(item.recovered_from);
+
+    const auto it = best_index_by_key.find(key);
+    if (it == best_index_by_key.end()) {
+      best_index_by_key.emplace(key, deduped.size());
+      deduped.push_back(std::move(item));
+      continue;
+    }
+
+    auto& current = deduped[it->second];
+    const int current_priority = vssRecoveredFromPriority(current.recovered_from);
+    const bool replace = candidate_priority > current_priority ||
+                         (candidate_priority == current_priority &&
+                          !item.timestamp.empty() && current.timestamp.empty());
+    if (replace) {
+      current = std::move(item);
+    }
+  }
+
+  evidence = std::move(deduped);
+}
+
+/// @brief Добавляет scan limits к деталям evidence.
+/// @param evidence Набор evidence для аннотации.
+/// @param max_bytes Лимит чтения в байтах.
+/// @param max_candidates Лимит кандидатов.
+void appendVssLimits(std::vector<RecoveryEvidence>& evidence,
+                     const std::size_t max_bytes,
+                     const std::size_t max_candidates) {
+  for (auto& item : evidence) {
+    std::ostringstream details;
+    if (!item.details.empty()) {
+      details << item.details << ", ";
+    }
+    details << "limit_bytes=" << max_bytes
+            << ", limit_candidates=" << max_candidates;
+    item.details = details.str();
+  }
 }
 
 #if defined(PROGRAM_TRACES_HAVE_LIBVSHADOW) && PROGRAM_TRACES_HAVE_LIBVSHADOW
@@ -290,6 +392,8 @@ NativeVssParseResult parseVssVolumeNative(const fs::path& volume_path,
       store_count <= 0) {
     logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "VSS(native): stores недоступны для \"{}\": {}",
                   volume_path.string(), toLibvshadowErrorMessage(error));
+    result.partial_corruption_detected = true;
+    result.stores_failed++;
     libvshadow_error_free(&error);
     free_volume();
     return result;
@@ -307,10 +411,13 @@ NativeVssParseResult parseVssVolumeNative(const fs::path& volume_path,
         store == nullptr) {
       logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "VSS(native): не удалось получить store #{}: {}",
                     store_index, toLibvshadowErrorMessage(error));
+      result.partial_corruption_detected = true;
+      result.stores_failed++;
       libvshadow_error_free(&error);
       continue;
     }
     libvshadow_error_free(&error);
+    result.stores_processed++;
 
     auto free_store = [&]() {
       if (store == nullptr) return;
@@ -328,6 +435,11 @@ NativeVssParseResult parseVssVolumeNative(const fs::path& volume_path,
     if (seek_result < 0) {
       logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "VSS(native): seek store #{} завершился с ошибкой: {}",
                     store_index, toLibvshadowErrorMessage(seek_error));
+      result.partial_corruption_detected = true;
+      result.stores_failed++;
+      libvshadow_error_free(&seek_error);
+      free_store();
+      continue;
     }
     libvshadow_error_free(&seek_error);
 
@@ -345,12 +457,14 @@ NativeVssParseResult parseVssVolumeNative(const fs::path& volume_path,
       RecoveryEvidence evidence;
       evidence.executable_path = candidate;
       evidence.source = "VSS";
-      evidence.recovered_from = "VSS(native)";
+      evidence.recovered_from = "VSS.native";
       evidence.timestamp = store_timestamp;
 
       std::ostringstream details;
       details << "store=" << store_index
-              << " source=" << volume_path.filename().string();
+              << " source=" << volume_path.filename().string()
+              << " limit_bytes=" << max_bytes
+              << " limit_candidates=" << max_candidates;
       evidence.details = details.str();
 
       result.evidence.push_back(std::move(evidence));
@@ -362,6 +476,9 @@ NativeVssParseResult parseVssVolumeNative(const fs::path& volume_path,
   }
 
   free_volume();
+  if (result.stores_processed == 0) {
+    result.partial_corruption_detected = true;
+  }
   return result;
 }
 #endif
@@ -421,9 +538,18 @@ std::vector<RecoveryEvidence> VSSAnalyzer::collect(
   std::unordered_set<std::string> dedup;
   std::size_t native_count = 0;
   std::size_t binary_count = 0;
+  logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION},
+              spdlog::level::debug,
+              "VSS limits: max_bytes={} max_candidates={} native_max_stores={} "
+              "snapshot_replay_max_files={}",
+              max_bytes, max_candidates_per_source_, vss_native_max_stores_,
+              vss_snapshot_replay_max_files_);
 
   bool native_attempted = false;
   bool native_success = false;
+  bool native_degraded = false;
+  std::size_t native_stores_processed = 0;
+  std::size_t native_stores_failed = 0;
 
 #if defined(PROGRAM_TRACES_HAVE_LIBVSHADOW) && PROGRAM_TRACES_HAVE_LIBVSHADOW
   std::vector<fs::path> volume_candidates;
@@ -462,6 +588,10 @@ std::vector<RecoveryEvidence> VSSAnalyzer::collect(
         *resolved, max_bytes, max_candidates_per_source_, vss_native_max_stores_);
     native_attempted = native_attempted || native_result.attempted;
     native_success = native_success || native_result.success;
+    native_degraded =
+        native_degraded || native_result.partial_corruption_detected;
+    native_stores_processed += native_result.stores_processed;
+    native_stores_failed += native_result.stores_failed;
     native_count += native_result.evidence.size();
     appendUniqueEvidence(results, native_result.evidence, dedup);
   }
@@ -470,17 +600,25 @@ std::vector<RecoveryEvidence> VSSAnalyzer::collect(
 #endif
 
   const bool run_binary_fallback =
-      !native_attempted || !native_success || native_count == 0;
+      !native_attempted || !native_success || native_count == 0 ||
+      native_degraded;
+
+  if (native_degraded) {
+    logger->warn(
+        "VSS(native): detected partial corruption (stores_processed={} "
+        "stores_failed={}), enabling binary fallback",
+        native_stores_processed, native_stores_failed);
+  }
 
   if (run_binary_fallback) {
     const fs::path svi_dir = fs::path(disk_root) / "System Volume Information";
     if (const auto resolved_svi = findPathCaseInsensitive(svi_dir);
         resolved_svi.has_value()) {
-      std::error_code ec;
+      std::error_code svi_ec;
       for (const auto& entry :
            fs::recursive_directory_iterator(
-               *resolved_svi, fs::directory_options::skip_permission_denied, ec)) {
-        if (ec) break;
+               *resolved_svi, fs::directory_options::skip_permission_denied, svi_ec)) {
+        if (svi_ec) break;
         if (!entry.is_regular_file()) continue;
         const std::string lowered_name =
             toLowerAscii(entry.path().filename().string());
@@ -489,9 +627,10 @@ std::vector<RecoveryEvidence> VSSAnalyzer::collect(
           continue;
         }
 
-        auto evidence = scanRecoveryFileBinary(entry.path(), "VSS", "VSS(binary)",
+        auto evidence = scanRecoveryFileBinary(entry.path(), "VSS", "VSS.binary",
                                                max_bytes,
                                                max_candidates_per_source_);
+        appendVssLimits(evidence, max_bytes, max_candidates_per_source_);
         binary_count += evidence.size();
         appendUniqueEvidence(results, evidence, dedup);
       }
@@ -506,9 +645,10 @@ std::vector<RecoveryEvidence> VSSAnalyzer::collect(
     const auto resolved = findPathCaseInsensitive(candidate);
     if (!resolved.has_value()) continue;
 
-    auto evidence =
-        scanRecoveryFileBinary(*resolved, "Pagefile", "Pagefile", max_bytes,
-                               max_candidates_per_source_);
+    auto evidence = scanRecoveryFileBinary(*resolved, "VSS",
+                                           "VSS.pagefile_binary", max_bytes,
+                                           max_candidates_per_source_);
+    appendVssLimits(evidence, max_bytes, max_candidates_per_source_);
     binary_count += evidence.size();
     appendUniqueEvidence(results, evidence, dedup);
   }
@@ -520,21 +660,24 @@ std::vector<RecoveryEvidence> VSSAnalyzer::collect(
     const auto resolved = findPathCaseInsensitive(candidate);
     if (!resolved.has_value()) continue;
 
-    auto evidence =
-        scanRecoveryFileBinary(*resolved, "Memory", "Memory", max_bytes,
-                               max_candidates_per_source_);
+    auto evidence = scanRecoveryFileBinary(*resolved, "VSS",
+                                           "VSS.memory_dump_binary",
+                                           max_bytes,
+                                           max_candidates_per_source_);
+    appendVssLimits(evidence, max_bytes, max_candidates_per_source_);
     binary_count += evidence.size();
     appendUniqueEvidence(results, evidence, dedup);
   }
 
   if (!unallocated_image_path_.empty()) {
     const fs::path image_path(unallocated_image_path_);
-    std::error_code ec;
-    if (fs::exists(image_path, ec) && !ec && fs::is_regular_file(image_path, ec) &&
-        !ec) {
+    std::error_code img_ec;
+    if (fs::exists(image_path, img_ec) && !img_ec &&
+        fs::is_regular_file(image_path, img_ec) && !img_ec) {
       auto evidence =
-          scanRecoveryFileBinary(image_path, "Unallocated", "Unallocated",
+          scanRecoveryFileBinary(image_path, "VSS", "VSS.unallocated_binary",
                                  max_bytes, max_candidates_per_source_);
+      appendVssLimits(evidence, max_bytes, max_candidates_per_source_);
       binary_count += evidence.size();
       appendUniqueEvidence(results, evidence, dedup);
     }
@@ -545,6 +688,8 @@ std::vector<RecoveryEvidence> VSSAnalyzer::collect(
       vss_snapshot_replay_max_files_);
   binary_count += snapshot_evidence.size();
   appendUniqueEvidence(results, snapshot_evidence, dedup);
+
+  deduplicateVssEvidence(results);
 
   logger->info("Recovery(VSS/Pagefile/Memory/Unallocated): native={} binary={} "
                "total={}",

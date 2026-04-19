@@ -4,11 +4,13 @@
 #include "tsk_deleted_file_analyzer.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -32,6 +34,8 @@ using RecoveryUtils::toByteLimit;
 // ---------------------------------------------------------------------------
 // Forensic file extension filter
 // ---------------------------------------------------------------------------
+
+#if defined(PROGRAM_TRACES_HAVE_LIBTSK) && PROGRAM_TRACES_HAVE_LIBTSK
 
 /// @brief Returns true if the filename extension indicates a forensic artifact.
 bool isForensicExtension(const std::string_view name) {
@@ -110,8 +114,6 @@ bool isForensicFileName(const std::string_view name) {
 bool isForensicArtifact(const std::string_view name) {
   return isForensicExtension(name) || isForensicFileName(name);
 }
-
-#if defined(PROGRAM_TRACES_HAVE_LIBTSK) && PROGRAM_TRACES_HAVE_LIBTSK
 
 // ---------------------------------------------------------------------------
 // RAII wrappers for TSK handles
@@ -194,13 +196,44 @@ std::vector<uint8_t> tskReadFileContent(TSK_FS_FILE* file, std::size_t max_bytes
   const TSK_OFF_T file_size = file->meta->size;
   if (file_size <= 0) return {};
 
-  const std::size_t read_size = std::min<std::size_t>(
+  const std::size_t bounded_size = std::min<std::size_t>(
       static_cast<std::size_t>(file_size), max_bytes);
+  if (bounded_size == 0) return {};
 
-  std::vector<uint8_t> buffer(read_size);
+  // For large deleted files read head+tail windows to keep important
+  // candidates while respecting `max_bytes`.
+  if (static_cast<std::size_t>(file_size) > max_bytes && max_bytes >= 4096) {
+    const std::size_t head_size = max_bytes / 2;
+    const std::size_t tail_size = max_bytes - head_size;
+    std::vector<uint8_t> buffer;
+    buffer.resize(max_bytes);
+
+    const ssize_t head_actual = tsk_fs_file_read(
+        file, 0, reinterpret_cast<char*>(buffer.data()), head_size,
+        TSK_FS_FILE_READ_FLAG_NONE);
+    if (head_actual <= 0) return {};
+
+    const TSK_OFF_T tail_offset =
+        file_size > static_cast<TSK_OFF_T>(tail_size)
+            ? file_size - static_cast<TSK_OFF_T>(tail_size)
+            : 0;
+    const ssize_t tail_actual = tsk_fs_file_read(
+        file, tail_offset,
+        reinterpret_cast<char*>(buffer.data() + static_cast<std::ptrdiff_t>(head_size)),
+        tail_size, TSK_FS_FILE_READ_FLAG_NONE);
+
+    std::size_t final_size = static_cast<std::size_t>(head_actual);
+    if (tail_actual > 0) {
+      final_size += static_cast<std::size_t>(tail_actual);
+    }
+    buffer.resize(final_size);
+    return buffer;
+  }
+
+  std::vector<uint8_t> buffer(bounded_size);
   const ssize_t actual = tsk_fs_file_read(
-      file, 0, reinterpret_cast<char*>(buffer.data()),
-      read_size, TSK_FS_FILE_READ_FLAG_NONE);
+      file, 0, reinterpret_cast<char*>(buffer.data()), bounded_size,
+      TSK_FS_FILE_READ_FLAG_NONE);
 
   if (actual <= 0) return {};
   buffer.resize(static_cast<std::size_t>(actual));
@@ -208,8 +241,39 @@ std::vector<uint8_t> tskReadFileContent(TSK_FS_FILE* file, std::size_t max_bytes
 }
 
 /// @brief TSK directory walk callback. Called for each file/directory entry.
+/// @brief Returns true if the directory path is forensic-relevant (system,
+/// prefetch, user profile, etc.).  Used to prioritize results and reduce
+/// noise from deleted executables in arbitrary locations.
+bool isForensicRelevantDir(const std::string_view dir_path) {
+  std::string lower;
+  lower.reserve(dir_path.size());
+  for (char c : dir_path)
+    lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  // Normalize path separators.
+  std::ranges::replace(lower, '/', '\\');
+
+  for (const auto* prefix : {
+    "\\windows\\system32\\",
+    "\\windows\\syswow64\\",
+    "\\windows\\prefetch\\",
+    "\\windows\\temp\\",
+    "\\windows\\tasks\\",
+    "\\windows\\appcompat\\",
+    "\\windows\\inf\\",
+    "\\users\\",
+    "\\programdata\\",
+    "\\program files\\",
+    "\\program files (x86)\\",
+    "\\system volume information\\",
+    "\\$recycle.bin\\"
+  }) {
+    if (lower.find(prefix) != std::string::npos) return true;
+  }
+  return false;
+}
+
 TSK_WALK_RET_ENUM dirWalkCallback(TSK_FS_FILE* file,
-                                   const char* /*path*/,
+                                   const char* path,
                                    void* context_ptr) {
   auto* ctx = static_cast<DirWalkContext*>(context_ptr);
   if (ctx->results->size() >= ctx->max_candidates) return TSK_WALK_STOP;
@@ -231,6 +295,15 @@ TSK_WALK_RET_ENUM dirWalkCallback(TSK_FS_FILE* file,
   const bool is_deleted = (file->name->flags & TSK_FS_NAME_FLAG_UNALLOC) != 0;
   if (!isForensicArtifact(fname)) return TSK_WALK_CONT;
 
+  // For executable files (.exe, .dll, .sys etc.), require the directory
+  // to be forensic-relevant — otherwise we pick up too many deleted
+  // executables from arbitrary locations (very high noise).
+  const std::string_view dir_sv(path ? path : "");
+  if (isForensicExtension(fname) && !isForensicFileName(fname) &&
+      !dir_sv.empty() && !isForensicRelevantDir(dir_sv)) {
+    return TSK_WALK_CONT;
+  }
+
   const std::string full_path = tskBuildPath(ctx->fs, file);
   const std::string display = full_path.empty() ? std::string(fname) : full_path;
 
@@ -242,7 +315,7 @@ TSK_WALK_RET_ENUM dirWalkCallback(TSK_FS_FILE* file,
   RecoveryEvidence ev;
   ev.executable_path = display;
   ev.source          = "TSK";
-  ev.recovered_from  = is_deleted ? "TSK(deleted)" : "TSK(allocated)";
+  ev.recovered_from  = is_deleted ? "TSK.deleted" : "TSK.allocated";
   ev.details         = details.str();
 
   // Try to read the file content and extract executable paths from it.
@@ -254,6 +327,9 @@ TSK_WALK_RET_ENUM dirWalkCallback(TSK_FS_FILE* file,
       if (!candidates.empty()) {
         std::ostringstream extra;
         extra << " recovered_content=" << content.size() << "B";
+        if (static_cast<std::size_t>(file->meta->size) > ctx->max_file_read) {
+          extra << " read_limited=1";
+        }
         extra << " exe_candidates=[";
         for (std::size_t i = 0; i < candidates.size() && i < 5; ++i) {
           if (i) extra << "|";
@@ -265,7 +341,9 @@ TSK_WALK_RET_ENUM dirWalkCallback(TSK_FS_FILE* file,
     }
   }
 
-  const std::string key = ev.executable_path + "|" + ev.recovered_from;
+  const std::string key = to_lower(ev.executable_path) + "|" +
+                          std::to_string(file->name->meta_addr) + "|" +
+                          ev.source;
   if (ctx->dedup->insert(key).second)
     ctx->results->push_back(std::move(ev));
 
@@ -309,7 +387,7 @@ TSK_WALK_RET_ENUM blkWalkCallback(const TSK_FS_BLOCK* block,
 
   if (ctx->buffer.size() >= kScanChunkSize) {
     auto chunk_ev = RecoveryUtils::scanRecoveryBufferBinary(
-        ctx->buffer, "TSK", "TSK(unallocated)", "unalloc_blocks",
+        ctx->buffer, "TSK", "TSK.unallocated", "unalloc_blocks",
         "", ctx->max_candidates - ctx->results->size(),
         ctx->buffer_offset, "tsk_unalloc", 0);
 
@@ -442,10 +520,14 @@ std::vector<RecoveryEvidence> TskDeletedFileAnalyzer::collect(
         TSK_FS_DIR_WALK_FLAG_UNALLOC |
         TSK_FS_DIR_WALK_FLAG_RECURSE;
 
-    tsk_fs_dir_walk(
+    const uint8_t dir_walk_status = tsk_fs_dir_walk(
         fs.get(), fs->root_inum,
         static_cast<TSK_FS_DIR_WALK_FLAG_ENUM>(walk_flags),
         dirWalkCallback, &ctx);
+    if (dir_walk_status != 0) {
+      logger->warn("TSK recovery: directory walk completed with errors "
+                   "(status={})", static_cast<int>(dir_walk_status));
+    }
   }
 
   const std::size_t dir_walk_count = results.size();
@@ -459,15 +541,19 @@ std::vector<RecoveryEvidence> TskDeletedFileAnalyzer::collect(
     bctx.max_candidates = max_candidates_;
     bctx.max_bytes      = toByteLimit(max_unalloc_scan_mb_);
 
-    tsk_fs_block_walk(
+    const uint8_t block_walk_status = tsk_fs_block_walk(
         fs.get(), fs->first_block, fs->last_block,
         static_cast<TSK_FS_BLOCK_WALK_FLAG_ENUM>(TSK_FS_BLOCK_WALK_FLAG_UNALLOC),
         blkWalkCallback, &bctx);
+    if (block_walk_status != 0) {
+      logger->warn("TSK recovery: unallocated block walk completed with errors "
+                   "(status={})", static_cast<int>(block_walk_status));
+    }
 
     // Flush remaining buffer.
     if (!bctx.buffer.empty() && results.size() < max_candidates_) {
       auto tail_ev = RecoveryUtils::scanRecoveryBufferBinary(
-          bctx.buffer, "TSK", "TSK(unallocated)", "unalloc_blocks",
+          bctx.buffer, "TSK", "TSK.unallocated", "unalloc_blocks",
           "", max_candidates_ - results.size(),
           bctx.buffer_offset, "tsk_unalloc_tail", 0);
       appendUniqueEvidence(results, tail_ev, dedup);
@@ -475,6 +561,14 @@ std::vector<RecoveryEvidence> TskDeletedFileAnalyzer::collect(
 
     unalloc_count = results.size() - dir_walk_count;
   }
+
+  std::sort(results.begin(), results.end(),
+            [](const RecoveryEvidence& lhs, const RecoveryEvidence& rhs) {
+              return std::tie(lhs.executable_path, lhs.source, lhs.recovered_from,
+                              lhs.timestamp, lhs.details) <
+                     std::tie(rhs.executable_path, rhs.source, rhs.recovered_from,
+                              rhs.timestamp, rhs.details);
+            });
 
   logger->info("Recovery(TSK): deleted_files={} unallocated={} total={}",
                dir_walk_count, unalloc_count, results.size());

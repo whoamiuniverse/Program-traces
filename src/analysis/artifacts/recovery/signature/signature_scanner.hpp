@@ -45,7 +45,7 @@ class SignatureScanner final : public IRecoveryAnalyzer {
   std::string image_path_;                    ///< Optional explicit disk image path.
   std::size_t block_size_           = 65536;  ///< Read block size in bytes (64 KiB).
   std::size_t max_scan_mb_          = 512;    ///< Maximum bytes (MB) per target file.
-  std::size_t max_candidates_       = 5000;   ///< Maximum evidence records per file.
+  std::size_t max_candidates_       = 5000;   ///< Maximum evidence records per scanner run.
 };
 
 }  // namespace WindowsDiskAnalysis

@@ -139,7 +139,10 @@ void mergeRecoveryEvidenceToProcessData(
     trim(executable_path);
     if (executable_path.empty()) continue;
 
-    auto& info = process_data[executable_path];
+    // Use case-insensitive key so that e.g. "SVCHOST.EXE" (recovery) merges
+    // with "svchost.exe" (extraction) instead of creating a duplicate entry.
+    const std::string key = toLowerAscii(executable_path);
+    auto& info = process_data[key];
     if (info.filename.empty()) {
       info.filename = executable_path;
     }

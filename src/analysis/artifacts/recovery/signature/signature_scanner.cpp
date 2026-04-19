@@ -14,6 +14,7 @@
 #include <sstream>
 #include <unordered_set>
 
+#include "analysis/artifacts/data/recovery_contract.hpp"
 #include "analysis/artifacts/recovery/recovery_utils.hpp"
 #include "analysis/artifacts/recovery/signature/signature_database.hpp"
 #include "common/utils.hpp"
@@ -63,24 +64,51 @@ bool validatePe(const std::vector<uint8_t>& window, std::size_t hit_offset) {
       (static_cast<uint32_t>(window[hit_offset + 0x3D]) << 8)  |
       (static_cast<uint32_t>(window[hit_offset + 0x3E]) << 16) |
       (static_cast<uint32_t>(window[hit_offset + 0x3F]) << 24);
-  return pe_offset > 0 && pe_offset < 4096;
+  if (pe_offset == 0 || pe_offset >= 4096) return false;
+  const std::size_t pe_sig_off = hit_offset + static_cast<std::size_t>(pe_offset);
+  if (pe_sig_off + 4 > window.size()) return false;
+  return window[pe_sig_off] == 'P' && window[pe_sig_off + 1] == 'E' &&
+         window[pe_sig_off + 2] == 0x00 && window[pe_sig_off + 3] == 0x00;
 }
 
-/// @brief Validates an EVTX chunk: checks chunk size field == 65536.
-/// Layout: magic(8), first_event_record_number(8), last_event_record_number(8),
-///         log_file_offset(8), last_event_record_offset(8), next_record_offset(4),
-///         last_event_record_identifier(8), header_size(4), last_chunk_number(2),
-///         ... chunk_data_length(4) at offset 0x28.
+/// @brief Validates an EVTX file header by optionally checking first chunk magic.
+bool validateEvtx(const std::vector<uint8_t>& window, std::size_t hit_offset) {
+  if (hit_offset + SignatureDB::kSigEvtx.size() > window.size()) return false;
+  const std::size_t first_chunk_off = hit_offset + 0x1000;
+  if (first_chunk_off + SignatureDB::kSigEvtxChunk.size() > window.size()) {
+    return true;  // Short carved fragment: keep header-only match.
+  }
+  return std::memcmp(window.data() + static_cast<std::ptrdiff_t>(first_chunk_off),
+                     SignatureDB::kSigEvtxChunk.data(),
+                     SignatureDB::kSigEvtxChunk.size()) == 0;
+}
+
+/// @brief Validates an EVTX chunk: checks header_size field at offset 0x30.
+/// Layout (per MS-EVEN6 2.4):
+///   0x00: magic "ElfChnk\0" (8)
+///   0x08: first_event_record_number (8)
+///   0x10: last_event_record_number (8)
+///   0x18: first_event_record_identifier (8)
+///   0x20: last_event_record_identifier (8)
+///   0x28: free_space_offset (4)
+///   0x2C: last_event_record_data_offset (4)
+///   0x30: header_size (4)  — should be 0x80 (128)
 bool validateEvtxChunk(const std::vector<uint8_t>& window, std::size_t hit_offset) {
-  // Minimum size: 0x80 bytes (128)
   if (hit_offset + 0x80 > window.size()) return false;
-  // chunk_data_length at offset 0x28 relative to chunk start should be <= 65536
-  const uint32_t data_len =
+  // header_size at offset 0x30 relative to chunk start should be exactly 128.
+  const uint32_t header_size =
+      static_cast<uint32_t>(window[hit_offset + 0x30]) |
+      (static_cast<uint32_t>(window[hit_offset + 0x31]) << 8)  |
+      (static_cast<uint32_t>(window[hit_offset + 0x32]) << 16) |
+      (static_cast<uint32_t>(window[hit_offset + 0x33]) << 24);
+  if (header_size != 0x80) return false;
+  // Also sanity-check free_space_offset: must be >= 0x80 and <= 65536.
+  const uint32_t free_space =
       static_cast<uint32_t>(window[hit_offset + 0x28]) |
       (static_cast<uint32_t>(window[hit_offset + 0x29]) << 8)  |
       (static_cast<uint32_t>(window[hit_offset + 0x2A]) << 16) |
       (static_cast<uint32_t>(window[hit_offset + 0x2B]) << 24);
-  return data_len <= 65536 && data_len >= 512;
+  return free_space >= 0x80 && free_space <= 65536;
 }
 
 /// @brief Validates an NTFS hive-bin chunk: checks size field is a multiple of 4096.
@@ -100,10 +128,36 @@ bool validateHbin(const std::vector<uint8_t>& window, std::size_t hit_offset) {
 bool validateJobFile(const std::vector<uint8_t>& window, std::size_t hit_offset) {
   // ProductVersion=0x0400(2), FileVersion=0x0001(2), Reserved1=0(2) at offset+8
   if (hit_offset + 10 > window.size()) return false;
-  const uint16_t reserved1 =
+  const uint16_t reserved1 = static_cast<uint16_t>(
       static_cast<uint16_t>(window[hit_offset + 8]) |
-      (static_cast<uint16_t>(window[hit_offset + 9]) << 8);
+      static_cast<uint16_t>(static_cast<uint16_t>(window[hit_offset + 9]) << 8));
   return reserved1 == 0x0000;
+}
+
+/// @brief Validates a legacy EVT (Windows XP) event log record.
+/// EVT header layout:
+///   0x00: RecordLength (4) — the signature bytes {0x30,0x00,0x00,0x00} = 48
+///   0x04: "LfLe" magic (4) — {0x4C,0x66,0x4C,0x65}
+///   0x08: RecordNumber (4)
+///   0x0C: TimeGenerated (4)
+///   0x10: TimeWritten (4)
+///   0x14: EventID (4)
+///   Record footer: last 4 bytes = RecordLength (copy)
+bool validateEvt(const std::vector<uint8_t>& window, std::size_t hit_offset) {
+  // Need at least 48 bytes (the declared RecordLength).
+  if (hit_offset + 48 > window.size()) return false;
+  // Check "LfLe" magic at offset 4 from the record start.
+  if (window[hit_offset + 4] != 0x4C || window[hit_offset + 5] != 0x66 ||
+      window[hit_offset + 6] != 0x4C || window[hit_offset + 7] != 0x65) {
+    return false;
+  }
+  // Footer RecordLength (last 4 bytes of the 48-byte record) must match header.
+  const uint32_t footer_len =
+      static_cast<uint32_t>(window[hit_offset + 44]) |
+      (static_cast<uint32_t>(window[hit_offset + 45]) << 8)  |
+      (static_cast<uint32_t>(window[hit_offset + 46]) << 16) |
+      (static_cast<uint32_t>(window[hit_offset + 47]) << 24);
+  return footer_len == 0x30;
 }
 
 /// @brief Returns true if the candidate passes artifact-specific structural checks.
@@ -114,9 +168,11 @@ bool validateCandidate(const ArtifactSignature& sig,
   if (sig.artifact_type == "Prefetch"sv)  return validatePrefetch(window, hit_offset);
   if (sig.artifact_type == "LNK"sv)       return validateLnk(window, hit_offset);
   if (sig.artifact_type == "PE"sv)        return validatePe(window, hit_offset);
+  if (sig.artifact_type == "EVTX"sv)      return validateEvtx(window, hit_offset);
   if (sig.artifact_type == "EVTXChunk"sv) return validateEvtxChunk(window, hit_offset);
   if (sig.artifact_type == "HiveBin"sv)   return validateHbin(window, hit_offset);
   if (sig.artifact_type == "JobFile"sv)   return validateJobFile(window, hit_offset);
+  if (sig.artifact_type == "EVT"sv)       return validateEvt(window, hit_offset);
   return true;
 }
 
@@ -141,6 +197,15 @@ std::string formatOffset(uint64_t offset) {
   std::ostringstream ss;
   ss << "0x" << std::hex << std::uppercase << offset;
   return ss.str();
+}
+
+/// @brief Returns the maximum byte length among all registered signatures.
+std::size_t maxSignatureLength() {
+  std::size_t max_len = 1;
+  for (const auto& sig : SignatureDB::kSignatures) {
+    max_len = std::max(max_len, sig.byte_count);
+  }
+  return max_len;
 }
 
 // ---------------------------------------------------------------------------
@@ -173,9 +238,12 @@ void scanEntropyBlocks(const std::vector<uint8_t>& window,
                        std::unordered_set<std::string>& dedup,
                        const std::size_t max_candidates,
                        const double entropy_threshold = 7.2) {
+  if (max_candidates == 0) return;
+
   constexpr std::size_t kBlockSize = 4096;
+  std::size_t emitted = 0;
   for (std::size_t blk = 0;
-       blk + kBlockSize <= window.size() && results.size() < max_candidates;
+       blk + kBlockSize <= window.size() && emitted < max_candidates;
        blk += kBlockSize) {
     const double ent = computeShannon(window.data() + blk, kBlockSize);
     if (ent < entropy_threshold) continue;
@@ -184,7 +252,7 @@ void scanEntropyBlocks(const std::vector<uint8_t>& window,
     RecoveryEvidence ev;
     ev.executable_path = "HighEntropyBlock@" + formatOffset(disk_off);
     ev.source          = "SignatureScan";
-    ev.recovered_from  = "Signature";
+    ev.recovered_from  = "SignatureScan.signature";
     std::ostringstream det;
     det << "file=" << file_name
         << " offset=" << formatOffset(disk_off)
@@ -193,7 +261,10 @@ void scanEntropyBlocks(const std::vector<uint8_t>& window,
     ev.details    = det.str();
 
     const std::string key = buildEvidenceDedupKey(ev);
-    if (dedup.insert(key).second) results.push_back(std::move(ev));
+    if (dedup.insert(key).second) {
+      results.push_back(std::move(ev));
+      ++emitted;
+    }
   }
 }
 
@@ -210,6 +281,10 @@ void scanFile(const fs::path& file_path,
               bool enable_entropy,
               std::vector<RecoveryEvidence>& results,
               std::unordered_set<std::string>& dedup) {
+  if (max_candidates == 0 || max_bytes == 0) {
+    return;
+  }
+
   const auto logger = GlobalLogger::get();
   std::ifstream file(file_path, std::ios::binary);
   if (!file.is_open()) {
@@ -220,15 +295,16 @@ void scanFile(const fs::path& file_path,
   }
 
   // Overlap = max signature length - 1, so signatures spanning block boundaries
-  // are always captured.
-  constexpr std::size_t kMaxSigLen = 8;
-  const std::size_t overlap = kMaxSigLen - 1;
+  // are always captured even when the signature set changes.
+  const std::size_t overlap = maxSignatureLength() > 1
+                                  ? maxSignatureLength() - 1
+                                  : 0;
 
   std::vector<uint8_t> buffer(block_size);
   std::vector<uint8_t> tail;
   tail.reserve(overlap);
 
-  std::size_t total_read    = 0;
+  std::size_t total_read     = 0;
   uint64_t block_disk_offset = 0;
   std::size_t local_candidates = 0;
 
@@ -248,6 +324,11 @@ void scanFile(const fs::path& file_path,
     window.insert(window.end(), buffer.begin(),
                   buffer.begin() + static_cast<std::ptrdiff_t>(n));
 
+    const uint64_t window_base_offset =
+        block_disk_offset >= tail.size()
+            ? block_disk_offset - static_cast<uint64_t>(tail.size())
+            : 0;
+
     // Signature scan.
     for (const auto& sig : SignatureDB::kSignatures) {
       if (local_candidates >= max_candidates) break;
@@ -257,15 +338,14 @@ void scanFile(const fs::path& file_path,
         if (local_candidates >= max_candidates) break;
 
         const uint64_t disk_offset =
-            block_disk_offset +
-            (artifact_start >= tail.size() ? artifact_start - tail.size() : 0);
+            window_base_offset + static_cast<uint64_t>(artifact_start);
 
         if (!validateCandidate(sig, window, artifact_start + sig.file_offset)) continue;
 
         RecoveryEvidence ev;
         ev.executable_path = std::string(sig.artifact_type) + "@" + formatOffset(disk_offset);
         ev.source          = source_label;
-        ev.recovered_from  = "Signature";
+        ev.recovered_from  = "SignatureScan.signature";
         ev.details         = "file=" + file_path.filename().string() +
                              " offset=" + formatOffset(disk_offset) +
                              " type=" + std::string(sig.artifact_type) +
@@ -281,11 +361,14 @@ void scanFile(const fs::path& file_path,
 
     // Entropy scan (optional — only when configured).
     if (enable_entropy && local_candidates < max_candidates) {
-      scanEntropyBlocks(window, block_disk_offset, source_label,
+      const std::size_t size_before_entropy = results.size();
+      scanEntropyBlocks(window, window_base_offset, source_label,
                         file_path.filename().string(),
                         results, dedup,
                         max_candidates - local_candidates);
-      local_candidates = results.size();  // re-sync counter after entropy adds
+      const std::size_t entropy_added = results.size() - size_before_entropy;
+      local_candidates =
+          std::min(max_candidates, local_candidates + entropy_added);
     }
 
     // Keep overlap for the next iteration.
@@ -378,37 +461,38 @@ std::vector<RecoveryEvidence> SignatureScanner::collect(
   std::unordered_set<std::string> dedup;
 
   // 1. Explicit disk image
-  if (!image_path_.empty()) {
+  if (!image_path_.empty() && results.size() < max_candidates_) {
     const auto resolved = findPathCaseInsensitive(fs::path(image_path_));
     if (resolved.has_value()) {
       logger->info("SignatureScan: сканирование образа \"{}\"", resolved->string());
-      scanFile(*resolved, "SignatureScan", block_size_, max_bytes, max_candidates_,
-               enable_entropy_, results, dedup);
+      scanFile(*resolved, "SignatureScan", block_size_, max_bytes,
+               max_candidates_ - results.size(), enable_entropy_, results, dedup);
     }
   }
 
   // 2. Pagefile / swapfile
   for (const auto rel : {"pagefile.sys", "swapfile.sys"}) {
+    if (results.size() >= max_candidates_) break;
     const auto resolved = findPathCaseInsensitive(fs::path(disk_root) / rel);
     if (!resolved.has_value()) continue;
     logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION},
                 spdlog::level::debug,
                 "SignatureScan: сканирование pagefile \"{}\"", resolved->string());
-    scanFile(*resolved, "SignatureScan", block_size_, max_bytes, max_candidates_,
-             enable_entropy_, results, dedup);
+    scanFile(*resolved, "SignatureScan", block_size_, max_bytes,
+             max_candidates_ - results.size(), enable_entropy_, results, dedup);
   }
 
   // 3. Hibernation file
-  const auto resolved =
-      findPathCaseInsensitive(fs::path(disk_root) / "hiberfil.sys");
-  if (resolved.has_value()) {
+  const auto resolved = findPathCaseInsensitive(fs::path(disk_root) / "hiberfil.sys");
+  if (resolved.has_value() && results.size() < max_candidates_) {
     logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION},
                 spdlog::level::debug,
                 "SignatureScan: сканирование hiberfil \"{}\"", resolved->string());
-    scanFile(*resolved, "SignatureScan", block_size_, max_bytes, max_candidates_,
-             enable_entropy_, results, dedup);
+    scanFile(*resolved, "SignatureScan", block_size_, max_bytes,
+             max_candidates_ - results.size(), enable_entropy_, results, dedup);
   }
 
+  RecoveryContract::canonicalizeRecoveryEvidence(results);
   logger->info("Recovery(SignatureScan): total={}", results.size());
   return results;
 }

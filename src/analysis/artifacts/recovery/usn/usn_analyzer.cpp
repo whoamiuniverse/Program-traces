@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <optional>
 #include <sstream>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -54,7 +55,9 @@ struct NativeUsnCandidate {
 struct NativeUsnParseResult {
   bool attempted = false;
   bool success = false;
+  bool partial_corruption_detected = false;
   std::size_t parsed_records = 0;
+  std::size_t malformed_records = 0;
   std::vector<RecoveryEvidence> evidence;
 };
 
@@ -118,6 +121,70 @@ std::string normalizeCandidatePath(std::string value) {
   if (value.size() > 520) return {};
   if (!hasExecutableSuffix(value)) return {};
   return value;
+}
+
+/// @brief Нормализует компонент имени для reconstruction по FRN-chain.
+/// @param value Исходный компонент из USN записи.
+/// @return Безопасный компонент или пустая строка.
+std::string normalizeUsnPathComponent(std::string value) {
+  value.erase(std::remove(value.begin(), value.end(), '\0'), value.end());
+  trim(value);
+  if (value.empty()) return {};
+
+  std::ranges::replace(value, '/', '\\');
+  if (value.find('\\') != std::string::npos) {
+    value = getLastPathComponent(value, '\\');
+  }
+  trim(value);
+
+  if (value.empty() || value == "." || value == "..") {
+    return {};
+  }
+  if (value.size() > 255) {
+    return {};
+  }
+  return value;
+}
+
+/// @brief Фильтрует шумные string-carving кандидаты для USN binary fallback.
+/// @param value Кандидат пути.
+/// @return true, если кандидат выглядит как валидный путь исполняемого файла.
+bool isLikelyBinaryPathCandidate(std::string value) {
+  value.erase(std::remove(value.begin(), value.end(), '\0'), value.end());
+  trim(value);
+  if (value.empty()) return false;
+
+  std::ranges::replace(value, '/', '\\');
+  const std::string lowered = toLowerAscii(value);
+  if (!hasExecutableSuffix(lowered)) return false;
+  if (lowered.size() < 8 || lowered.size() > 520) return false;
+  if (lowered.find("http://") != std::string::npos ||
+      lowered.find("https://") != std::string::npos) {
+    return false;
+  }
+
+  const bool has_drive_letter =
+      lowered.size() >= 3 &&
+      std::isalpha(static_cast<unsigned char>(lowered[0])) != 0 &&
+      lowered[1] == ':' && lowered[2] == '\\';
+  const bool has_unc_prefix = lowered.rfind("\\\\", 0) == 0;
+  const bool has_directory_separator = lowered.find('\\') != std::string::npos;
+  return has_drive_letter || has_unc_prefix || has_directory_separator;
+}
+
+/// @brief Добавляет origin/mode к details для USN evidence.
+/// @param evidence Нормализуемая запись evidence.
+/// @param origin   Режим восстановления (native/binary).
+/// @param channel  Канал (usn_journal/logfile).
+void appendUsnOriginDetails(RecoveryEvidence& evidence,
+                            std::string_view origin,
+                            std::string_view channel) {
+  std::ostringstream details;
+  if (!evidence.details.empty()) {
+    details << evidence.details << ", ";
+  }
+  details << "origin=" << origin << ", channel=" << channel;
+  evidence.details = details.str();
 }
 
 /// @brief Форматирует валидный FILETIME в UTC-строку.
@@ -318,18 +385,23 @@ NativeUsnParseResult parseUsnFileNative(const fs::path& file_path,
   nodes.reserve(max_records / 2);
 
   std::size_t parsed_records = 0;
+  std::size_t malformed_records = 0;
   for (std::size_t offset = 0;
        offset + 8 <= data.size() && parsed_records < max_records;) {
     const uint32_t declared_size = readLeUInt32(data, offset);
     if (declared_size < 48 || declared_size > kMaxUsnRecordSize ||
         declared_size % 8 != 0 || offset + declared_size > data.size()) {
-      ++offset;
+      malformed_records++;
+      // USN records are always 8-byte aligned — skip forward by 8 instead of
+      // scanning byte-by-byte, which is O(n) on large corrupted regions.
+      offset = (offset + 8) & ~std::size_t{7};
       continue;
     }
 
     const uint16_t major_version = readLeUInt16(data, offset + 4);
     if (major_version < 2 || major_version > 5) {
-      ++offset;
+      malformed_records++;
+      offset = (offset + 8) & ~std::size_t{7};
       continue;
     }
 
@@ -337,7 +409,8 @@ NativeUsnParseResult parseUsnFileNative(const fs::path& file_path,
     if (libfusn_record_copy_from_byte_stream(record, data.data() + offset,
                                              declared_size, &error) != 1) {
       libfusn_error_free(&error);
-      ++offset;
+      malformed_records++;
+      offset = (offset + 8) & ~std::size_t{7};
       continue;
     }
     libfusn_error_free(&error);
@@ -345,7 +418,8 @@ NativeUsnParseResult parseUsnFileNative(const fs::path& file_path,
     uint32_t actual_size = 0;
     if (libfusn_record_get_size(record, &actual_size, nullptr) != 1 ||
         actual_size < 32 || actual_size > declared_size) {
-      ++offset;
+      malformed_records++;
+      offset = (offset + 8) & ~std::size_t{7};
       continue;
     }
 
@@ -373,9 +447,13 @@ NativeUsnParseResult parseUsnFileNative(const fs::path& file_path,
     file_reference = normalizeFileReference(file_reference);
     parent_reference = normalizeFileReference(parent_reference);
 
+    const std::string node_component = normalizeUsnPathComponent(*name_opt);
+    if (!node_component.empty()) {
+      nodes[file_reference] = std::make_pair(node_component, parent_reference);
+    }
+
     std::string name = normalizeCandidatePath(*name_opt);
     if (!name.empty()) {
-      nodes[file_reference] = std::make_pair(name, parent_reference);
       if (executable_candidates.size() < max_candidates) {
         NativeUsnCandidate candidate;
         candidate.name = name;
@@ -387,13 +465,6 @@ NativeUsnParseResult parseUsnFileNative(const fs::path& file_path,
         candidate.source_flags = source_flags;
         executable_candidates.push_back(std::move(candidate));
       }
-    } else {
-      std::string raw_name = *name_opt;
-      std::ranges::replace(raw_name, '/', '\\');
-      trim(raw_name);
-      if (!raw_name.empty()) {
-        nodes[file_reference] = std::make_pair(raw_name, parent_reference);
-      }
     }
 
     ++parsed_records;
@@ -401,6 +472,8 @@ NativeUsnParseResult parseUsnFileNative(const fs::path& file_path,
   }
 
   result.parsed_records = parsed_records;
+  result.malformed_records = malformed_records;
+  result.partial_corruption_detected = malformed_records > 0;
   result.success = parsed_records > 0;
 
   std::unordered_set<std::string> seen_paths;
@@ -424,7 +497,7 @@ NativeUsnParseResult parseUsnFileNative(const fs::path& file_path,
     RecoveryEvidence evidence;
     evidence.executable_path = executable_path;
     evidence.source = "USN";
-    evidence.recovered_from = "USN(native)";
+    evidence.recovered_from = "USN.native";
     evidence.timestamp = formatReasonableFiletime(candidate.update_time);
 
     std::ostringstream details;
@@ -435,6 +508,7 @@ NativeUsnParseResult parseUsnFileNative(const fs::path& file_path,
             << " frn=" << candidate.file_reference
             << " parent=" << candidate.parent_file_reference;
     evidence.details = details.str();
+    appendUsnOriginDetails(evidence, "native", "usn_journal");
 
     result.evidence.push_back(std::move(evidence));
     if (result.evidence.size() >= max_candidates) break;
@@ -523,7 +597,14 @@ std::vector<RecoveryEvidence> USNAnalyzer::collect(
                            native_usn_max_records_);
     native_count += native_result.evidence.size();
     need_binary_fallback =
-        !native_result.success || native_result.evidence.empty();
+        !native_result.success || native_result.evidence.empty() ||
+        native_result.partial_corruption_detected;
+    if (native_result.partial_corruption_detected) {
+      logger->warn(
+          "USN(native): обнаружены поврежденные записи (malformed={} parsed={}), "
+          "включен binary fallback",
+          native_result.malformed_records, native_result.parsed_records);
+    }
     appendUniqueEvidence(results, native_result.evidence, dedup);
 #else
     logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION}, spdlog::level::debug, "USN(native): libfusn недоступен в текущей сборке");
@@ -532,8 +613,18 @@ std::vector<RecoveryEvidence> USNAnalyzer::collect(
 
     if (need_binary_fallback) {
       auto evidence =
-          scanRecoveryFileBinary(*resolved, "USN", "USN(binary)", max_bytes,
+          scanRecoveryFileBinary(*resolved, "USN", "USN.binary", max_bytes,
                                  max_candidates_per_source_);
+      evidence.erase(
+          std::remove_if(evidence.begin(), evidence.end(),
+                         [](const RecoveryEvidence& item) {
+                           return !isLikelyBinaryPathCandidate(
+                               item.executable_path);
+                         }),
+          evidence.end());
+      for (auto& item : evidence) {
+        appendUsnOriginDetails(item, "binary", "usn_journal");
+      }
       binary_count += evidence.size();
       appendUniqueEvidence(results, evidence, dedup);
     }
@@ -546,9 +637,18 @@ std::vector<RecoveryEvidence> USNAnalyzer::collect(
     const auto resolved = findPathCaseInsensitive(candidate);
     if (!resolved.has_value()) continue;
 
-    auto evidence =
-        scanRecoveryFileBinary(*resolved, "$LogFile", "$LogFile", max_bytes,
-                               max_candidates_per_source_);
+    auto evidence = scanRecoveryFileBinary(*resolved, "USN",
+                                           "USN.logfile_binary", max_bytes,
+                                           max_candidates_per_source_);
+    evidence.erase(std::remove_if(evidence.begin(), evidence.end(),
+                                  [](const RecoveryEvidence& item) {
+                                    return !isLikelyBinaryPathCandidate(
+                                        item.executable_path);
+                                  }),
+                   evidence.end());
+    for (auto& item : evidence) {
+      appendUsnOriginDetails(item, "binary", "logfile");
+    }
     binary_count += evidence.size();
     appendUniqueEvidence(results, evidence, dedup);
   }

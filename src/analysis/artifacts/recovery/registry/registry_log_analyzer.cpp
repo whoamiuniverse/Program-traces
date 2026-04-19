@@ -69,13 +69,6 @@ inline uint32_t readU32Le(const std::vector<uint8_t>& d, std::size_t off) {
         (static_cast<uint32_t>(d[off + 3]) << 24);
 }
 
-inline uint64_t readU64Le(const std::vector<uint8_t>& d, std::size_t off) {
-  if (off + 8 > d.size()) return 0;
-  uint64_t v = 0;
-  for (int i = 0; i < 8; ++i) v |= static_cast<uint64_t>(d[off + i]) << (i * 8);
-  return v;
-}
-
 // ---- Base-block validation ----
 
 struct RegistryBaseBlock {
@@ -105,10 +98,15 @@ RegistryBaseBlock parseBaseBlock(const std::vector<uint8_t>& data) {
   for (std::size_t i = 0; i < 508; i += 4)
     xor_checksum ^= readU32Le(data, i);
   const uint32_t stored = readU32Le(data, 0x1FC);
-  bb.valid = (xor_checksum == stored) ||
-             (bb.primary_seq == bb.secondary_seq);  // Relaxed: treat consistent seq as valid.
+  bb.valid = (xor_checksum == stored);  // Strict: require correct checksum.
 
   return bb;
+}
+
+/// @brief Строит детерминированный dedup-key для registry recovery.
+std::string buildRegistryDedupKey(const RecoveryEvidence& evidence) {
+  return toLowerAscii(evidence.executable_path) + "|" +
+         toLowerAscii(evidence.recovered_from);
 }
 
 // ---- New log format (HvLE) dirty-page extraction ----
@@ -121,7 +119,9 @@ RegistryBaseBlock parseBaseBlock(const std::vector<uint8_t>& data) {
 /// @param max_candidates  Limit.
 void extractHvleDirtyPages(
     const std::vector<uint8_t>& data,
-    const std::string& source_label,
+    const std::string& file_label,
+    const std::size_t max_bytes,
+    const bool truncated,
     std::vector<RecoveryEvidence>& results,
     std::unordered_set<std::string>& dedup,
     const std::size_t max_candidates) {
@@ -162,19 +162,28 @@ void extractHvleDirtyPages(
         if (results.size() >= max_candidates) break;
         RecoveryEvidence e;
         e.executable_path = exe;
-        e.source          = "Registry";
-        e.recovered_from  = source_label + "(HvLE_dirty_page)";
+        e.source          = "RegistryLog";
+        e.recovered_from  = "RegistryLog.hvle_dirty_page";
         std::ostringstream det;
-        det << "hive_offset=0x" << std::hex << (hive_offset + pg * kPageSize)
-            << " page=" << std::dec << pg;
+        det << "artifact=hvle_dirty_page"
+            << " file=" << file_label
+            << " hive_offset=0x" << std::hex << (hive_offset + pg * kPageSize)
+            << " page=" << std::dec << pg
+            << " limit_bytes=" << max_bytes
+            << " truncated=" << (truncated ? "1" : "0");
         e.details    = det.str();
-        const std::string key = e.executable_path + "|" + e.recovered_from + "|" + e.details;
+        const std::string key = buildRegistryDedupKey(e);
         if (dedup.insert(key).second)
           results.push_back(std::move(e));
       }
     }
 
-    pos += (entry_size + 511) & ~511u;  // entries are aligned to 512 bytes
+    // HvLE entries are NOT 512-byte aligned — dirty pages follow immediately
+    // after the 0x20 header, already 4096-byte aligned internally.  Advancing
+    // by the declared entry_size (which includes header + dirty pages) is
+    // correct.  The previous 512-byte rounding could skip the next HvLE when
+    // dirty_count=0 and entry_size < 512.
+    pos += entry_size;
   }
 }
 
@@ -188,7 +197,9 @@ void extractHvleDirtyPages(
 void extractOldFormatDirtySectors(
     const std::vector<uint8_t>& data,
     const uint32_t hive_bins_sz,
-    const std::string& source_label,
+    const std::string& file_label,
+    const std::size_t max_bytes,
+    const bool truncated,
     std::vector<RecoveryEvidence>& results,
     std::unordered_set<std::string>& dedup,
     const std::size_t max_candidates) {
@@ -208,7 +219,7 @@ void extractOldFormatDirtySectors(
        results.size() < max_candidates;
        ++byte_idx) {
     const uint8_t bitmap_byte = data[0x200 + byte_idx];
-    for (int bit = 0; bit < 8; ++bit) {
+    for (std::size_t bit = 0; bit < 8; ++bit) {
       if (!(bitmap_byte & (1 << bit))) continue;
       if (dirty_pos + kSectorSize > data.size()) break;
       if (results.size() >= max_candidates) break;
@@ -223,13 +234,18 @@ void extractOldFormatDirtySectors(
         if (results.size() >= max_candidates) break;
         RecoveryEvidence e;
         e.executable_path = exe;
-        e.source          = "Registry";
-        e.recovered_from  = source_label + "(dirty_sector)";
+        e.source          = "RegistryLog";
+        e.recovered_from  = "RegistryLog.dirty_sector";
         std::ostringstream det;
-        det << "sector=" << (byte_idx * 8 + bit)
-            << " hive_offset=0x" << std::hex << ((byte_idx * 8 + bit) * kSectorSize);
+        det << "artifact=dirty_sector"
+            << " file=" << file_label
+            << " sector=" << (byte_idx * 8 + bit)
+            << " hive_offset=0x" << std::hex
+            << ((byte_idx * 8 + bit) * kSectorSize)
+            << " limit_bytes=" << std::dec << max_bytes
+            << " truncated=" << (truncated ? "1" : "0");
         e.details    = det.str();
-        const std::string key = e.executable_path + "|" + e.recovered_from + "|" + e.details;
+        const std::string key = buildRegistryDedupKey(e);
         if (dedup.insert(key).second)
           results.push_back(std::move(e));
       }
@@ -272,8 +288,10 @@ void processLogFile(
   const auto data_opt = readFilePrefix(log_path, max_bytes);
   if (!data_opt.has_value() || data_opt->empty()) return;
   const auto& data = *data_opt;
-
-  const std::string source_label = "RegistryLog(" + log_path.filename().string() + ")";
+  const std::string file_label = log_path.filename().string();
+  std::error_code size_ec;
+  const auto file_size = fs::file_size(log_path, size_ec);
+  const bool truncated = !size_ec && file_size > data.size();
 
   // ---- CLFS / BLF container ----
   if (isCLFSContainer(data)) {
@@ -285,10 +303,15 @@ void processLogFile(
       if (results.size() >= max_candidates) break;
       RecoveryEvidence e;
       e.executable_path = exe;
-      e.source          = "Registry";
-      e.recovered_from  = "RegistryLog(BLF)";
-      e.details         = "blf=" + log_path.filename().string();
-      const std::string key = e.executable_path + "|" + e.recovered_from;
+      e.source          = "RegistryLog";
+      e.recovered_from  = "RegistryLog.blf";
+      std::ostringstream det;
+      det << "artifact=blf"
+          << " file=" << file_label
+          << " limit_bytes=" << max_bytes
+          << " truncated=" << (truncated ? "1" : "0");
+      e.details = det.str();
+      const std::string key = buildRegistryDedupKey(e);
       if (dedup.insert(key).second) results.push_back(std::move(e));
     }
     return;
@@ -303,10 +326,11 @@ void processLogFile(
                     data[0x202] == 0x4C && data[0x203] == 0x45);
 
     if (is_hvle) {
-      extractHvleDirtyPages(data, source_label, results, dedup, max_candidates);
+      extractHvleDirtyPages(data, file_label, max_bytes, truncated, results,
+                            dedup, max_candidates);
     } else {
-      extractOldFormatDirtySectors(data, bb.hive_bins_sz, source_label,
-                                    results, dedup, max_candidates);
+      extractOldFormatDirtySectors(data, bb.hive_bins_sz, file_label, max_bytes,
+                                   truncated, results, dedup, max_candidates);
     }
   }
 
@@ -317,10 +341,15 @@ void processLogFile(
     if (results.size() >= max_candidates) break;
     RecoveryEvidence e;
     e.executable_path = exe;
-    e.source          = "Registry";
-    e.recovered_from  = "RegistryLog(binary)";
-    e.details         = "file=" + log_path.filename().string();
-    const std::string key = e.executable_path + "|RegistryLog(binary)";
+    e.source          = "RegistryLog";
+    e.recovered_from  = "RegistryLog.binary";
+    std::ostringstream det;
+    det << "artifact=binary_scan"
+        << " file=" << file_label
+        << " limit_bytes=" << max_bytes
+        << " truncated=" << (truncated ? "1" : "0");
+    e.details = det.str();
+    const std::string key = buildRegistryDedupKey(e);
     if (dedup.insert(key).second) results.push_back(std::move(e));
   }
 }

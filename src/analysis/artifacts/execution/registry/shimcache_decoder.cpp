@@ -267,7 +267,9 @@ ShimCacheFormat detectShimCacheFormat(const std::vector<uint8_t>& data) {
     }
     return ShimCacheFormat::Vista7_32;
   }
-  if (signature == 0x00000080U || signature == 0x00000030U) {
+  // Win8/8.1: 0x80, Win10 pre-CU: 0x30, Win10 Creator's Update+: 0x34
+  if (signature == 0x00000080U || signature == 0x00000030U ||
+      signature == 0x00000034U) {
     return ShimCacheFormat::Win8Plus;
   }
 

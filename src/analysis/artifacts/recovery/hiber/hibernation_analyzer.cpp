@@ -13,6 +13,7 @@
 
 #include "analysis/artifacts/common/evidence_utils.hpp"
 #include "analysis/artifacts/recovery/recovery_utils.hpp"
+#include "common/utils.hpp"
 #include "infra/config/config.hpp"
 #include "infra/logging/logger.hpp"
 
@@ -34,9 +35,6 @@ using RecoveryUtils::toByteLimit;
 // Low-level helpers
 // ---------------------------------------------------------------------------
 
-inline uint16_t readU16Le(const uint8_t* p) {
-  return static_cast<uint16_t>(p[0]) | (static_cast<uint16_t>(p[1]) << 8);
-}
 inline uint32_t readU32Le(const uint8_t* p) {
   return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
          (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
@@ -80,7 +78,30 @@ bool isValidProcessName(const char* p, std::size_t max_len) {
     if (c < 0x20 || c > 0x7E) return false;  // non-printable
     ++len;
   }
-  return len >= 2 && len < max_len;
+  if (len < 2 || len >= max_len) return false;
+
+  std::string name(p, len);
+  const std::string lowered = to_lower(name);
+  const auto has_allowed_suffix = [&](const std::string& text) {
+    return ends_with(text, ".exe") || ends_with(text, ".com") ||
+           ends_with(text, ".sys") || ends_with(text, ".dll");
+  };
+  const auto is_kernel_name = [&](const std::string& text) {
+    return text == "system" || text == "registry" || text == "idle" ||
+           text == "memcompression";
+  };
+
+  if (!has_allowed_suffix(lowered) && !is_kernel_name(lowered)) {
+    return false;
+  }
+
+  for (const char ch : name) {
+    const auto c = static_cast<unsigned char>(ch);
+    if (std::isalnum(c) != 0) continue;
+    if (c == '.' || c == '_' || c == '-') continue;
+    return false;
+  }
+  return true;
 }
 
 /// @brief Scans @p data for EPROCESS candidates using pool-tag heuristics.
@@ -119,8 +140,9 @@ std::vector<EprocessCandidate> scanForEprocess(const std::vector<uint8_t>& data)
         const auto pid_pos = static_cast<std::ptrdiff_t>(img_pos) + delta;
         if (pid_pos < 0 || static_cast<std::size_t>(pid_pos) + 8 > sz) continue;
         const uint64_t pid_val = readU64Le(data.data() + pid_pos);
-        // PIDs on Windows are multiples of 4, non-zero, < 65536 for most processes
-        if (pid_val > 0 && pid_val < 65536 && (pid_val & 0x3) == 0) {
+        // PIDs on Windows are multiples of 4, non-zero.  Win10 21H2+ can
+        // assign PIDs > 65536 on servers with long uptime; cap at 4M.
+        if (pid_val > 0 && pid_val < 4194304 && (pid_val & 0x3) == 0) {
           cand.pid = pid_val;
           break;
         }
@@ -162,7 +184,12 @@ static std::string formatIpPort(const uint8_t* addr, uint16_t port) {
 static bool isPlausibleIpv4(const uint8_t* addr) {
   // Reject 0.0.0.0 and 255.255.255.255
   const uint32_t v = readU32Le(addr);
-  return v != 0 && v != 0xFFFFFFFFU;
+  if (v == 0 || v == 0xFFFFFFFFU) return false;
+  // Reject loopback, multicast and link-local APIPA ranges to reduce noise.
+  if (addr[0] == 127) return false;
+  if (addr[0] >= 224) return false;
+  if (addr[0] == 169 && addr[1] == 254) return false;
+  return true;
 }
 
 std::vector<NetworkEndpointCandidate> scanForNetworkEndpoints(
@@ -223,6 +250,36 @@ std::vector<NetworkEndpointCandidate> scanForNetworkEndpoints(
     }
   }
   return results;
+}
+
+/// @brief Формирует normalized details для EPROCESS evidence.
+std::string buildEprocessDetails(const std::size_t pool_offset,
+                                 const uint64_t pid,
+                                 std::string_view channel) {
+  std::ostringstream details;
+  details << "artifact=eprocess"
+          << " pool_offset=0x" << std::hex << pool_offset;
+  if (pid != 0) {
+    details << " pid=" << std::dec << pid;
+  }
+  details << " channel=" << channel;
+  return details.str();
+}
+
+/// @brief Формирует normalized details для network endpoint evidence.
+std::string buildEndpointDetails(const NetworkEndpointCandidate& endpoint,
+                                 const std::size_t pool_offset,
+                                 std::string_view channel) {
+  std::ostringstream details;
+  details << "artifact=network_endpoint"
+          << " protocol=" << to_lower(endpoint.protocol)
+          << " local=" << endpoint.local_addr;
+  if (!endpoint.remote_addr.empty()) {
+    details << " remote=" << endpoint.remote_addr;
+  }
+  details << " pool_offset=0x" << std::hex << pool_offset
+          << " channel=" << channel;
+  return details.str();
 }
 
 // ---------------------------------------------------------------------------
@@ -348,7 +405,7 @@ NativeHiberParseResult parseHiberNative(const fs::path& hiber_path,
 
     // --- Binary scan for exe strings ---
     auto string_ev = scanRecoveryBufferBinary(
-        scan_buf, "Memory", "Hiber(native)", hiber_path.filename().string(),
+        scan_buf, "Hiber", "Hiber.native", hiber_path.filename().string(),
         timestamp, max_candidates - result.evidence.size(), offset,
         "hiber_native_chunk", scan_limit);
     appendUniqueEvidence(result.evidence, string_ev, dedup);
@@ -359,14 +416,12 @@ NativeHiberParseResult parseHiberNative(const fs::path& hiber_path,
       for (const auto& ep : eprocs) {
         if (result.evidence.size() >= max_candidates) break;
         RecoveryEvidence ev;
-        std::ostringstream details;
-        details << "eprocess_tag_offset=0x" << std::hex << (offset + ep.pool_offset);
-        if (ep.pid) details << " pid=" << std::dec << ep.pid;
         ev.executable_path = ep.image_name;
-        ev.source          = "Memory";
-        ev.recovered_from  = "Hiber(EPROCESS)";
+        ev.source          = "Hiber";
+        ev.recovered_from  = "Hiber.eprocess";
         ev.timestamp       = timestamp;
-        ev.details         = details.str();
+        ev.details         = buildEprocessDetails(offset + ep.pool_offset, ep.pid,
+                                                  "native");
         const std::string key = ev.executable_path + "|" + ev.recovered_from + "|" + ev.details;
         if (dedup.insert(key).second)
           result.evidence.push_back(std::move(ev));
@@ -379,15 +434,17 @@ NativeHiberParseResult parseHiberNative(const fs::path& hiber_path,
       for (const auto& ep : endpoints) {
         if (result.evidence.size() >= max_candidates) break;
         RecoveryEvidence ev;
-        std::ostringstream details;
-        details << ep.protocol << " local=" << ep.local_addr;
-        if (!ep.remote_addr.empty()) details << " remote=" << ep.remote_addr;
-        details << " pool_offset=0x" << std::hex << (offset + ep.pool_offset);
         ev.executable_path = ep.local_addr;
-        ev.source          = "Memory";
-        ev.recovered_from  = "Hiber(" + ep.protocol + "Endpoint)";
+        ev.source          = "Hiber";
+        std::string protocol_token = to_lower(ep.protocol);
+        trim(protocol_token);
+        if (protocol_token.empty()) {
+          protocol_token = "network";
+        }
+        ev.recovered_from  = "Hiber." + protocol_token + "_endpoint";
         ev.timestamp       = timestamp;
-        ev.details         = details.str();
+        ev.details         =
+            buildEndpointDetails(ep, offset + ep.pool_offset, "native");
         const std::string key = ev.executable_path + "|" + ev.recovered_from;
         if (dedup.insert(key).second)
           result.evidence.push_back(std::move(ev));
@@ -506,28 +563,35 @@ std::vector<RecoveryEvidence> HibernationAnalyzer::collect(
         !native_result.success || native_result.evidence.empty();
     appendUniqueEvidence(results, native_result.evidence, dedup);
 #else
-    logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION},
-                spdlog::level::debug,
-                "Hiber(native): libhibr недоступен в текущей сборке");
+    logger->warn("Hiber(native): libhibr недоступен, используется только "
+                 "binary fallback");
     need_binary_fallback = true;
 #endif
 
     if (need_binary_fallback) {
       // Check for Xpress compression before binary scan.
+      bool is_compressed = false;
       {
         auto prefix_opt = EvidenceUtils::readFilePrefix(*resolved, 16);
         if (prefix_opt.has_value() && hiberfil_is_compressed(*prefix_opt)) {
+          is_compressed = true;
           logger->log(spdlog::source_loc{__FILE__, __LINE__, SPDLOG_FUNCTION},
                       spdlog::level::debug,
                       "Hiber(binary): файл использует Xpress Huffman-сжатие "
-                      "(Windows 8+). Содержимое недоступно без декомпрессии. "
-                      "Выполняется binary scan несжатого заголовка.");
+                      "(Windows 8+). Binary scan ограничен несжатым "
+                      "заголовком (8 KB).");
         }
       }
 
+      // For compressed hiberfil (Win8+), limit binary scan to the
+      // uncompressed header region (first 8 KB) — scanning compressed data
+      // produces garbage string-carving results.
+      const std::size_t scan_limit =
+          is_compressed ? std::min<std::size_t>(8192, max_bytes) : max_bytes;
+
       // Binary scan (works on uncompressed regions + headers).
-      auto fallback = scanRecoveryFileBinary(*resolved, "Memory", "Hiber(binary)",
-                                             max_bytes, max_candidates_per_source_);
+      auto fallback = scanRecoveryFileBinary(*resolved, "Hiber", "Hiber.binary",
+                                             scan_limit, max_candidates_per_source_);
       binary_count += fallback.size();
       appendUniqueEvidence(results, fallback, dedup);
 
@@ -544,15 +608,15 @@ std::vector<RecoveryEvidence> HibernationAnalyzer::collect(
         for (const auto& ep : eprocs) {
           if (results.size() >= max_candidates_per_source_) break;
           RecoveryEvidence ev;
-          std::ostringstream det;
-          det << "eprocess_tag_offset=0x" << std::hex << ep.pool_offset;
-          if (ep.pid) det << " pid=" << std::dec << ep.pid;
           ev.executable_path = ep.image_name;
-          ev.source          = "Memory";
-          ev.recovered_from  = "Hiber(EPROCESS)";
+          ev.source          = "Hiber";
+          ev.recovered_from  = "Hiber.eprocess";
           ev.timestamp       = ts;
-          ev.details         = det.str();
-          const std::string key = ev.executable_path + "|Hiber(EPROCESS)|" + std::to_string(ep.pool_offset);
+          ev.details         =
+              buildEprocessDetails(ep.pool_offset, ep.pid, "binary_prefix");
+          const std::string key =
+              ev.executable_path + "|Hiber.eprocess|" +
+              std::to_string(ep.pool_offset);
           if (dedup.insert(key).second) {
             results.push_back(std::move(ev));
             ++binary_count;
@@ -564,15 +628,17 @@ std::vector<RecoveryEvidence> HibernationAnalyzer::collect(
         for (const auto& ep : endpoints) {
           if (results.size() >= max_candidates_per_source_) break;
           RecoveryEvidence ev;
-          std::ostringstream det;
-          det << ep.protocol << " local=" << ep.local_addr;
-          if (!ep.remote_addr.empty()) det << " remote=" << ep.remote_addr;
-          det << " offset=0x" << std::hex << ep.pool_offset;
           ev.executable_path = ep.local_addr;
-          ev.source          = "Memory";
-          ev.recovered_from  = "Hiber(" + ep.protocol + "Endpoint)";
+          ev.source          = "Hiber";
+          std::string protocol_token = to_lower(ep.protocol);
+          trim(protocol_token);
+          if (protocol_token.empty()) {
+            protocol_token = "network";
+          }
+          ev.recovered_from  = "Hiber." + protocol_token + "_endpoint";
           ev.timestamp       = ts;
-          ev.details         = det.str();
+          ev.details         =
+              buildEndpointDetails(ep, ep.pool_offset, "binary_prefix");
           const std::string key = ev.executable_path + "|" + ev.recovered_from;
           if (dedup.insert(key).second) {
             results.push_back(std::move(ev));

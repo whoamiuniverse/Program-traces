@@ -86,9 +86,10 @@ inline constexpr std::array<uint8_t, 4> kSigJobFile = {
 
 /// @brief The complete static signature database.
 /// Ordered from most-specific (longest, higher false-positive cost) to least.
-inline constexpr std::array<ArtifactSignature, 12> kSignatures = {{
+inline constexpr std::array<ArtifactSignature, 13> kSignatures = {{
     {"EVTX",      "SigScan(evtx)",      kSigEvtx.data(),      kSigEvtx.size(),      0, 4096},
     {"EVTXChunk", "SigScan(evtx_chnk)", kSigEvtxChunk.data(), kSigEvtxChunk.size(), 0, 65536},
+    {"EVT",       "SigScan(evt)",       kSigEvt.data(),       kSigEvt.size(),       0,   48},
     {"LNK",       "SigScan(lnk)",       kSigLnk.data(),       kSigLnk.size(),       0,    76},
     {"OLE2/MSI",  "SigScan(ole)",       kSigOle.data(),       kSigOle.size(),       0, 4096},
     {"RegHive",   "SigScan(regf)",      kSigRegf.data(),      kSigRegf.size(),      0, 4096},

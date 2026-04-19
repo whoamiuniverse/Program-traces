@@ -1,5 +1,5 @@
 /// @file recovery_utils.hpp
-/// @brief Shared utility functions for recovery analyzers (USN/VSS/Pagefile/Memory).
+/// @brief Shared utility functions for recovery analyzers (USN/VSS/Hiber/NTFS/Registry/Signature/TSK).
 
 #pragma once
 
@@ -28,8 +28,8 @@ namespace WindowsDiskAnalysis::RecoveryUtils {
 
 /// @brief Performs a binary fallback scan of a file for executable path candidates.
 /// @param file_path        Path to the source file to scan.
-/// @param source           Logical source label (e.g., @c "USN", @c "VSS", @c "Pagefile").
-/// @param recovered_from   Recovery marker label (e.g., @c "USN(binary)").
+/// @param source           Logical source label (e.g., @c "USN", @c "VSS", @c "Hiber").
+/// @param recovered_from   Recovery marker label (e.g., @c "USN.binary").
 /// @param max_bytes        Maximum number of bytes to read from the start of the file.
 /// @param max_candidates   Upper bound on the number of extracted candidates.
 /// @return Vector of @c RecoveryEvidence records extracted from the binary scan.
@@ -40,8 +40,8 @@ namespace WindowsDiskAnalysis::RecoveryUtils {
 
 /// @brief Performs a signature/string recovery scan on an already-loaded memory buffer.
 /// @param buffer          Contents of the block to scan.
-/// @param source          Logical source label (e.g., @c "USN", @c "VSS", @c "Memory").
-/// @param recovered_from  Recovery marker label (e.g., @c "Hiber(native)").
+/// @param source          Logical source label (e.g., @c "USN", @c "VSS", @c "Hiber").
+/// @param recovered_from  Recovery marker label (e.g., @c "Hiber.native").
 /// @param container_label Label of the containing artifact (e.g., file name).
 /// @param timestamp       Timestamp associated with the source.
 /// @param max_candidates  Upper bound on the number of returned candidates.

@@ -165,6 +165,11 @@ std::string normalizeEvidenceSource(std::string source) {
           {"pagefile", "Pagefile"},
           {"memory", "Memory"},
           {"unallocated", "Unallocated"},
+          {"hiber", "Hiber"},
+          {"ntfsmetadata", "NTFSMetadata"},
+          {"registrylog", "RegistryLog"},
+          {"signaturescan", "SignatureScan"},
+          {"tsk", "TSK"},
       };
 
   const std::string lowered = toLowerAscii(source);

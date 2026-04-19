@@ -265,7 +265,10 @@ void enrichProcessIdentityFromDetails(ProcessInfo& info,
 /// @return Ссылка на запись процесса в карте.
 ProcessInfo& ensureProcessInfo(std::unordered_map<std::string, ProcessInfo>& process_data,
                                const std::string& executable_path) {
-  auto& info = process_data[executable_path];
+  // Use case-insensitive key so that e.g. "SVCHOST.EXE" (EventLog) merges
+  // with "svchost.exe" (Prefetch) instead of creating a duplicate entry.
+  const std::string key = to_lower(executable_path);
+  auto& info = process_data[key];
   if (info.filename.empty()) {
     info.filename = executable_path;
   }

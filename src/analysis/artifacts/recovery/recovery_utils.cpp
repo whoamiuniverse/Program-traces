@@ -13,6 +13,7 @@
 #include <utility>
 
 #include "analysis/artifacts/common/evidence_utils.hpp"
+#include "analysis/artifacts/data/recovery_contract.hpp"
 #include "common/utils.hpp"
 
 namespace WindowsDiskAnalysis::RecoveryUtils {
@@ -120,6 +121,7 @@ std::string normalizeExecutableCandidate(std::string executable) {
 void appendLocalUniqueEvidence(std::vector<RecoveryEvidence>& target,
                                std::unordered_set<std::string>& local_dedup,
                                RecoveryEvidence evidence) {
+  RecoveryContract::canonicalizeRecoveryEvidence(evidence);
   if (!local_dedup.emplace(buildEvidenceDedupKey(evidence)).second) return;
   target.push_back(std::move(evidence));
 }
@@ -315,6 +317,7 @@ void appendUniqueEvidence(std::vector<RecoveryEvidence>& target,
   }
 
   for (auto& evidence : source) {
+    RecoveryContract::canonicalizeRecoveryEvidence(evidence);
     if (!dedup_keys.emplace(buildEvidenceDedupKey(evidence)).second) continue;
     target.push_back(std::move(evidence));
   }

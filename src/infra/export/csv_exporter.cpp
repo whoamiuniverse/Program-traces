@@ -13,6 +13,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "analysis/artifacts/data/recovery_contract.hpp"
 #include "common/path_utils.hpp"
 #include "common/utils.hpp"
 #include "csv_exporter_utils.hpp"
@@ -221,8 +222,10 @@ std::string resolveArtifactTypeBySource(std::string source,
           {"Unallocated", "unallocated_recovery_evidence"},
           {"NTFSMetadata", "ntfs_recovery_evidence"},
           {"Registry", "registry_recovery_evidence"},
+          {"RegistryLog", "registry_recovery_evidence"},
           {"Hiber", "hiber_recovery_evidence"},
           {"SignatureScan", "signature_recovery_evidence"},
+          {"TSK", "tsk_recovery_evidence"},
       };
 
   const auto it = kArtifactTypeBySource.find(source);
@@ -734,6 +737,25 @@ void exportRecoveryCsv(
     const std::string& output_path,
     const std::vector<WindowsDiskAnalysis::RecoveryEvidence>& recovery_evidence,
     const WindowsDiskAnalysis::CSVExportOptions& options) {
+  std::vector<WindowsDiskAnalysis::RecoveryEvidence> sorted = recovery_evidence;
+  std::sort(sorted.begin(), sorted.end(),
+            [](const auto& lhs, const auto& rhs) {
+              return std::tie(lhs.executable_path, lhs.source, lhs.recovered_from,
+                              lhs.timestamp, lhs.details) <
+                     std::tie(rhs.executable_path, rhs.source, rhs.recovered_from,
+                              rhs.timestamp, rhs.details);
+            });
+  sorted.erase(std::unique(sorted.begin(), sorted.end(),
+                           [](const auto& lhs, const auto& rhs) {
+                             return std::tie(lhs.executable_path, lhs.source,
+                                             lhs.recovered_from, lhs.timestamp,
+                                             lhs.details) ==
+                                    std::tie(rhs.executable_path, rhs.source,
+                                             rhs.recovered_from, rhs.timestamp,
+                                             rhs.details);
+                           }),
+               sorted.end());
+
   const std::filesystem::path recovery_output_path =
       buildRecoveryOutputPath(output_path, options.recovery_output_path);
   std::ofstream recovery_file(recovery_output_path, std::ios::binary);
@@ -743,7 +765,7 @@ void exportRecoveryCsv(
 
   recovery_file.write("\xEF\xBB\xBF", 3);
   writeRecoveryCsvHeader(recovery_file);
-  writeRecoveryRows(recovery_file, recovery_evidence);
+  writeRecoveryRows(recovery_file, sorted);
 }
 
 }  // namespace
@@ -758,6 +780,9 @@ void CSVExporter::exportToCSV(
     const std::vector<AmcacheEntry>& amcache_entries,
     const std::vector<RecoveryEvidence>& recovery_evidence,
     const CSVExportOptions& options) {
+  std::vector<RecoveryEvidence> normalized_recovery_evidence = recovery_evidence;
+  RecoveryContract::canonicalizeRecoveryEvidence(normalized_recovery_evidence);
+
   std::ofstream file(output_path, std::ios::binary);
   if (!file.is_open()) {
     throw FileOpenException(output_path);
@@ -770,13 +795,13 @@ void CSVExporter::exportToCSV(
     std::vector<UnifiedCsvRow> rows;
     rows.reserve(autorun_entries.size() + process_data.size() +
                  network_connections.size() + amcache_entries.size() +
-                 recovery_evidence.size());
+                 normalized_recovery_evidence.size());
 
     appendAutorunRows(rows, autorun_entries);
     appendProcessRows(rows, process_data);
     appendNetworkRows(rows, network_connections);
     appendAmcacheRows(rows, amcache_entries);
-    appendRecoveryRows(rows, recovery_evidence);
+    appendRecoveryRows(rows, normalized_recovery_evidence);
     finalizeUnifiedRows(rows);
     writeUnifiedRows(file, rows);
   } catch (const std::exception& e) {
@@ -785,7 +810,7 @@ void CSVExporter::exportToCSV(
   }
 
   if (options.export_recovery_csv) {
-    exportRecoveryCsv(output_path, recovery_evidence, options);
+    exportRecoveryCsv(output_path, normalized_recovery_evidence, options);
   }
 }
 
